@@ -1,16 +1,15 @@
 import msvcrt
 import os
 import time
-import msvcrt
 import sys
 import ctypes
 import ast
 import operator as op
-import psutil
 import subprocess
 import json
-import threading
-
+import re
+from pathlib import Path
+from typing import Literal
 
 """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 INITIALIZE
@@ -94,8 +93,6 @@ mode = ctypes.c_uint()
 kernel32.GetConsoleMode(handle, ctypes.byref(mode))
 kernel32.SetConsoleMode(handle, mode.value | 4)
 
-import msvcrt
-
 _ALLOWED_OPS = {
     ast.Add: op.add,
     ast.Sub: op.sub,
@@ -152,9 +149,7 @@ def clear_input(row, start_col, width):
     move(row, start_col)
 
 # ---------- SMART INPUT ----------
-import msvcrt
-import re
-import time
+
 def flash_prompt(row, col, prompt):
     cursor(False)
     move(row, col)
@@ -227,7 +222,7 @@ def getx(
                             if (min_val is None or val >= min_val) and \
                                (max_val is None or val <= max_val):
                                 is_valid = True
-                except:
+                except Exception:
                     pass
 
                 # ----- BUILD DISPLAY -----
@@ -321,7 +316,7 @@ def getx(
                         continue
                 else:
                     value = buffer
-            except:
+            except Exception:
                 flash_prompt(row, col, prompt)
                 continue
             move(row + 1, 1)
@@ -412,8 +407,7 @@ player = PlayerData()
 class EnemyData:
     pass
 enemy = EnemyData()
-import os
-import json
+
 
 
 class SettingsData:
@@ -630,7 +624,7 @@ class CONSOLE_CURSOR_INFO(ctypes.Structure):
 
 
 def cls():
-    print("\033[2J\033[H", end="")
+    os.system("cls")
 
 
 def key(timeout=None):
@@ -664,8 +658,6 @@ def key(timeout=None):
         if timeout is not None and (time.time() - start) >= timeout:
             return "TIMEOUT"    
 
-def cls():
-    os.system("cls")
     
 def sound(cmd):
     path = os.path.join(os.getcwd(), "general", "temp", "sound_cmd_queue.txt")
@@ -705,7 +697,7 @@ def read(path, default=None):
                 return int(value)
             return value
         return int(content)
-    except:
+    except Exception:
         return content
        
 def _clear_object(obj):
@@ -926,7 +918,7 @@ def save_item(item_id, category="Weapons"):
         f.write(line)
 
 
-from pathlib import Path
+
 
 BASE = Path("Settings/Keybinds")
 
@@ -960,8 +952,10 @@ def setbinds():
 
         setattr(bind, f"{action}_display", display)
 setbinds()
+
 def draw_text(x, y, text):
     print(f"\x1b[{y};{x}H{text}\x1b[0m", end="",flush=True)
+    
 def blank(y1, x1, y2, x2):
     if y2 < y1 or x2 < x1:
         return
@@ -972,12 +966,18 @@ def blank(y1, x1, y2, x2):
     for y in range(y1, y2 + 1):
         # Reset style BEFORE drawing spaces
         print(f"\x1b[0m\x1b[{y};{x1}H{spaces}", end="", flush=True)
-def draw_box(y1, x1, y2, x2,
-             text="",
-             bold=False,
-             text_color="",
-             border_color=x7,
-             align="left"):
+        
+def draw_box(
+    y1: int,
+    x1: int,
+    y2: int,
+    x2: int,
+    text: str = "",
+    bold: bool = False,
+    text_color: str = "",
+    border_color: str = x7,
+    align: Literal["left", "center", "right"] = "left"
+):
 
     width  = x2 - x1 + 1
     height = y2 - y1 + 1
@@ -1100,6 +1100,9 @@ def mainmenu():
             return
 
 
+draw_box(1, 1, 33, 120, text="hello", bold=False, text_color=x7, border_color=x7, align="center")
+
+
 def battle():
     cls()
     print("battle")
@@ -1165,30 +1168,15 @@ def house():
             return
         if k.lower() == "c":
             sound("map_right")
-            boxwidth = 25
-            playername=read("General/playername")
-            playernamd = f"{playername} › Attributes"
-            length = visible_len(playernamd)
-            pad = (boxwidth - length) // 2 + 1
-            spaces = " " * max(pad, 0)
-            centered = spaces + playernamd
-            #print(f"""
-            #[11;17H#3{reset}{x7}╭───────────────────────────╮
-            #[12;17H#4{reset}{x7}╭───────────────────────────╮
-            #[13;17H#3{reset}{x7}│ {xf}{bold}{centered}       {reset}
-            #[14;17H#4{reset}{x7}│ {xf}{bold}{centered}       {reset}
-            #[15;17H#3{reset}{x7}╰───────────────────────────╯
-            #[16;17H#4{reset}{x7}╰───────────────────────────╯
-            #[13;45H#3{reset}{x7}│ {reset}{x7}{bold}{reset}
-            #[14;45H#4{reset}{x7}│ {reset}{x7}{bold}{reset}
-            #""".strip().replace("\n",""),end="",flush=True)
             game.goto = character
             return
         if k.lower() == "o":
             draw_box(32,20,34,60,text="Enter a float 20-50:",bold=True,text_color=xlyellow)
-            a = getx(33,22,prompt=f"› ",expect="float",max_len=25,min_val=20,max_val=50,highlight_prefix=f"{xlorange}{bold}",highlight_suffix=reset)
+            a = getx(33,22,prompt="› ",expect="float",max_len=25,min_val=20,max_val=50,highlight_prefix=f"{xlorange}{bold}",highlight_suffix=reset)
             blank(32,20,34,60)
+            print(a)
             sound("xpboost")
+
 
 def character():
     player.load()
@@ -1523,7 +1511,6 @@ def character():
             print(f"{xf}{bold}{rgback(0,0,1)}\033[18;94H{round(EXP/player.xpneeded*100)}%")
         else:
             print(f"{xba}{xf}{bold}\033[18;94H{round(EXP/player.xpneeded*100)}%")
-        nextlevel = player.level + 1
         print(f"\033[19;93H{reset}{x7}{rgb(186,243,219)}↑ {bold}{EXP}/{EXP_NEEDED} {reset}XP to get level {player.level+1}{reset}")
         time.sleep(0.01)
     EXP = player.xp
