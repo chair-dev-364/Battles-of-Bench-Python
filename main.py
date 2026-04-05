@@ -927,6 +927,8 @@ def load_bind(name):
     return value
     
 def setbinds():
+    bind.load()
+
     actions = [
         "attack",
         "heal",
@@ -940,16 +942,18 @@ def setbinds():
         "custom2",
     ]
 
-    for action in actions:
-        raw = read(f"Settings/Keybinds/{action}", default="")
-        raw = str(raw)
+    display_map = {
+        "space": "␣",
+        "enter": "↵",
+        "esc": "⎋",
+        "backspace": "⌫",
+    }
 
+    for action in actions:
+        raw = str(getattr(bind, action, "")).strip()
         setattr(bind, action, raw)
 
-        display = raw.upper()
-        if display == " ":
-            display = "␣"
-
+        display = display_map.get(raw.lower(), raw.upper())
         setattr(bind, f"{action}_display", display)
 setbinds()
 
@@ -1553,7 +1557,7 @@ def character():
 [32;60H{reset}★ 
 [32;62H{RGB}173;216;225mBonus DEF{x8}-----{xb}{bold}{abilitydef}%{reset}
 [33;60H{reset}⊗ 
-[33;62H{RGB}173;216;225mDodge Rate{x8}----{xb}{bold}{player.dodge_rate}{reset}
+[33;62H{RGB}173;216;225mDodge Rate{x8}----{xb}{bold}{player.dodge}%{reset}
 [29;101H{reset}♥ 
 [29;103H{RGB}255;203;204mBase HP{x8}---------{xlred}{bold}{basehp}{reset}
 [30;101H{reset}♡ 
@@ -1561,7 +1565,7 @@ def character():
 [31;101H{reset}⬣ 
 [31;103H{RGB}255;203;204mEffect RES{x8}------{xlred}{bold}{player.effect_res}{reset}
 [32;101H{reset}↺ 
-[32;103H{RGB}255;203;204mRegeneration{x8}----{xlred}{bold}{player.regeneration}{reset}
+[32;103H{RGB}255;203;204mRegeneration{x8}----{xlred}{bold}{player.regen}{reset}
 [33;101H{reset}⸕ 
 [33;103H{RGB}255;203;204mLife Steal{x8}------{xlred}{bold}{player.life_steal}{reset}
 [36;42H{RGB}173;216;225m╰───────────────────────────────────────╯ {RGB}255;203;204m╰───────────────────────────────────────╯
