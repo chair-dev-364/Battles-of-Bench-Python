@@ -1,0 +1,1 @@
+Bracelet of Dreams;;15;;ATK;;230;;ATKP;;2;;HP;;45;;DEF;;10

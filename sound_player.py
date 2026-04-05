@@ -1,0 +1,819 @@
+import os
+import sys
+# --- AGGRESSIVE OS-LEVEL STDERR SUPPRESSION (before any other imports) ---
+try:
+    sys.stderr.flush()
+except Exception:
+    pass
+try:
+    if hasattr(sys.stderr, 'fileno'):
+        fd_stderr = sys.stderr.fileno()
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(devnull, fd_stderr)
+        os.close(devnull)
+except Exception:
+    pass
+# Track which MP3s have been cleaned this session
+_already_cleaned_mp3s = set()
+# sound_player.py
+import socket
+import threading
+import os
+import sys
+import time
+import pygame # Requires: pip install pygame
+
+# --- Configuration ---
+HOST = '127.0.0.1'  # Listen only on the local machine
+PORT = 65432        # Port to listen on (non-privileged ports are > 1023)
+SOUNDS_FOLDER = 'Sounds'
+SETTINGS_FOLDER = 'Settings'
+VOLUME_FILE = 'sound.txt'
+BUFFER_SIZE = 1024 # For socket communication
+
+# --- Global Variables ---
+# Get the directory where the script is located
+try:
+    # PyInstaller creates a temp folder and stores path in _MEIPASS
+    BASE_DIR = sys._MEIPASS
+except AttributeError:
+    BASE_DIR = os.path.abspath(os.path.dirname(__file__))
+
+SOUNDS_DIR = os.path.join(BASE_DIR, SOUNDS_FOLDER)
+SETTINGS_DIR = os.path.join(BASE_DIR, SETTINGS_FOLDER)
+VOLUME_FILE_PATH = os.path.join(SETTINGS_DIR, VOLUME_FILE)
+
+shutdown_flag = threading.Event() # Used to signal shutdown
+
+# --- In-memory sound cache (prevents reloading files each play) ---
+sound_cache = {}  # path -> pygame.mixer.Sound
+sound_cache_lock = threading.Lock()
+
+# --- Helper to silence noisy C-level stderr messages (context manager)
+from contextlib import contextmanager
+
+@contextmanager
+def suppress_stderr():
+    """Temporarily redirect OS-level stderr (fd 2) to os.devnull.
+
+    Used to hide harmless codec/tag warnings printed by lower-level libs
+    (e.g. "id3v2_decode_string: Bad BOM-UTF16 string size"), while keeping
+    Python-level logging intact.
+    """
+    try:
+        fd_stderr = sys.stderr.fileno()
+    except Exception:
+        # If no fileno available, just yield and do nothing
+        yield
+        return
+    saved_stderr = os.dup(fd_stderr)
+    try:
+        devnull = os.open(os.devnull, os.O_RDWR)
+        os.dup2(devnull, fd_stderr)
+        os.close(devnull)
+        yield
+    finally:
+        try:
+            os.dup2(saved_stderr, fd_stderr)
+        except Exception:
+            pass
+        try:
+            os.close(saved_stderr)
+        except Exception:
+            pass
+
+# --- Helper Functions ---
+
+def load_cached_sound(sound_file):
+    """Load and cache a pygame Sound object for given file path.
+
+    Attempts to trim leading silence using numpy + pygame.sndarray if available.
+    Returns cached Sound or None on error.
+    """
+    # Fast path
+    with sound_cache_lock:
+        if sound_file in sound_cache:
+            return sound_cache[sound_file]
+
+    # Clean ID3 tags if MP3 (prevents BOM warnings), only once per file
+    if sound_file.lower().endswith('.mp3'):
+        global _already_cleaned_mp3s
+        if sound_file not in _already_cleaned_mp3s:
+            try:
+                clean_id3_tags(sound_file)
+                # After cleaning, try to load tags with mutagen; if it fails, skip loading
+                try:
+                    from mutagen.id3 import ID3
+                    ID3(sound_file)
+                except Exception:
+                    print(f"[ID3] Skipping {sound_file}: still has malformed tags after cleaning.")
+                    _already_cleaned_mp3s.add(sound_file)
+                    return None
+            except Exception:
+                print(f"[ID3] Skipping {sound_file}: cleaning failed.")
+                _already_cleaned_mp3s.add(sound_file)
+                return None
+            _already_cleaned_mp3s.add(sound_file)
+    # Load the sound from disk
+    try:
+        # Silence noisy C-level decoder warnings during load (harmless ID3 tag warnings)
+        with suppress_stderr():
+            sound = pygame.mixer.Sound(sound_file)
+    except Exception as e:
+        print(f"Error loading sound file {sound_file}: {e}")
+        return None
+
+    # Attempt to trim leading silence (optional, best-effort)
+    try:
+        import numpy as _np
+        from pygame import sndarray as _sndarray
+
+        # Decode samples; suppress noisy C-level warnings during decode
+        with suppress_stderr():
+            arr = _sndarray.array(sound)
+        # Normalize shape -> (samples, channels)
+        if arr.ndim == 1:
+            arr2 = arr.reshape(-1, 1)
+        else:
+            arr2 = arr
+
+        # Compute per-sample max across channels
+        abs_max = _np.max(_np.abs(arr2), axis=1)
+
+        # Heuristic threshold: less aggressive to avoid chopping attack transients
+        if _np.issubdtype(arr2.dtype, _np.integer):
+            dtype_max = _np.iinfo(arr2.dtype).max
+            # Lower threshold (less aggressive trimming) and modest pre-roll
+            threshold = max(50, int(0.002 * dtype_max))
+        else:
+            dtype_max = 1.0
+            threshold = 0.002
+
+        non_silent_idx = _np.where(abs_max > threshold)[0]
+        if non_silent_idx.size > 0:
+            pre_roll = 256  # samples to keep before detected non-silent sample (~5-6ms at 44.1kHz)
+            start = max(0, int(non_silent_idx[0]) - pre_roll)
+            if start > 0:
+                trimmed = arr[start:]
+                # Create trimmed sound; suppress noisy decoder warnings during make_sound
+                with suppress_stderr():
+                    new_sound = _sndarray.make_sound(trimmed)
+                with sound_cache_lock:
+                    sound_cache[sound_file] = new_sound
+                #print(f"[Cache] Loaded and trimmed leading silence for {os.path.basename(sound_file)} (cut {start} samples, pre-roll {pre_roll}).")
+                return new_sound
+
+        # Nothing trimmed or all silent -> cache original
+        with sound_cache_lock:
+            sound_cache[sound_file] = sound
+        return sound
+
+    except Exception:
+        # Numpy/sndarray not available or trimming failed -> cache original sound
+        with sound_cache_lock:
+            sound_cache[sound_file] = sound
+        return sound
+
+
+# --- ID3 tag fixer (attempt to repair or strip malformed ID3 tags) ---
+import shutil
+import subprocess
+
+def _remove_metadata_with_ffmpeg(mp3_path):
+    ffmpeg = shutil.which('ffmpeg')
+    if not ffmpeg:
+        return False
+    tmp = mp3_path + '.nometa.tmp.mp3'
+    cmd = [ffmpeg, '-loglevel', 'error', '-y', '-i', mp3_path, '-map', '0:a', '-c', 'copy', '-map_metadata', '-1', tmp]
+    try:
+        # Suppress window on Windows
+        creationflags = 0
+        if os.name == 'nt':
+            creationflags = getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000)
+        subprocess.run(cmd, check=True, creationflags=creationflags)
+        # Replace original file atomically
+        try:
+            os.replace(tmp, mp3_path)
+        except Exception:
+            # Fallback: try remove and rename
+            if os.path.exists(mp3_path): os.remove(mp3_path)
+            os.rename(tmp, mp3_path)
+        print(f"[TagFix] Removed metadata from {os.path.basename(mp3_path)} using ffmpeg.")
+        return True
+    except Exception as e:
+        try:
+            if os.path.exists(tmp): os.remove(tmp)
+        except Exception:
+            pass
+        print(f"[TagFix] ffmpeg metadata removal failed for {mp3_path}: {e}")
+        return False
+
+
+def clean_id3_tags(mp3_path):
+    """Try to detect and fix malformed ID3 tags that produce BOM warnings.
+
+    Strategy:
+      1) Try mutagen to load ID3 tags; if it loads, assume OK.
+      2) If mutagen raises, try to strip metadata using ffmpeg (if available).
+      3) Return True if we modified the file, False otherwise.
+    """
+    try:
+        from mutagen.id3 import ID3
+        try:
+            ID3(mp3_path)
+            return False  # tags present and readable
+        except Exception:
+            # Attempt to remove all ID3 tags using mutagen if possible
+            try:
+                from mutagen.id3 import ID3, Frames, ID3NoHeaderError
+                try:
+                    id3 = ID3()
+                    id3.save(mp3_path)
+                except Exception:
+                    pass
+            except Exception:
+                pass
+    except Exception:
+        # mutagen not available; proceed to ffmpeg attempt
+        pass
+
+    # Try ffmpeg fallback to strip metadata if available
+    try:
+        return _remove_metadata_with_ffmpeg(mp3_path)
+    except Exception:
+        return False
+
+
+def preload_sounds():
+    """Background preload: walk `SOUNDS_DIR` and cache all .mp3/.wav files.
+
+    Runs in the background to avoid blocking server startup and improves first-play latency.
+    """
+    import concurrent.futures
+    try:
+        # Signal that preload is running by creating a waiting file
+        waiting_file = os.path.join(BASE_DIR, 'General', 'waiting.txt')
+        try:
+            os.makedirs(os.path.dirname(waiting_file), exist_ok=True)
+            with open(waiting_file, 'w', encoding='utf-8') as wf:
+                wf.write(str(int(time.time())))
+        except Exception as e:
+            print(f"[Preload] Warning: Could not create waiting file: {e}")
+
+        extensions = {'.mp3', '.wav'}
+        files = []
+        # Explicit skip list for all music files in Sounds\Music (case-insensitive)
+        skip_music_files = {
+            'battle_boss.mp3', 'battle_regular.mp3', 'choose.mp3',
+            'download1.mp3', 'download2.mp3', 'download3.mp3',
+            'ic1.mp3', 'map.mp3',
+            'music_alt1.mp3', 'music_alt2.mp3', 'music_alt2b.mp3',
+            'music_alt3.mp3', 'music_alt4.mp3', 'music_alt5.mp3',
+            'music_alt6.mp3', 'music_alt7.mp3', 'music_evergreen.mp3',
+            'pull.mp3', 'shop.mp3', 'shop2.mp3', 'suprep.mp3'
+        }
+        for root, _, filenames in os.walk(SOUNDS_DIR):
+            for fn in filenames:
+                if os.path.splitext(fn)[1].lower() in extensions:
+                    # Compute relpath from SOUNDS_DIR to the file
+                    file_path = os.path.join(root, fn)
+                    try:
+                        rel_file = os.path.relpath(file_path, SOUNDS_DIR)
+                        # Check if the first path component is 'Music' (case-insensitive)
+                        first = rel_file.split(os.sep)[0] if rel_file != os.curdir else ''
+                    except Exception:
+                        first = ''
+                    fn_lower = fn.lower()
+                    # Skip if in Music folder
+                    if first.lower() == 'music':
+                        print(f"[Preload] Skipping Music file: {file_path}")
+                        continue
+                    # Skip if filename is in explicit skip list
+                    if fn_lower in skip_music_files:
+                        print(f"[Preload] Skipping explicit music file: {fn}")
+                        continue
+                    # Additional skip patterns for music/boss tracks
+                    if fn_lower.startswith('music') or 'battle_boss' in fn_lower:
+                        print(f"[Preload] Skipping music/boss track: {fn}")
+                        continue
+                    if fn_lower == 'backing.mp3':
+                        print(f"[Preload] Skipping known problematic file: {fn}")
+                        continue
+                    files.append(file_path)
+        total = len(files)
+        if total == 0:
+            print("[Preload] No sound files found to cache.")
+            try:
+                if os.path.isfile(waiting_file):
+                    os.remove(waiting_file)
+            except Exception:
+                pass
+            return
+        print(f"[Preload] Caching {total} sound files in background (threaded)...")
+        cached = 0
+        errors = 0
+        # Use a thread pool to cache sounds in parallel, suppressing stderr globally for the phase
+        with suppress_stderr():
+            with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, os.cpu_count() or 4)) as executor:
+                future_to_file = {executor.submit(load_cached_sound, f): f for f in files}
+                for idx, future in enumerate(concurrent.futures.as_completed(future_to_file), start=1):
+                    f = future_to_file[future]
+                    try:
+                        if future.result() is not None:
+                            cached += 1
+                    except Exception as e:
+                        errors += 1
+                        print(f"[Preload] Error caching {f}: {e}")
+        print(f"[Preload] Done. Cached: {cached}/{total}, errors: {errors}.")
+
+        # Remove waiting file now that preload finished
+        try:
+            if os.path.isfile(waiting_file):
+                os.remove(waiting_file)
+        except Exception:
+            pass
+
+        # Play a short 'startup completed' sound if available (respect volume/mute)
+        try:
+            login_mp3 = os.path.join(SOUNDS_DIR, 'login_newss.mp3')
+            login_wav = os.path.join(SOUNDS_DIR, 'login_newss.wav')
+            if os.path.isfile(login_mp3) or os.path.isfile(login_wav):
+                vol = get_volume()
+                if vol > 0:
+                    threading.Thread(target=play_sound_thread, args=("login_newss",), daemon=True).start()
+                    print("[Preload] Played 'login_newss' to signal preload completion.")
+                else:
+                    print("[Preload] Skipping 'login_newss' because volume == 0 (muted).")
+            else:
+                print("[Preload] No 'login_newss' sound found to play on completion.")
+        except Exception as e:
+            print(f"[Preload] Error attempting to play 'login_newss': {e}")
+
+    except Exception as e:
+        try:
+            if os.path.isfile(waiting_file):
+                os.remove(waiting_file)
+        except Exception:
+            pass
+        print(f"[Preload] Unexpected error during preload: {e}")
+
+
+def get_volume():
+    """Reads volume from Settings/sound.txt (0-10) and converts to 0.0-1.0"""
+    default_volume = 1.0 # Default to 100% if file is missing or invalid
+    try:
+        # Ensure settings directory exists
+        if not os.path.exists(SETTINGS_DIR):
+            print(f"Warning: Settings directory not found: {SETTINGS_DIR}. Creating it.")
+            os.makedirs(SETTINGS_DIR)
+            # Create a default volume file
+            with open(VOLUME_FILE_PATH, 'w') as f:
+                f.write("10") # Default to 10 (100%)
+            print(f"Created default volume file: {VOLUME_FILE_PATH} with value 10.")
+            return default_volume
+
+        if not os.path.isfile(VOLUME_FILE_PATH):
+             print(f"Warning: Volume file not found: {VOLUME_FILE_PATH}. Using default volume (100%).")
+             # Optionally create a default file here too
+             with open(VOLUME_FILE_PATH, 'w') as f:
+                f.write("10")
+             print(f"Created default volume file: {VOLUME_FILE_PATH} with value 10.")
+             return default_volume
+
+        with open(VOLUME_FILE_PATH, 'r') as f:
+            volume_str = f.read().strip()
+            volume_int = int(volume_str)
+            # Clamp volume between 0 and 10
+            volume_int = max(0, min(10, volume_int))
+            return float(volume_int) / 10.0 # Convert to 0.0 - 1.0 range
+
+    except FileNotFoundError:
+        print(f"Warning: Volume file not found: {VOLUME_FILE_PATH}. Using default volume (100%).")
+        # Attempt to create default file if not found
+        try:
+            if not os.path.exists(SETTINGS_DIR): os.makedirs(SETTINGS_DIR)
+            with open(VOLUME_FILE_PATH, 'w') as f: f.write("10")
+            print(f"Created default volume file: {VOLUME_FILE_PATH} with value 10.")
+        except Exception as e_create:
+             print(f"Error creating default volume file: {e_create}")
+        return default_volume
+    except ValueError:
+        print(f"Warning: Invalid content in {VOLUME_FILE_PATH}. Expected integer 0-10. Using default volume (100%).")
+        return default_volume
+    except Exception as e:
+        print(f"Error reading volume file: {e}. Using default volume (100%).")
+        return default_volume
+
+def play_sound_thread(sound_name):
+    """Plays a single sound file in a separate thread using cached Sound objects.
+
+    Uses per-play channel volume (doesn't mutate the cached Sound volume).
+    """
+    sound_file_mp3 = os.path.join(SOUNDS_DIR, f"{sound_name}.mp3")
+    sound_file_wav = os.path.join(SOUNDS_DIR, f"{sound_name}.wav")
+
+    if os.path.isfile(sound_file_mp3):
+        # Clean ID3 tags before loading
+        try:
+            clean_id3_tags(sound_file_mp3)
+        except Exception:
+            pass
+        sound_file = sound_file_mp3
+    elif os.path.isfile(sound_file_wav):
+        sound_file = sound_file_wav
+    else:
+        print(f"Error: Sound file not found: {sound_file_mp3} or {sound_file_wav}")
+        return
+
+    print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Received request to play: {sound_name} (File: {sound_file})")
+
+    try:
+        # If this is a music track (inside Sounds/Music), stream it rather than caching
+        relpath = os.path.relpath(sound_file, SOUNDS_DIR)
+        topdir = relpath.split(os.sep)[0] if relpath and relpath != os.curdir else ''
+        if topdir.lower() == 'music':
+            volume = get_volume()
+            print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Streaming music '{sound_name}' at volume {volume*100:.0f}%")
+            try:
+                with suppress_stderr():
+                    pygame.mixer.music.load(sound_file)
+                pygame.mixer.music.set_volume(volume)
+                pygame.mixer.music.play()
+            except Exception as e:
+                print(f"Error streaming music {sound_name}: {e}")
+            return
+
+        # Load or get cached Sound (may be trimmed on load)
+        sound_obj = load_cached_sound(sound_file)
+        if sound_obj is None:
+            print(f"Error: Failed to load sound: {sound_file}")
+            return
+
+        volume = get_volume()
+        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Playing '{sound_name}' at volume {volume*100:.0f}%")
+
+        # Play and set volume per-channel (avoids mutating cached Sound object)
+        ch = sound_obj.play()
+        if ch is None:
+            print(f"Warning: No available channel to play {sound_name}.")
+            return
+        try:
+            ch.set_volume(volume)
+        except Exception:
+            # Older pygame versions may not support set_volume on channel
+            try:
+                sound_obj.set_volume(volume)
+            except Exception:
+                pass
+
+    except pygame.error as e:
+        print(f"Error playing sound {sound_name}: {e}")
+    except Exception as e:
+        print(f"An unexpected error occurred in play_sound_thread for {sound_name}: {e}")
+
+
+def handle_client(conn, addr):
+    """Handles incoming connection and spawns sound threads."""
+    print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Connection established from {addr}")
+    try:
+        while not shutdown_flag.is_set():
+            try:
+                data = conn.recv(BUFFER_SIZE)
+                if not data:
+                    # Connection closed by client
+                    print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Connection closed by {addr}")
+                    break
+            except ConnectionResetError:
+                 print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Connection forcibly closed by {addr}")
+                 break
+            except socket.error as e:
+                # Handle other potential socket errors during recv
+                print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Socket error receiving from {addr}: {e}")
+                break
+
+
+            command = data.decode('utf-8').strip()
+            if not command:
+                continue # Ignore empty commands
+
+            # --- Command Handling ---
+            if command.upper() == "QUIT":
+                print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Received QUIT command from {addr}. Initiating shutdown.")
+                shutdown_flag.set() # Signal the main loop to stop
+                # Optionally send an acknowledgement back
+                try:
+                    conn.sendall(b"QUIT acknowledged. Server shutting down.\n")
+                except socket.error: pass # Ignore send errors during shutdown
+                break # Stop handling this client
+
+            elif command.upper() == "PING":
+                 print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Received PING from {addr}. Sending PONG.")
+                 try:
+                     conn.sendall(b"PONG\n")
+                 except socket.error as e:
+                     print(f"Warning: Failed to send PONG to {addr}: {e}")
+
+            elif command.upper() == "STOP":
+                print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Received STOP command from {addr}. Stopping all sounds.")
+                try:
+                    pygame.mixer.stop() # Stop all currently playing sounds
+                    print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] All sounds stopped.")
+                    # Optionally send acknowledgement
+                    # conn.sendall(b"STOP command executed.\n")
+                except pygame.error as e:
+                     print(f"Error executing pygame.mixer.stop(): {e}")
+                except Exception as e:
+                     print(f"Unexpected error during STOP command execution: {e}")
+                # Keep the connection open for further commands unless the client closes it
+
+            else:
+                # Assume it's a sound name
+                sound_name = command
+                # Start playback in a new thread to avoid blocking the listener
+                playback_thread = threading.Thread(target=play_sound_thread, args=(sound_name,), daemon=True)
+                # Daemon=True allows the main program to exit even if these threads are running
+                playback_thread.start()
+                # Optionally send an ack back
+                # try:
+                #    conn.sendall(f"PLAY request received for {sound_name}\n".encode('utf-8'))
+                # except socket.error as e:
+                #     print(f"Warning: Failed to send PLAY ack to {addr}: {e}")
+
+    except ConnectionResetError:
+        # This might be redundant if handled within the loop, but safe to keep
+        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Connection forcibly closed by {addr} (outer handler)")
+    except socket.error as e:
+         print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Socket error with {addr}: {e}")
+    except Exception as e:
+        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Error handling client {addr}: {e}")
+    finally:
+        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Closing connection handler for {addr}")
+        try:
+            conn.shutdown(socket.SHUT_RDWR) # Signal connection closure intent
+        except (socket.error, OSError):
+            pass # Ignore errors if socket already closed etc.
+        conn.close()
+
+
+# --- UDP fast-path (fire-and-forget) ---
+# Allows extremely low-latency play requests via UDP datagrams.
+def handle_udp_command(command, addr=None, sock=None):
+    """Handle a single UDP command (datagram) or queue command.
+
+    If `sock` is provided, replies (PONG, QUIT ack) are sent back to the sender.
+    If `sock` is None (e.g., file-queue), commands are fire-and-forget without replies.
+    """
+    if not command:
+        return
+    cmd_up = command.upper()
+    if cmd_up == "QUIT":
+        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Received QUIT command from {addr}. Initiating shutdown.")
+        shutdown_flag.set()
+        if sock is not None:
+            try:
+                sock.sendto(b"QUIT acknowledged. Server shutting down.\n", addr)
+            except Exception:
+                pass
+    elif cmd_up == "PING":
+        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Received PING from {addr}. Sending PONG.")
+        if sock is not None:
+            try:
+                sock.sendto(b"PONG\n", addr)
+            except Exception as e:
+                print(f"Warning: Failed to send PONG to {addr} via UDP: {e}")
+    elif cmd_up == "STOP":
+        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Received STOP command from {addr}. Stopping all sounds.")
+        try:
+            pygame.mixer.stop()
+            print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] All sounds stopped.")
+        except Exception as e:
+            print(f"Error executing STOP: {e}")
+    else:
+        # Play sound name (fire-and-forget)
+        playback_thread = threading.Thread(target=play_sound_thread, args=(command,), daemon=True)
+        playback_thread.start()
+
+
+def udp_listener():
+    """Listens for UDP datagrams on the same port for fast fire-and-forget commands."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.settimeout(1.0)
+    try:
+        sock.bind((HOST, PORT))
+        print(f"UDP listener bound on {HOST}:{PORT} for fast commands (fire-and-forget).")
+    except Exception as e:
+        print(f"Warning: Could not bind UDP socket on {HOST}:{PORT}: {e}")
+        try:
+            sock.close()
+        except Exception:
+            pass
+        return
+
+    while not shutdown_flag.is_set():
+        try:
+            data, addr = sock.recvfrom(BUFFER_SIZE)
+        except socket.timeout:
+            continue
+        except Exception as e:
+            if not shutdown_flag.is_set():
+                print(f"UDP listener error: {e}")
+            break
+
+        try:
+            command = data.decode('utf-8').strip()
+        except Exception:
+            continue
+
+        handle_udp_command(command, addr, sock)
+
+    try:
+        sock.close()
+    except Exception:
+        pass
+
+
+# --- File-queue fast-path (zero-launch) ---
+# Uses an append-only queue file that CMD can write to with built-in `echo`.
+QUEUE_FILE = os.path.join(BASE_DIR, 'General', 'Temp', 'sound_cmd_queue.txt')
+QUEUE_POLL_INTERVAL = 0.005  # 20 ms poll for low-latency
+
+
+def file_queue_listener():
+    """Tails a queue file and executes commands as they arrive.
+
+    This allows `sound.bat` to append via `echo name >> General\Temp\sound_cmd_queue.txt`
+    and avoid launching Python processes per command.
+    """
+    last_pos = 0
+    # Ensure directory exists
+    try:
+        os.makedirs(os.path.dirname(QUEUE_FILE), exist_ok=True)
+    except Exception:
+        pass
+
+    while not shutdown_flag.is_set():
+        try:
+            if not os.path.isfile(QUEUE_FILE):
+                time.sleep(QUEUE_POLL_INTERVAL)
+                continue
+
+            with open(QUEUE_FILE, 'r+', encoding='utf-8', errors='replace') as f:
+                f.seek(last_pos)
+                lines = f.readlines()
+                if lines:
+                    for line in lines:
+                        cmd = line.strip()
+                        if not cmd:
+                            continue
+                        # Use the same handler; no reply socket available (sock=None)
+                        handle_udp_command(cmd, ('file-queue', 0), None)
+                last_pos = f.tell()
+
+                # If we've read to the end, truncate the file (clear processed commands)
+                f.seek(0, os.SEEK_END)
+                end_pos = f.tell()
+                if last_pos >= end_pos:
+                    f.truncate(0)
+                    last_pos = 0
+                # Compact file if it grows too large (should be rare now)
+                elif last_pos > 1024 * 1024:  # >1MB
+                    try:
+                        f.seek(last_pos)
+                        rest = f.read()
+                        f.seek(0)
+                        f.write(rest)
+                        f.truncate(len(rest.encode('utf-8')))
+                        last_pos = len(rest.encode('utf-8'))
+                    except Exception as e:
+                        print(f"[Queue] Error compacting queue file: {e}")
+
+        except Exception as e:
+            print(f"[Queue] Error reading queue: {e}")
+        time.sleep(QUEUE_POLL_INTERVAL)
+
+
+def main():
+    """Main server function."""
+    # --- Initialization ---
+    print(f"Script base directory: {BASE_DIR}")
+    print(f"Sounds directory: {SOUNDS_DIR}")
+    print(f"Settings directory: {SETTINGS_DIR}")
+    print(f"Volume file path: {VOLUME_FILE_PATH}")
+
+    # Ensure Sounds directory exists
+    if not os.path.exists(SOUNDS_DIR):
+        print(f"Warning: Sounds directory not found: {SOUNDS_DIR}. Creating it.")
+        try:
+            os.makedirs(SOUNDS_DIR)
+            print("Please place your MP3 files (e.g., 'test.mp3') in this directory.")
+        except Exception as e:
+            print(f"Fatal Error: Could not create Sounds directory: {e}")
+            sys.exit(1)
+
+    # Ensure Settings directory and volume file exist (get_volume handles this now)
+    _ = get_volume() # Call once to initialize/check volume file
+
+    # Initialize Pygame Mixer
+    try:
+        # Using pre_init can sometimes help with latency or specific audio card issues
+        pygame.mixer.pre_init(frequency=44100, size=-16, channels=2, buffer=2048)
+        pygame.init() # Initializes all Pygame modules needed
+        # pygame.mixer.init() # Explicitly init mixer (good practice) - redundant if pygame.init() called
+        print(f"Pygame Mixer initialized successfully.")
+        print(f"Mixer settings: {pygame.mixer.get_init()}") # Print actual settings
+        # Clear any in-memory cache on startup to avoid stale entries
+        try:
+            with sound_cache_lock:
+                sound_cache.clear()
+            print("[Cache] Cleared sound cache on startup.")
+        except Exception as e:
+            print(f"[Cache] Warning: Could not clear sound cache: {e}")
+        # Reserve additional mixer channels to reduce "no channel" race conditions
+        try:
+            pygame.mixer.set_num_channels(32)
+            print("Mixer channels set to 32.")
+        except Exception:
+            pass
+        # Start UDP listener for fast fire-and-forget commands
+        threading.Thread(target=udp_listener, daemon=True).start()
+        print("UDP listener thread started.")
+        # Start file-queue listener (zero-launch fast path)
+        threading.Thread(target=file_queue_listener, daemon=True).start()
+        print("File-queue listener thread started.")
+        # Start background preloading of all sounds for instant playback
+        threading.Thread(target=preload_sounds, daemon=True).start()
+        print("Preload thread started (caching all sounds in background).")
+    except pygame.error as e:
+        print(f"Fatal Error: Failed to initialize Pygame Mixer: {e}")
+        print("Ensure you have sound drivers installed and configured.")
+        print("Also check if another application is exclusively using the sound device.")
+        sys.exit(1)
+    except Exception as e:
+        print(f"Fatal Error during Pygame initialization: {e}")
+        sys.exit(1)
+
+    # --- Setup Server Socket ---
+    server_socket = None
+    try:
+        server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        # Allow reusing the address shortly after closing (useful for restarts)
+        server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        server_socket.bind((HOST, PORT))
+        server_socket.listen()
+        # Set a timeout so accept() doesn't block forever, allowing checks for shutdown_flag
+        server_socket.settimeout(1.0) # Check for shutdown every second
+        print(f"Sound server listening on {HOST}:{PORT}...")
+        print("Waiting for connections... Send QUIT command to stop.")
+
+        # --- Main Server Loop ---
+        while not shutdown_flag.is_set():
+            try:
+                # Wait for a connection (with timeout)
+                conn, addr = server_socket.accept()
+                conn.settimeout(60) # Set timeout for individual client operations
+
+                # Start a new thread to handle this specific client connection
+                # Use daemon=True so these threads don't block program exit if main thread finishes
+                client_handler_thread = threading.Thread(target=handle_client, args=(conn, addr), daemon=True)
+                client_handler_thread.start()
+
+            except socket.timeout:
+                # No connection received within the timeout, just loop again and check shutdown_flag
+                continue
+            except Exception as e:
+                if not shutdown_flag.is_set(): # Don't print errors if we're trying to shut down
+                     print(f"Error accepting connection: {e}")
+                time.sleep(0.1) # Avoid busy-waiting on error
+
+    except socket.error as e:
+        print(f"Fatal Error: Could not start server socket on {HOST}:{PORT}. Error: {e}")
+        print("Check if the port is already in use or if you have network permissions.")
+        if server_socket: server_socket.close()
+        pygame.quit()
+        sys.exit(1)
+    except Exception as e:
+         print(f"Fatal Error in main server loop: {e}")
+    finally:
+        # --- Cleanup ---
+        print("Server shutting down...")
+        if server_socket:
+            server_socket.close()
+            print("Server socket closed.")
+
+        # Wait briefly for client handlers to potentially finish nicely
+        time.sleep(0.5)
+
+        pygame.mixer.quit()
+        pygame.quit() # Cleanly uninitialize all Pygame modules
+        print("Pygame Mixer quit.")
+        print("Shutdown complete.")
+        # Force exit if any non-daemon threads are stuck (shouldn't happen with daemon=True)
+        # os._exit(0) # Use with caution, skips normal cleanup
+
+if __name__ == "__main__":
+    # Add current time
+    print(f"--- Sound Player Server starting at {time.strftime('%Y-%m-%d %H:%M:%S')} ---")
+    # Add location info (Note: This requires external libraries or APIs usually, hardcoding for demo)
+    # For real location, you might use libraries like 'geocoder' or 'requests' with an IP API
+    # print(f"Running in location: Staškov, Žilina Region, Slovakia (Hardcoded)") # Example
+    main()

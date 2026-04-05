@@ -1,0 +1,13 @@
+{
+    "difficulty": 0,
+    "datatype": 1,
+    "sorting": 0,
+    "levelup_mode": 0,
+    "music": 5,
+    "pronouns": "they/them/their",
+    "sfx": 10,
+    "skipboot": 0,
+    "skiplevelanim": 0,
+    "sound": 10,
+    "spatial": 0
+}

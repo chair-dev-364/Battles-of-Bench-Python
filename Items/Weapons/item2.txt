@@ -1,0 +1,1 @@
+book;;0d;;Diary of Inner Thoughts;;100;;39528;;188;;Strength;;3;;Is it safe to write in there?;;4;;Your Skill reduces enemy ATK twice as much.;;0;;2

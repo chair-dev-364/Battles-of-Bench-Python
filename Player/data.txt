@@ -1,0 +1,10 @@
+{
+    "dust": 500,
+    "gems": 80,
+    "level": 95,
+    "money": 100000,
+    "skills": 12,
+    "xp": 50,
+    "xpneeded": 100,
+    "tryd": 0
+}

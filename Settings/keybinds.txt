@@ -1,0 +1,10 @@
+{
+    "attack": "a",
+    "heal": "h",
+    "skill": "s",
+    "ult": "u",
+    "back": "b",
+    "confirm": "enter",
+    "deny": "esc",
+    "forfeit": "f"
+}
