@@ -1317,8 +1317,102 @@ def character():
         else:
             EXP_BAR += EMPTY_SEG
 
-
-
+    # make dodge, effect res, life steal and regen work normally
+    
+    # dodge rate = base dodge + (dodge from item) - (enemy accuracy debuff)
+    # base dodge rate is 5
+    base_dodge = 5
+    # for every 10 levels in armor, +0.1% dodge rate
+    armor_dodge = (getattr(armor, "level", 0) // 10) * 0.1
+    # weapon if substat if dodge, add the same
+    weapon_dodge = 0
+    if getattr(item, "substat", None) == "Dodge":
+        weapon_dodge = item.substat_value
+    # headwear dodge functions exactly like armor
+    head_dodge = (getattr(head, "level", 0) // 10) * 0.1
+    player.dodge = base_dodge + armor_dodge + weapon_dodge + head_dodge
+    del base_dodge, armor_dodge, weapon_dodge, head_dodge  
+    
+    # now, let's do effect res
+    # for example, either reduce duration of negative effects by x%, or reduce their potency by x%
+    # for every 1 player level => 0.2% effect res
+    base_effect_res = player.level * 0.2
+    # armor gives 1% effect res per 20 levels
+    armor_effect_res = (getattr(armor, "level", 0) // 20) * 1
+    # headwear gives 1% effect res per 20 levels
+    head_effect_res = (getattr(head, "level", 0) // 20) * 1
+    # bonus effect res, random stuff
+    bonus_effect_res = 0
+    # so finally,
+    player.effect_res = base_effect_res + armor_effect_res + head_effect_res + bonus_effect_res
+    del base_effect_res, armor_effect_res, head_effect_res, bonus_effect_res
+    
+    # now, life steal
+    # base life steal is 0
+    base_life_steal = 0.1
+    # for every 10 levels in weapon, +0.05% life steal
+    weapon_life_steal = (getattr(item, "level", 0) // 10) * 0.05
+    # if weapon substat, add the same
+    if getattr(item, "substat", None) == "Life Steal":
+        weapon_life_steal += item.substat_value    
+    # if any bonuses:
+    bonus_life_steal = 0
+    player.life_steal = base_life_steal + weapon_life_steal + bonus_life_steal
+    
+    # regeneration (get more hp from potions)
+    # base potion gives 20% back
+    base_regen = 0.2
+    # if weapon substat is regen, add the same
+    weapon_regen = 0
+    if getattr(item, "substat", None) == "Regeneration":
+        weapon_regen = item.substat_value
+    # any bonuses:
+    bonus_regen = 0
+    player.regen = base_regen + weapon_regen + bonus_regen
+    del base_regen, weapon_regen, bonus_regen
+    
+    # let's make speed work
+    # base speed is 100
+    base_speed = 100
+    # if weapon substat is speed, add the same
+    weapon_speed = 0
+    if getattr(item, "substat", None) == "Speed":
+        weapon_speed = item.substat_value
+    # for every 10 levels of player, +5 speed
+    level_speed = (player.level // 10) * 5
+    # any bonuses:
+    bonus_speed = 0
+    player.speed = base_speed + weapon_speed + level_speed + bonus_speed
+    del base_speed, weapon_speed, level_speed, bonus_speed
+    
+    # let's make crit rate
+    # base crit rate is 15%
+    base_crit_rate = 15
+    # if weapon substat is crit rate, add the same
+    weapon_crit_rate = 0
+    if getattr(item, "substat", None) == "Crit Rate":
+        weapon_crit_rate = item.substat_value
+    # any bonuses:
+    bonus_crit_rate = 0
+    # for every 10 levels of player, +1% crit rate
+    level_crit_rate = (player.level // 10) * 1
+    player.crit_rate = base_crit_rate + weapon_crit_rate + level_crit_rate + bonus_crit_rate
+    del base_crit_rate, weapon_crit_rate, level_crit_rate, bonus_crit_rate
+    
+    # now, make total ATK, DEF and Hp actually global
+    player.total_dmg = totaldmg
+    player.total_def = totaldef
+    player.total_hp = totalhp
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
     print(f"""
 [1;{number}H{reset}
 [2;17H#3{x7}╭───────────────────────────╮
@@ -1426,13 +1520,13 @@ def character():
 [12;60H{reset}† 
 [12;62H{RGB}255;219;187mWeapon{x8}--------{xlyellow}{bold}{item.atk}{reset}
 [13;60H{reset}✸ 
-[13;62H{RGB}255;219;187mCrit Rate{x8}-----{xlyellow}{bold}25%{reset}
+[13;62H{RGB}255;219;187mCrit Rate{x8}-----{xlyellow}{bold}{player.crit_rate}{reset}
 [14;60H{reset}※ 
 [14;62H{RGB}255;219;187mCrit DMG{x8}------{xlyellow}{bold}{item.atkcrit}%{reset}
 [15;60H{reset}⟐ 
-[15;62H{RGB}255;219;187mSpeed{x8}---------{xlyellow}{bold}105{reset}
+[15;62H{RGB}255;219;187mSpeed{x8}---------{xlyellow}{bold}{player.speed}{reset}
 [18;44H{reset}{RGB}255;219;187m⇝{xf} 
-[18;46HYour {item.type_raw} {bold}crits {RGB}255;219;187m25%{reset} of the time,{reset}
+[18;46HYour {item.type_raw} {bold}crits {RGB}255;219;187m{player.crit_rate}%{reset} of the time,{reset}
 [19;46H{reset}in which case you deal {RGB}255;219;187m{bold}+{item.atkcrit}%{reset} DMG:
 [13;101H{reset}⌬ 
 [13;103H{RGB}186;243;219mSkill Lv.{x8}-----{xa}{bold}{player.skills}{reset}{RGB}186;243;219m/15{reset}
@@ -1459,17 +1553,17 @@ def character():
 [32;60H{reset}★ 
 [32;62H{RGB}173;216;225mBonus DEF{x8}-----{xb}{bold}{abilitydef}%{reset}
 [33;60H{reset}⊗ 
-[33;62H{RGB}173;216;225mDodge Rate{x8}----{xb}{bold}2%{reset}
+[33;62H{RGB}173;216;225mDodge Rate{x8}----{xb}{bold}{player.dodge_rate}{reset}
 [29;101H{reset}♥ 
 [29;103H{RGB}255;203;204mBase HP{x8}---------{xlred}{bold}{basehp}{reset}
 [30;101H{reset}♡ 
 [30;103H{RGB}255;203;204mBonus HP{x8}--------{xlred}{bold}{abilityhp}{reset}
 [31;101H{reset}⬣ 
-[31;103H{RGB}255;203;204mEffect RES{x8}------{xlred}{bold}5%{reset}
+[31;103H{RGB}255;203;204mEffect RES{x8}------{xlred}{bold}{player.effect_res}{reset}
 [32;101H{reset}↺ 
-[32;103H{RGB}255;203;204mRegeneration{x8}----{xlred}{bold}3%{reset}
+[32;103H{RGB}255;203;204mRegeneration{x8}----{xlred}{bold}{player.regeneration}{reset}
 [33;101H{reset}⸕ 
-[33;103H{RGB}255;203;204mLife Steal{x8}------{xlred}{bold}2%{reset}
+[33;103H{RGB}255;203;204mLife Steal{x8}------{xlred}{bold}{player.life_steal}{reset}
 [36;42H{RGB}173;216;225m╰───────────────────────────────────────╯ {RGB}255;203;204m╰───────────────────────────────────────╯
 [36;3H{x7}╰────────────────────────────────────╯{reset}
 """.strip().replace("\n", ""),end="",flush=True)
