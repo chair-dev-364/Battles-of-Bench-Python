@@ -8,6 +8,7 @@ import operator as op
 import subprocess
 import json
 import re
+import random
 from pathlib import Path
 from typing import Literal
 
@@ -1053,6 +1054,12 @@ def draw_box(
         style += "\x1b[1m"
 
     draw_text(text_x, y1, style + padded_text)
+
+def center(text, row):
+    cols = os.get_terminal_size().columns
+    text_len = visible_len(text)
+    col = max(1, (cols - text_len) // 2 + 1)
+    draw_text(col, row, text)
 """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 INTERFACE
 """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
@@ -1091,6 +1098,11 @@ def mainmenu():
     [32;1H{x8}      │     │       │     │       │  [ === =] /{x7}.::::::;;::::::::::::::;;;:::::::.{x8}\\ [===  =]   │       │       │       │   │   {x9}
     [33;1H{x8}______│_____│_______│_____│_______│__[ == ==]/{x7}.::::::;;; {xlred}{bold}[B] to battle{reset}{x7} ;;;:::::::.{x8}\\[=  == ]___│_______│_______│_______│___│__{reset}
     """)
+    with open("Scripts/tips.txt", "r", encoding="utf-8") as f:
+        tips = [line.strip() for line in f if line.strip()]
+
+    center(f"{italic}{random.choice(tips)}{reset}", 8)
+    
     while True:
         k = key()
         if k.lower() == "b":
@@ -1102,9 +1114,6 @@ def mainmenu():
             sound("door2")
             game.goto = house
             return
-
-
-draw_box(1, 1, 33, 120, text="hello", bold=False, text_color=x7, border_color=x7, align="center")
 
 
 def battle():
@@ -1262,7 +1271,20 @@ def character():
     lvsymbol5=f"{RGB}195;255;253m  {RGB}192;253;248m  {RGB}190;251;242m██{RGB}189;249;237m██{RGB}187;247;231m██{RGB}186;245;225m██{RGB}186;243;219m██"
     lvsymbol6=f"{RGB}195;255;253m  {RGB}192;253;248m██{RGB}190;251;242m██{RGB}189;249;237m██{RGB}187;247;231m██{RGB}186;245;225m██{RGB}186;243;219m██"
     lvsymbol7=f"{RGB}195;255;253m██{RGB}192;253;248m██{RGB}190;251;242m██{RGB}189;249;237m██{RGB}187;247;231m██{RGB}186;245;225m██{RGB}186;243;219m██"
-
+# let's make crit rate
+    # base crit rate is 15%
+    base_crit_rate = 15
+    # if weapon substat is crit rate, add the same
+    weapon_crit_rate = 0
+    if getattr(item, "substat", None) == "Crit Rate":
+        weapon_crit_rate = item.substat_value
+    # any bonuses:
+    bonus_crit_rate = 0
+    # for every 10 levels of player, +1% crit rate
+    level_crit_rate = (player.level // 10) * 1
+    player.crit_rate = base_crit_rate + weapon_crit_rate + level_crit_rate + bonus_crit_rate
+    del base_crit_rate, weapon_crit_rate, level_crit_rate, bonus_crit_rate
+    
     abilityatk=0
     abilitydef=0
     abilityhp=0
@@ -1271,7 +1293,7 @@ def character():
     item.atkcrit = round(item.atkcrit)
     basehp = round(basehp)
     basedef = round(basedef,1)
-    critrate=25
+    critrate = round(player.crit_rate)
     expected = round(totaldmg * (1 + (critrate / 100) * (item.atkcrit / 100)))
     number = 1
     # --- Defence ---
@@ -1389,33 +1411,12 @@ def character():
     player.speed = base_speed + weapon_speed + level_speed + bonus_speed
     del base_speed, weapon_speed, level_speed, bonus_speed
     
-    # let's make crit rate
-    # base crit rate is 15%
-    base_crit_rate = 15
-    # if weapon substat is crit rate, add the same
-    weapon_crit_rate = 0
-    if getattr(item, "substat", None) == "Crit Rate":
-        weapon_crit_rate = item.substat_value
-    # any bonuses:
-    bonus_crit_rate = 0
-    # for every 10 levels of player, +1% crit rate
-    level_crit_rate = (player.level // 10) * 1
-    player.crit_rate = base_crit_rate + weapon_crit_rate + level_crit_rate + bonus_crit_rate
-    del base_crit_rate, weapon_crit_rate, level_crit_rate, bonus_crit_rate
+    
     
     # now, make total ATK, DEF and Hp actually global
     player.total_dmg = totaldmg
     player.total_def = totaldef
     player.total_hp = totalhp
-    
-    
-    
-    
-    
-    
-    
-    
-    
     
     print(f"""
 [1;{number}H{reset}
@@ -1459,36 +1460,36 @@ def character():
 [15;20H{item.type} {xlyellow}Attack{reset}{x8}.....{bold}{xe}{round(totaldmg)}{reset}
 [16;20H🛡️ {x3}Defence{reset}{x8}....{bold}{xb}{round(totaldef,1)}%{reset}
 [17;20H❤️ {xc}Health{reset}{x8}.....{bold}{xlred}{round(totalhp)} {reset}
-[08;42H{xf}{bold}{RGB}255;219;187m╭───────────────────────────────────────╮ {RGB}186;243;219m╭───────────────────────────────────────╮
-[09;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                       │
-[10;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                       │
-[11;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                       │
-[12;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                       │
-[13;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                       │
-[14;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                       │
-[15;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                       │
-[16;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                       │
-[17;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                       │
-[18;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                       │
-[19;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                       │
-[20;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                       │
-[21;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                       │
-[22;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                       │
-[23;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                       │
-[24;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                       │
-[25;42H{xf}{bold}{RGB}255;219;187m╰───────────────────────────────────────╯ {RGB}186;243;219m╰───────────────────────────────────────╯
+[08;42H{xf}{bold}{RGB}255;219;187m╭───────────────────────────────────────╮ {RGB}186;243;219m╭─────────────────────────────────────────╮
+[09;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                         │
+[10;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                         │
+[11;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                         │
+[12;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                         │
+[13;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                         │
+[14;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                         │
+[15;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                         │
+[16;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                         │
+[17;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                         │
+[18;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                         │
+[19;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                         │
+[20;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                         │
+[21;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                         │
+[22;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                         │
+[23;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                         │
+[24;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                         │
+[25;42H{xf}{bold}{RGB}255;219;187m╰───────────────────────────────────────╯ {RGB}186;243;219m╰─────────────────────────────────────────╯
 [08;43H{RGB}255;219;187m{bold}┤ Attack ├
 [08;85H{RGB}186;243;219m{bold}┤ Levelling ├
-[26;42H{RGB}173;216;225m╭───────────────────────────────────────╮ {RGB}255;203;204m╭───────────────────────────────────────╮
-[27;42H{RGB}173;216;225m│                                       │ {RGB}255;203;204m│                                       │
-[28;42H{RGB}173;216;225m│                                       │ {RGB}255;203;204m│                                       │
-[29;42H{RGB}173;216;225m│                                       │ {RGB}255;203;204m│                                       │
-[30;42H{RGB}173;216;225m│                                       │ {RGB}255;203;204m│                                       │
-[31;42H{RGB}173;216;225m│                                       │ {RGB}255;203;204m│                                       │
-[32;42H{RGB}173;216;225m│                                       │ {RGB}255;203;204m│                                       │
-[33;42H{RGB}173;216;225m│                                       │ {RGB}255;203;204m│                                       │
-[34;42H{RGB}173;216;225m│                                       │ {RGB}255;203;204m│                                       │
-[35;42H{RGB}173;216;225m│                                       │ {RGB}255;203;204m│                                       │
+[26;42H{RGB}173;216;225m╭───────────────────────────────────────╮ {RGB}255;203;204m╭─────────────────────────────────────────╮
+[27;42H{RGB}173;216;225m│                                       │ {RGB}255;203;204m│                                         │
+[28;42H{RGB}173;216;225m│                                       │ {RGB}255;203;204m│                                         │
+[29;42H{RGB}173;216;225m│                                       │ {RGB}255;203;204m│                                         │
+[30;42H{RGB}173;216;225m│                                       │ {RGB}255;203;204m│                                         │
+[31;42H{RGB}173;216;225m│                                       │ {RGB}255;203;204m│                                         │
+[32;42H{RGB}173;216;225m│                                       │ {RGB}255;203;204m│                                         │
+[33;42H{RGB}173;216;225m│                                       │ {RGB}255;203;204m│                                         │
+[34;42H{RGB}173;216;225m│                                       │ {RGB}255;203;204m│                                         │
+[35;42H{RGB}173;216;225m│                                       │ {RGB}255;203;204m│                                         │
 [26;43H{RGB}173;216;225m{bold}┤ Defence ├
 [26;85H{RGB}255;203;204m{bold}┤ Health ├
 [28;45H{defsymbol1}
@@ -1524,7 +1525,7 @@ def character():
 [12;60H{reset}† 
 [12;62H{RGB}255;219;187mWeapon{x8}--------{xlyellow}{bold}{item.atk}{reset}
 [13;60H{reset}✸ 
-[13;62H{RGB}255;219;187mCrit Rate{x8}-----{xlyellow}{bold}{player.crit_rate}{reset}
+[13;62H{RGB}255;219;187mCrit Rate{x8}-----{xlyellow}{bold}{player.crit_rate}%{reset}
 [14;60H{reset}※ 
 [14;62H{RGB}255;219;187mCrit DMG{x8}------{xlyellow}{bold}{item.atkcrit}%{reset}
 [15;60H{reset}⟐ 
@@ -1563,12 +1564,12 @@ def character():
 [30;101H{reset}♡ 
 [30;103H{RGB}255;203;204mBonus HP{x8}--------{xlred}{bold}{abilityhp}{reset}
 [31;101H{reset}⬣ 
-[31;103H{RGB}255;203;204mEffect RES{x8}------{xlred}{bold}{player.effect_res}{reset}
+[31;103H{RGB}255;203;204mEffect RES{x8}------{xlred}{bold}{round(player.effect_res)}%{reset}
 [32;101H{reset}↺ 
-[32;103H{RGB}255;203;204mRegeneration{x8}----{xlred}{bold}{player.regen}{reset}
+[32;103H{RGB}255;203;204mRegeneration{x8}----{xlred}{bold}{round(player.regen,1)}%{reset}
 [33;101H{reset}⸕ 
-[33;103H{RGB}255;203;204mLife Steal{x8}------{xlred}{bold}{player.life_steal}{reset}
-[36;42H{RGB}173;216;225m╰───────────────────────────────────────╯ {RGB}255;203;204m╰───────────────────────────────────────╯
+[33;103H{RGB}255;203;204mLife Steal{x8}------{xlred}{bold}{round(player.life_steal,1)}%{reset}
+[36;42H{RGB}173;216;225m╰───────────────────────────────────────╯ {RGB}255;203;204m╰─────────────────────────────────────────╯
 [36;3H{x7}╰────────────────────────────────────╯{reset}
 """.strip().replace("\n", ""),end="",flush=True)
         # ===== RESULT =====
@@ -1610,7 +1611,6 @@ def character():
         else:
             print(f"{xba}{xf}{bold}\033[18;94H{round(EXP/player.xpneeded*100)}%")
         print(f"\033[19;93H{reset}{x7}{rgb(186,243,219)}↑ {bold}{EXP}/{EXP_NEEDED} {reset}XP to get level {player.level+1}{reset}")
-        time.sleep(0.01)
     EXP = player.xp
     # ===== CONFIG =====
     BAR_LENGTH = 30
