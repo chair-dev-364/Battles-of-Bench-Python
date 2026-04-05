@@ -1060,6 +1060,79 @@ def center(text, row):
     text_len = visible_len(text)
     col = max(1, (cols - text_len) // 2 + 1)
     draw_text(col, row, text)
+
+
+def rainbow(text, offset=0, bold=False, italic=False):
+    colors = [
+        (255, 100, 100),
+        (255, 180, 100),
+        (255, 255, 120),
+        (120, 255, 120),
+        (120, 180, 255),
+        (180, 120, 255),
+        (255, 100, 100),
+    ]
+
+    result = ""
+    length = max(len(text), 1)
+
+    for i, char in enumerate(text):
+        t = (i / (length - 1) if length > 1 else 0)
+        t = (t + offset) % 1.0
+
+        idx = int(t * (len(colors) - 1))
+        t_local = (t * (len(colors) - 1)) - idx
+
+        r1, g1, b1 = colors[idx]
+        r2, g2, b2 = colors[idx + 1]
+
+        r = int(r1 + (r2 - r1) * t_local)
+        g = int(g1 + (g2 - g1) * t_local)
+        b = int(b1 + (b2 - b1) * t_local)
+
+        result += f"\033[38;2;{r};{g};{b}m{char}"
+
+    return result + "\033[0m"
+
+def shine(text, offset=0, color=(255, 255, 0), bold=False):
+    result = ""
+    length = max(len(text), 1)
+
+    # 🔁 cycle
+    cycle = offset % 1.0
+
+    # ⚙️ tuning
+    active_window = 0.5   # how long shine is active
+    width = 0.5           # how wide the shine is
+    intensity = 3         # intensity falloff (higher = sharper shine, lower = more spread out)
+
+    for i, char in enumerate(text):
+        t = i / (length - 1) if length > 1 else 0
+
+        if cycle > active_window:
+            # 💤 fully idle (no shine at all)
+            r, g, b = 255, 255, 255
+
+        else:
+            # normalize 0 → 1 within active window
+            t_cycle = cycle / active_window
+
+            # 👇 IMPORTANT: extend travel range
+            center = -width + t_cycle * (1 + 2 * width)
+
+            dist = abs(t - center)
+
+            # smooth falloff
+            strength = max(0, 1 - dist * intensity)
+
+            r = int(255 * (1 - strength) + color[0] * strength)
+            g = int(255 * (1 - strength) + color[1] * strength)
+            b = int(255 * (1 - strength) + color[2] * strength)
+
+        style = "\033[1m" if bold else ""
+        result += f"\033[38;2;{r};{g};{b}m{style}{char}"
+
+    return result + "\033[0m"
 """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 INTERFACE
 """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
@@ -1096,15 +1169,17 @@ def mainmenu():
     [30;1H{x8}    │     │       │     │       │    [ == = ] /│ {x7}.::::::;;:::::::::::;;;::::::. {x8}│\\ [== == ]      │       │       │           │{x7}   
     [31;1H{x8}____│_____│_______│_____│_______│____[=  == ]/ │{x7}.::::::;;:::::::::::::;;;::::::.{x8}│ \\[  === ]______│_______│_______│___________│{x7}   
     [32;1H{x8}      │     │       │     │       │  [ === =] /{x7}.::::::;;::::::::::::::;;;:::::::.{x8}\\ [===  =]   │       │       │       │   │   {x9}
-    [33;1H{x8}______│_____│_______│_____│_______│__[ == ==]/{x7}.::::::;;; {xlred}{bold}[B] to battle{reset}{x7} ;;;:::::::.{x8}\\[=  == ]___│_______│_______│_______│___│__{reset}
+    [33;1H{x8}______│_____│_______│_____│_______│__[ == ==]/{x7}.::::::;;; {xf}{bold}[B] to battle{reset}{x7} ;;;:::::::.{x8}\\[=  == ]___│_______│_______│_______│___│__{reset}
     """)
     with open("Scripts/tips.txt", "r", encoding="utf-8") as f:
         tips = [line.strip() for line in f if line.strip()]
 
     center(f"{italic}{random.choice(tips)}{reset}", 8)
-    
+    offset = 0
     while True:
-        k = key()
+        offset += 0.005
+        print(f"[33;1H{x8}______│_____│_______│_____│_______│__[ == ==]/{x7}.::::::;;; {xlred}{bold}{shine("[B] to battle",offset=offset, color=(255, 71, 76), bold=True)}{reset}{x7} ;;;:::::::.{x8}\\[=  == ]___│_______│_______│_______│___│__{reset}")
+        k = key(timeout=0)
         if k.lower() == "b":
             sound("woosh")
             subprocess.run(["py", "wipe.py", "normal", "10"])
@@ -1114,6 +1189,7 @@ def mainmenu():
             sound("door2")
             game.goto = house
             return
+        time.sleep(0.01)
 
 
 def battle():
