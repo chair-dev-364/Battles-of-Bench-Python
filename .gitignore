@@ -1,6 +1,6 @@
 *.wav
 *.mp3
-*.md
+copilot-instructions.md
 __pycache__/
 *.pyc
 *.pyo
