@@ -1,50 +1,22 @@
-import msvcrt
-import os
-import time
-import sys
-import ctypes
-import ast
-import operator as op
-import subprocess
-import json
-import re
-import random
-from pathlib import Path
-from typing import Literal
+"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+✨ Hey, welcome to the Battles of Bench codebase!
+It's messy out here. 
+"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 
 """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 INITIALIZE
 """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
-print('hello world')
+
+import msvcrt, os, time, sys, ctypes, ast, operator as op, subprocess, json, re, random  # noqa: E401, E402
+from pathlib import Path  # noqa: E402
+from typing import Literal  # noqa: E402
+
 version=26
 subversion=0
-RGB="[38;2;"
 
+RGB="[38;2;"
 TITLE = f"Battles of Bench - a{version}.{subversion}"
 
-# Kill any old instances by window title
-current_pid = os.getpid()
-
-result = subprocess.run(
-    ["wmic", "process", "where", "name='python.exe'", "get", "ProcessId,CommandLine"],
-    capture_output=True,
-    text=True
-)
-
-for line in result.stdout.splitlines():
-    if not line.strip():
-        continue
-
-    if "main.py" in line or "sound_player.py" in line:
-        parts = line.strip().split()
-        pid = int(parts[-1])
-
-        if pid != current_pid:
-            os.system(f"taskkill /F /PID {pid} >nul 2>&1")
-
-time.sleep(0.2)
-
-# Set this window's title
 os.system(f"title {TITLE}")
 sys.stdout.reconfigure(encoding="utf-8") # actually make it display shit
 
@@ -94,6 +66,14 @@ mode = ctypes.c_uint()
 kernel32.GetConsoleMode(handle, ctypes.byref(mode))
 kernel32.SetConsoleMode(handle, mode.value | 4)
 
+"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+🎯 FUNCTIONS
+This section handles (I think) every single backend function designed to keep BoB running... well, as it is.
+DISCLAIMER -> Some of these functions are made by AI. Deeply sorry if this sounds disappointing to you.
+In a perfect world, I would have hand-crafted everything. But I also want to actually finish the damn thing, so here we are.
+Oh well.
+"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+
 _ALLOWED_OPS = {
     ast.Add: op.add,
     ast.Sub: op.sub,
@@ -105,6 +85,7 @@ _ALLOWED_OPS = {
     ast.USub: op.neg
 }
 
+# SAFE EVAL -> Used for getx() later. You'll see why. It handles safer calculation.
 def safe_eval(expr):
     def _eval(node):
         if isinstance(node, ast.Constant):  # modern number node
@@ -133,24 +114,25 @@ def safe_eval(expr):
     parsed = ast.parse(expr, mode='eval')
     return _eval(parsed.body)
 
+# Simple. "cursor(True)" to show, "cursor(False)" to hide.
 def cursor(x):
     handle = ctypes.windll.kernel32.GetStdHandle(-11)  # STD_OUTPUT_HANDLE
     info = CONSOLE_CURSOR_INFO()
     ctypes.windll.kernel32.GetConsoleCursorInfo(handle, ctypes.byref(info))
     info.bVisible = bool(x)  # True = show, False = hide
     ctypes.windll.kernel32.SetConsoleCursorInfo(handle, ctypes.byref(info))
-    
+
+# Move cursor to (row, col). Yes, it's reversed because I got used to ANSI.
 def move(row, col):
     print(f"[{row};{col}H", end="")
 
-# ---------- CLEAR ONLY INPUT REGION ----------
+# Wrong answer in getx() later, obliterate it.
 def clear_input(row, start_col, width):
     move(row, start_col)
     print(" " * width, end="")
     move(row, start_col)
 
-# ---------- SMART INPUT ----------
-
+# Flashes the prompt in red for a moment. Used in getx() when input is invalid.
 def flash_prompt(row, col, prompt):
     cursor(False)
     move(row, col)
@@ -160,27 +142,29 @@ def flash_prompt(row, col, prompt):
     print(prompt, end="", flush=True)
     cursor(True)
     
-ANSI_PATTERN = re.compile(r'\x1b\[[0-9;?]*[A-Za-z]')
+ANSI_PATTERN = re.compile(r'\x1b\[[0-9;?]*[A-Za-z]') # what this does, I have no clue.
 
+# Returns the length of the text without ANSI codes. Used to properly calculate cursor positions in getx().
 def visible_len(text):
     return len(ANSI_PATTERN.sub('', text))
-    
+
+# FINALLY, getx(). Basically input(), but actually good.
 def getx(
-    row,
-    col,
-    prompt="",
-    max_len=None,
-    expect=None,
-    min_val=None,
-    max_val=None,
-    allow_none=False,
-    highlight_prefix=None,
-    highlight_suffix=None,
-    highlight_keywords=None
+    row, # where the input starts (row)
+    col, # same as row but col.
+    prompt="", # the prompt, if any, that appears before the input
+    max_len=None, # maximum length of input. None for unlimited.
+    expect=None, # wanna force a data type? "int", "float", or None for any string.
+    min_val=None, # for numbers, set a minimum accepted value. None for no minimum.
+    max_val=None, # same with min, but max. Wow!
+    allow_none=False, # if True, allows empty input (returns None). If False, empty input is invalid.
+    highlight_prefix=None, # if set, this string is prefixed to the input for styling when the input is valid. E.g. set highlight_prefix=x2 to make valid input green.
+    highlight_suffix=None, # exactly the same as highlight_prefix but AFTER the thing. Mostly used for resetting color with reset.
+    highlight_keywords=None # dictionary of keywords to highlight in the input. Format: {"keyword": (prefix, suffix), ...}. E.g. {"*": (x4, reset)} would make all asterisks red regardless of validity.
 ):
     cursor(True)
 
-    ANSI_PATTERN = re.compile(r'\x1b\[[0-9;?]*[A-Za-z]')
+    ANSI_PATTERN = re.compile(r'\x1b\[[0-9;?]*[A-Za-z]') # again, no clue.
     def visible_len(text):
         return len(ANSI_PATTERN.sub('', text))
 
@@ -331,13 +315,15 @@ def getx(
     finally:
         cursor(False)
 
-        
+# Insane tech literacy required to understand this. Simply... colors text.
 def rgb(r, g, b):
     return f"[38;2;{r};{g};{b}m"
-    
+
+# Same as rgb but for background. Yes, I know, the name doesn't make sense. But oh well.
 def rgback(r, g, b):
     return f"[48;2;{r};{g};{b}m"
 
+# Finally, actually global variables. Thanks, Batch.
 class GeneralVariables:
     pass
 d = GeneralVariables()
@@ -401,16 +387,13 @@ class PlayerData:
         with open(self._path, "w") as f:
             json.dump(self._persistent_fields, f, indent=4)
 
-
-# ───────────── USAGE ─────────────
-
 player = PlayerData()
 class EnemyData:
     pass
 enemy = EnemyData()
 
 
-
+# Load settings.
 class SettingsData:
     def __init__(self):
         # Path setup
@@ -557,6 +540,7 @@ class KeyBinds:
             json.dump(self._persistent_fields, f, indent=4)
 bind = KeyBinds()
 
+# Oh yeah, here comes the RGB COLOR MESS!! Let's go!!
 bind.load()
 player.load()
 game.goto = "main"
@@ -616,6 +600,7 @@ strikethrough = ESC + "9m"
 unstrike = ESC + "29m"
 uncolor = ESC + "39m"
 unbg = ESC + "49m"
+# ...but at least they work.
 
 class CONSOLE_CURSOR_INFO(ctypes.Structure):
     _fields_ = [
@@ -623,11 +608,11 @@ class CONSOLE_CURSOR_INFO(ctypes.Structure):
         ("bVisible", ctypes.c_bool)
     ] # yep, cursor hide core
 
-
+# Clear screen. Simple as that. Sorry, Linux or Mac.
 def cls():
     os.system("cls")
 
-
+# Key. As simple as that. Press a key, and... that's the return. With some specials.
 def key(timeout=None):
     start = time.time()
     while True:
@@ -659,7 +644,7 @@ def key(timeout=None):
         if timeout is not None and (time.time() - start) >= timeout:
             return "TIMEOUT"    
 
-    
+# INTERACTIVITY TIME! Sound() plays a sound effect. It does this by writing the command to a text file, which is then read by the sound player.
 def sound(cmd):
     path = os.path.join(os.getcwd(), "general", "temp", "sound_cmd_queue.txt")
     with open(path, "a", encoding="utf-8") as f:
@@ -705,7 +690,7 @@ def _clear_object(obj):
     for attr in list(vars(obj).keys()):
         delattr(obj, attr)
 
-
+# Loads an item by ID and category. If ID is 0, loads equipped items from the "active_*.txt" files. Otherwise, loads from the corresponding item file.
 def load_item(item_id, category="Weapons"):
     base_dir = os.getcwd()
     items_dir = os.path.join(base_dir, "Items")
@@ -761,7 +746,7 @@ def load_item(item_id, category="Weapons"):
 
         fields = [
         "type_raw",
-        "colour",
+        "rarity",
         "name",
         "level",
         "atk",
@@ -808,7 +793,7 @@ def load_item(item_id, category="Weapons"):
         _clear_object(head)
 
         head.type_raw = parts[0]
-        head.colour = parts[1]
+        head.rarity = parts[1]
         head.name = parts[2]
         head.level = int(parts[3])
         head.defense = int(parts[4])
@@ -818,7 +803,7 @@ def load_item(item_id, category="Weapons"):
         _clear_object(armor)
 
         armor.type_raw = parts[0]
-        armor.colour = parts[1]
+        armor.rarity = parts[1]
         armor.name = parts[2]
         armor.level = int(parts[3])
         armor.defense = int(parts[4])
@@ -860,7 +845,7 @@ def save_item(item_id, category="Weapons"):
     if category == "Weapons":
         parts = [
             item.type_raw,
-            item.colour,
+            item.rarity,
             item.name,
             str(item.level),
             str(item.atk),
@@ -876,7 +861,7 @@ def save_item(item_id, category="Weapons"):
     elif category == "Helmets":
         parts = [
             head.type_raw,
-            head.colour,
+            head.rarity,
             head.name,
             str(head.level),
             str(head.defense)
@@ -886,7 +871,7 @@ def save_item(item_id, category="Weapons"):
     elif category == "Bodywear":
         parts = [
             armor.type_raw,
-            armor.colour,
+            armor.rarity,
             armor.name,
             str(armor.level),
             str(armor.defense)
@@ -922,7 +907,7 @@ def save_item(item_id, category="Weapons"):
 
 
 BASE = Path("Settings/Keybinds")
-
+# Loads a bind by name. E.g. load_bind("attack") would read the "attack.txt" file in the Keybinds folder and return the value.
 def load_bind(name):
     value = read(BASE / f"{name}.txt").strip()
     return value
@@ -1061,7 +1046,7 @@ def center(text, row):
     col = max(1, (cols - text_len) // 2 + 1)
     draw_text(col, row, text)
 
-
+# why? Don't ask. Just... rainbow text. That's all.
 def rainbow(text, offset=0, bold=False, italic=False):
     colors = [
         (255, 100, 100),
@@ -1094,6 +1079,8 @@ def rainbow(text, offset=0, bold=False, italic=False):
 
     return result + "\033[0m"
 
+# Now THIS is the MVP function. Amazing for animations.
+# Unlike rainbow, which just cycles through colors, this creates a "shine" effect that travels across the text. You can customize the color, width, intensity, and speed of the shine.
 def shine(text, offset=0, color=(255, 255, 0), bold=False):
     result = ""
     length = max(len(text), 1)
@@ -1133,8 +1120,11 @@ def shine(text, offset=0, color=(255, 255, 0), bold=False):
         result += f"\033[38;2;{r};{g};{b}m{style}{char}"
 
     return result + "\033[0m"
+
 """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 INTERFACE
+Here's where... you really don't want to look. This is the absolute mess of hardcoded coordinates, colors, and styles that
+creates the actual game interface. It's a nightmare to maintain, but it works, so good luck.
 """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 
 def mainmenu():
@@ -1191,7 +1181,6 @@ def mainmenu():
             return
         time.sleep(0.01)
 
-
 def battle():
     cls()
     print("battle")
@@ -1246,7 +1235,7 @@ def house():
     """)
     while True:
         k = key()
-        if k.lower() == bind.back:
+        if k.lower() == bind.back or k.lower() == "esc":
             game.goto = mainmenu
             return
         if k.lower() == "s":
@@ -1266,7 +1255,7 @@ def house():
             print(a)
             sound("xpboost")
 
-
+# (i'm sorry)
 def character():
     player.load()
     setbinds()
@@ -1347,7 +1336,7 @@ def character():
     lvsymbol5=f"{RGB}195;255;253m  {RGB}192;253;248m  {RGB}190;251;242m██{RGB}189;249;237m██{RGB}187;247;231m██{RGB}186;245;225m██{RGB}186;243;219m██"
     lvsymbol6=f"{RGB}195;255;253m  {RGB}192;253;248m██{RGB}190;251;242m██{RGB}189;249;237m██{RGB}187;247;231m██{RGB}186;245;225m██{RGB}186;243;219m██"
     lvsymbol7=f"{RGB}195;255;253m██{RGB}192;253;248m██{RGB}190;251;242m██{RGB}189;249;237m██{RGB}187;247;231m██{RGB}186;245;225m██{RGB}186;243;219m██"
-# let's make crit rate
+    # let's make crit rate
     # base crit rate is 15%
     base_crit_rate = 15
     # if weapon substat is crit rate, add the same
@@ -1723,16 +1712,12 @@ def character():
 [16;20H🛡️ {x3}Defence{reset}{x8}....{bold}{xb}{round(totaldef,1)}%{reset}
 [17;20H❤️ {xc}Health{reset}{x8}.....{bold}{xlred}{round(totalhp)} {reset}
 """.strip().replace("\n",""),end="",flush=True)
+    del hpsymbol1,hpsymbol2,hpsymbol3,hpsymbol4,hpsymbol5,hpsymbol6,hpsymbol7, atksymbol1,atksymbol2,atksymbol3,atksymbol4,atksymbol5,atksymbol6,atksymbol7,defsymbol1,defsymbol2,defsymbol3,defsymbol4,defsymbol5,defsymbol6,defsymbol7,lvsymbol1,lvsymbol2,lvsymbol3,lvsymbol4,lvsymbol5,lvsymbol6,lvsymbol7
     while True:
         k = key()
-        if k.lower() == bind.back:
+        if k.lower() == bind.back or k.lower() == "esc":
             game.goto = house
             return
-    
-#if %level% GEQ 100 echo [12;101H%reset%↑ [12;103H%RGB%186;243;219mLevel%x8%---------%xa%%bold%%level%%reset%
-
-#if %level% LSS 100 echo [12;101H%reset%✧ [12;103H%RGB%186;243;219mLevel%x8%---------%xa%%bold%%level%%reset%%RGB%186;243;219m/100%reset%
-
 
 def settings():
     cls()
@@ -1773,7 +1758,7 @@ def settings():
     """,end="")
     while True:
         k = key()
-        if k.lower() == bind.back:
+        if k.lower() == bind.back or k.lower() == "esc":
             game.goto = house
             return
             
@@ -1813,29 +1798,18 @@ def inventory():
     """)
     while True:
         k = key()
-        if k.lower() == bind.back:
+        if k.lower() == bind.back or k.lower() == "esc":
             game.goto = house
             return
 
 """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 PROGRAM PART
+Yep. This is everything that actually makes the thing work.
 """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 cls()
 cursor(False)
 
-game.goto = mainmenu
+game.goto = mainmenu # adjust to change your landing!
 
 while True:
     game.goto()
-
-
-#a = getx(10,20,prompt=f"Enter this float: ",expect="float",max_len=5,highlight_prefix=f"{xlorange}{bold}",highlight_suffix=reset)
-
-# a = getx(10,20,prompt=f"{xf}Enter a string! Back makes it red and etile makes it blue: ",highlight_keywords={
-#         "etile": (f"{xb}{bold}", reset),
-#         "back": (f"{xlred}{bold}", reset)
-#     }
-# )
-
-#print(a)
-pause=input()
