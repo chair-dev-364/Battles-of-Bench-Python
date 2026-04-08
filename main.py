@@ -704,6 +704,12 @@ def _clear_object(obj):
     for attr in list(vars(obj).keys()):
         delattr(obj, attr)
 
+
+def _reset_object(obj, defaults):
+    _clear_object(obj)
+    for key, value in defaults.items():
+        setattr(obj, key, value)
+
 # Loads an item by ID and category. If ID is 0, loads equipped items from the "active_*.txt" files. Otherwise, loads from the corresponding item file.
 def load_item(item_id, category="Weapons"):
     base_dir = os.getcwd()
@@ -714,14 +720,37 @@ def load_item(item_id, category="Weapons"):
     # ─────────────────────────────────────────────
     if str(item_id) == "0":
         slot_map = {
-            "active_weapon.txt": ("Weapons", item),
-            "active_body.txt": ("Bodywear", armor),
-            "active_head.txt": ("Helmets", head),
-            "active_fragment.txt": ("Fragments", fragment),
+            "active_weapon.txt": (
+                "Weapons",
+                item,
+                {
+                    "type_raw": None,
+                    "type": "❌",
+                    "rarity": None,
+                    "name": None,
+                    "level": 0,
+                    "atk": 0,
+                    "atkcrit": 0.0,
+                    "substat": None,
+                    "substat_value": 0,
+                    "description": None,
+                    "level_power": 0,
+                    "ability": None,
+                    "locked": 0,
+                    "refine": 0,
+                    "special": None,
+                    "specialvalue": 0,
+                },
+            ),
+            "active_body.txt": ("Bodywear", armor, {"type_raw": None, "rarity": None, "name": None, "level": 0, "defense": 0}),
+            "active_head.txt": ("Helmets", head, {"type_raw": None, "rarity": None, "name": None, "level": 0, "defense": 0}),
+            "active_fragment.txt": ("Fragments", fragment, {"name": None, "level": 0}),
         }
 
-        for filename, (cat, obj) in slot_map.items():
+        for filename, (cat, obj, defaults) in slot_map.items():
             path = os.path.join(items_dir, filename)
+
+            _reset_object(obj, defaults)
 
             if not os.path.exists(path):
                 continue
@@ -729,10 +758,7 @@ def load_item(item_id, category="Weapons"):
             with open(path, "r", encoding="utf-8") as f:
                 content = f.readline().strip()
 
-            _clear_object(obj)
-
             if content.lower() == "none" or content == "":
-                obj.name = None
                 continue
 
             # Load actual item file via recursion
@@ -786,6 +812,8 @@ def load_item(item_id, category="Weapons"):
         item.refine = int(item.refine)
 
         type_map = {
+            None: "❌",
+            "None": "❌",
             "bow": "🏹",
             "sword": "⚔️",
             "knife": "🔪",
@@ -858,17 +886,19 @@ def save_item(item_id, category="Weapons"):
     # ───────────── WEAPONS ─────────────
     if category == "Weapons":
         parts = [
-            item.type_raw,
-            item.rarity,
-            item.name,
-            str(item.level),
-            str(item.atk),
-            str(item.atkcrit),
-            item.special,
-            str(item.specialvalue),
-            item.description,
-            str(item.locked),
-            str(item.refine)
+            str(getattr(item, "type_raw", "") or ""),
+            str(getattr(item, "rarity", "") or ""),
+            str(getattr(item, "name", "") or ""),
+            str(getattr(item, "level", 0)),
+            str(getattr(item, "atk", 0)),
+            str(getattr(item, "atkcrit", 0)),
+            str(getattr(item, "substat", "") or ""),
+            str(getattr(item, "substat_value", 0)),
+            str(getattr(item, "description", "") or ""),
+            str(getattr(item, "level_power", 0)),
+            str(getattr(item, "ability", "") or ""),
+            str(getattr(item, "locked", 0)),
+            str(getattr(item, "refine", 0))
         ]
 
     # ───────────── HELMETS ─────────────
