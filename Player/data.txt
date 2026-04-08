@@ -1,9 +1,9 @@
 {
     "dust": 500,
     "gems": 80,
-    "level": 95,
+    "level": 90,
     "money": 100000,
-    "skills": 12,
+    "skills": 10,
     "xp": 50,
     "xpneeded": 100,
     "tryd": 0
