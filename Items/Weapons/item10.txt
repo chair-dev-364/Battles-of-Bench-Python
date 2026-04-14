@@ -1,1 +1,0 @@
-sword;;02;;Lorekeeper;;5;;15;;10;;Health;;125;;You know a lot now...;;1

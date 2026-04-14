@@ -1,1 +1,1 @@
-hammer;;02;;Hammer;;1;;20;;99;;Defence;;5;;1;;1;;No ability.;;0
+bow;;0d;;The Melter;;100;;23091;;401;;Health;;25;;The bow of mass destruction. Not joking.;;3;;No ability.;;0;;4

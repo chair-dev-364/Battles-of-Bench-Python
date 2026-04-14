@@ -1,1 +1,1 @@
-book;;0d;;Krita User Manual;;69;;14258;;160;;Regeneration;;25;;The mental health destroyer.;;3;;Hitting an enemy gives it color theory;;0;;0
+axe;;0d;;Test Axe;;90;;58151;;248;;Defence;;5;;3;;6;;No ability.;;0;;0

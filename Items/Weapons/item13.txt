@@ -1,1 +1,0 @@
-dagger;;08;;Starter Dagger;;2;;13000;;170.5;;Health;;5;;Your journey begins here.;;2;;[38;;%k;;%l

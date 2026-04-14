@@ -1,1 +1,1 @@
-knife;;0e;;Legendary Knife;;5;;3520590;;140;;Defence;;50;;Wielded by the most powerful travelers.;;500;;[38;;0
+wand;;0e;;Wand of Galanb III.;;92;;26870;;165;;Health;;149;;Government drones... ACTION!;;2;;3 pigeons will aid you in battle!;;0;;0

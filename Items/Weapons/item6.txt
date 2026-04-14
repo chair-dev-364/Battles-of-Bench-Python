@@ -1,1 +1,1 @@
-knife;;02;;Knife something idk;;25;;1016;;38;;Defence;;5;;Knife yay;;2;;0;;%k;;%l
+bow;;0d;;Soul Stealer;;71;;7247;;226.5;;Health;;32;;Stealing the energy, let's go!;;1;;No ability.;;0;;0
