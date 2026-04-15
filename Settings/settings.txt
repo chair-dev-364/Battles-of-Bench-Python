@@ -6,7 +6,7 @@
     "music": 0,
     "pronouns": "he/him/his",
     "sfx": 10,
-    "skipboot": 0,
+    "skipboot": 1,
     "skiplevelanim": 0,
     "sound": 10,
     "spatial": 0

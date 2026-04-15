@@ -1281,6 +1281,18 @@ def modify():
 
         return "\n".join(lines)
 
+    def confirm_destructive(action_text):
+        cls()
+        print(f"""
+{x4}{bold}=== CONFIRM DESTRUCTIVE ACTION ==={reset}
+{xf}{action_text}
+
+{x2}[Y]{xf} Yes, proceed
+{xc}[N]{xf} No, cancel
+{reset}
+""")
+        return read_key_choice({"y", "n"}) == "y"
+
     player.load()
     setting.load()
     bind.load()
@@ -1303,6 +1315,24 @@ def modify():
         "a": ("Armor", "Items/active_body"),
     }
 
+    reset_candidates = {
+        "Player data": player,
+        "Keybinds": bind,
+        "Settings": setting,
+        "System": game,
+        "General": d,
+        "Weapon": item,
+        "Head": head,
+        "Armor": armor,
+        "Fragment": fragment,
+    }
+
+    reset_targets = [
+        (name, obj)
+        for name, obj in reset_candidates.items()
+        if callable(getattr(obj, "reset", None))
+    ]
+
     cursor(True)
     try:
         while True:
@@ -1311,24 +1341,102 @@ def modify():
 {xb}{bold}=== QUICK OVERRIDE ==={reset}
 {xf}Choose an area:
         {xa}[P]{xf} 👤 Player fields
+        {x7}---------------------------------
         {xa}[W]{xf} ⚔️ Equipped weapon
         {xa}[H]{xf} 🪖 Equipped head
         {xa}[A]{xf} 🛡️ Equipped armor
-        {xa}[G]{xf} 📦 GeneralVariables
-        {xa}[Y]{xf} 🧠 SystemData
-        {xa}[S]{xf} ⚙️ SettingsData
-        {x3}[E]{xf} 🎯 Equipped IDs (active weapon/head/armor)
+        {x7}---------------------------------
+        {xa}[G]{xf} 📦 Other variables
+        {xa}[Y]{xf} 🧠 System data
+        {xa}[S]{xf} ⚙️ Settings
+        {x7}---------------------------------
+        {x3}[E]{xf} 🎯 Equipped items
+        {x7}---------------------------------
         {x3}[K]{xf} ⌨️ Keybinds
+        {x7}---------------------------------
+        {x4}[+]{xf} 💥 Clear or reset...
 
 {xc}[B]{xf} Back to main menu
 {reset}
 """)
 
-            choice = read_key_choice({"p", "w", "h", "a", "g", "y", "s", "e", "k", "b"})
+            choice = read_key_choice({"p", "w", "h", "a", "g", "y", "s", "e", "k", "+", "b"})
 
             if choice == "b":
                 game.goto = mainmenu
                 return
+
+            if choice == "+":
+                while True:
+                    cls()
+                    reset_lines = []
+                    for idx, (label, _) in enumerate(reset_targets, start=1):
+                        reset_lines.append(f"    {xa}[{idx}]{xf} Reset {label}")
+
+                    reset_block = "\n".join(reset_lines) if reset_lines else f"    {x8}(no reset-capable targets found){xf}"
+                    delete_screen_path = os.path.join(os.getcwd(), "General", "screensetup.txt")
+                    delete_setup_path = os.path.join(os.getcwd(), "General", "setup.txt")
+
+                    print(f"""
+{x4}{bold}=== ADVANCED FUNCTIONS ==={reset}
+{xf}Destructive actions (confirmation required):
+
+{reset_block}
+
+    {x4}[C]{xf} Clear screen setup ({delete_screen_path})
+    {x4}[U]{xf} Reset setup ({delete_setup_path})
+
+{xc}[B]{xf} Back
+{reset}
+""")
+
+                    valid_adv = {"b", "c", "u"}
+                    valid_adv.update({str(i) for i in range(1, len(reset_targets) + 1)})
+                    adv_choice = read_key_choice(valid_adv)
+
+                    if adv_choice == "b":
+                        break
+
+                    if adv_choice == "c":
+                        if not confirm_destructive("Delete General/screensetup.txt?"):
+                            input(f"{x8}Cancelled.{xf} Press Enter to continue...")
+                            continue
+                        if os.path.exists(delete_screen_path):
+                            os.remove(delete_screen_path)
+                            input(f"{xa}Deleted.{xf} Press Enter to continue...")
+                        else:
+                            input(f"{x8}File not found, nothing to delete.{xf} Press Enter to continue...")
+                        continue
+
+                    if adv_choice == "u":
+                        if not confirm_destructive("Delete General/setup.txt?"):
+                            input(f"{x8}Cancelled.{xf} Press Enter to continue...")
+                            continue
+                        if os.path.exists(delete_setup_path):
+                            os.remove(delete_setup_path)
+                            input(f"{xa}Deleted.{xf} Press Enter to continue...")
+                        else:
+                            input(f"{x8}File not found, nothing to delete.{xf} Press Enter to continue...")
+                        continue
+
+                    target_idx = int(adv_choice) - 1
+                    target_label, target_obj = reset_targets[target_idx]
+                    if not confirm_destructive(f"Reset {target_label}?"):
+                        input(f"{x8}Cancelled.{xf} Press Enter to continue...")
+                        continue
+
+                    try:
+                        target_obj.reset()
+                        if target_obj is bind:
+                            setbinds()
+                        if target_obj is setting:
+                            setting.load()
+                        if target_obj is player:
+                            player.load()
+                        input(f"{xa}Reset complete:{xf} {target_label}. Press Enter to continue...")
+                    except Exception as exc:
+                        input(f"{xlred}Reset failed:{xf} {exc}. Press Enter to continue...")
+                continue
 
             if choice == "e":
                 while True:
