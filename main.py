@@ -1340,26 +1340,27 @@ def modify():
         while True:
             cls()
             print(f"""
-{xb}{bold}=== QUICK OVERRIDE ==={reset}
-{xf}Choose an area:
-        {xa}[P]{xf} 👤 Player fields
-        {xa}[N]{xf} 🏷️ Player name
-        {x7}---------------------------------
-        {xa}[W]{xf} ⚔️ Equipped weapon
-        {xa}[H]{xf} 🪖 Equipped head
-        {xa}[A]{xf} 🛡️ Equipped armor
-        {xa}[F]{xf} 🧩 Equipped fragment
-        {x7}---------------------------------
-        {xa}[G]{xf} 📦 Other variables
-        {xa}[Y]{xf} 🧠 System data
-        {xa}[S]{xf} ⚙️ Settings
-        {x7}---------------------------------
-        {x3}[E]{xf} 🎯 Equipped items
-        {x7}---------------------------------
-        {x3}[K]{xf} ⌨️ Keybinds
-        {x7}---------------------------------
-        {x4}[+]{xf} 💥 Clear or reset...
-
+{xb}{bold}=== OVERRIDE INTERNAL DATA ==={reset}
+{xf}Choose an area to modify. Press the [keys]:
+{xf}--------------------------------------------
+{xa}[P]{xf} 👤 Player fields
+{xa}[N]{xf} 🏷️ Player name
+{xf}--------------------------------------------
+{xa}[W]{xf} ⚔️ Equipped weapon
+{xa}[H]{xf} 🪖 Equipped head
+{xa}[A]{xf} 🛡️ Equipped armor
+{xa}[F]{xf} 🧩 Equipped fragment
+{xf}--------------------------------------------
+{xa}[G]{xf} 📦 Other variables
+{xa}[Y]{xf} 🧠 System data
+{xa}[S]{xf} ⚙️ Settings
+{xf}--------------------------------------------
+{x3}[E]{xf} 🎯 Equipped items
+{xf}--------------------------------------------
+{x3}[K]{xf} ⌨️ Keybinds
+{xf}--------------------------------------------
+{x4}[+]{xf} 💥 Clear or reset...
+{xf}--------------------------------------------
 {xc}[B]{xf} Back to main menu
 {reset}
 """)
@@ -1491,8 +1492,18 @@ def modify():
                         break
 
                     slot_name, slot_path = slot_paths[slot_choice]
-                    raw_id = input(f"{x3}New numeric item ID for {slot_name}{xf} ({xc}B{xf}=back): ").strip()
+                    raw_id = input(f"{x3}New item ID for {slot_name}{xf} ({xc}B{xf}=back, Enter=none): ").strip()
                     if raw_id.lower() == "b":
+                        continue
+
+                    if raw_id == "" or raw_id.lower() == "none":
+                        update(slot_path, "none")
+                        try:
+                            load_item(0)
+                            msg = f"{x2}Updated{xf} {slot_name} slot to {xa}'none'{xf}."
+                        except Exception as exc:
+                            msg = f"{xlorange}Updated file to 'none', but loading failed:{xf} {exc}"
+                        input(msg + " Press Enter to continue...")
                         continue
 
                     try:
