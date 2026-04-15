@@ -1304,6 +1304,7 @@ def modify():
         "w": ("weapon", item),
         "h": ("head", head),
         "a": ("armor", armor),
+        "f": ("fragment", fragment),
         "g": ("general", d),
         "y": ("system", game),
         "s": ("settings", setting),
@@ -1313,6 +1314,7 @@ def modify():
         "w": ("Weapon", "Items/active_weapon"),
         "h": ("Head", "Items/active_head"),
         "a": ("Armor", "Items/active_body"),
+        "f": ("Fragment", "Items/active_fragment"),
     }
 
     reset_candidates = {
@@ -1341,10 +1343,12 @@ def modify():
 {xb}{bold}=== QUICK OVERRIDE ==={reset}
 {xf}Choose an area:
         {xa}[P]{xf} 👤 Player fields
+        {xa}[N]{xf} 🏷️ Player name
         {x7}---------------------------------
         {xa}[W]{xf} ⚔️ Equipped weapon
         {xa}[H]{xf} 🪖 Equipped head
         {xa}[A]{xf} 🛡️ Equipped armor
+        {xa}[F]{xf} 🧩 Equipped fragment
         {x7}---------------------------------
         {xa}[G]{xf} 📦 Other variables
         {xa}[Y]{xf} 🧠 System data
@@ -1360,7 +1364,7 @@ def modify():
 {reset}
 """)
 
-            choice = read_key_choice({"p", "w", "h", "a", "g", "y", "s", "e", "k", "+", "b"})
+            choice = read_key_choice({"p", "n", "w", "h", "a", "f", "g", "y", "s", "e", "k", "+", "b"})
 
             if choice == "b":
                 game.goto = mainmenu
@@ -1438,6 +1442,29 @@ def modify():
                         input(f"{xlred}Reset failed:{xf} {exc}. Press Enter to continue...")
                 continue
 
+            if choice == "n":
+                cls()
+                current_name = read("General/playername", default="")
+                print(f"""
+{xb}{bold}=== PLAYER NAME ==={reset}
+{xf}Current name: {xa}{current_name!r}{xf}
+
+{xf}Enter a new player name.
+{xc}Type [B] to cancel.{xf}
+{reset}
+""")
+                new_name = input(f"{x3}New name{xf}: ").strip()
+                if new_name.lower() == "b":
+                    continue
+                if len(new_name) < 2 or len(new_name) > 15:
+                    input(f"{xlred}Name must be between 2 and 15 characters.{xf} Press Enter to continue...")
+                    continue
+
+                update("General/playername", new_name)
+                player.name = new_name
+                input(f"{xa}Saved{xf} player name as {new_name!r}. Press Enter to continue...")
+                continue
+
             if choice == "e":
                 while True:
                     cls()
@@ -1447,17 +1474,19 @@ def modify():
     {xa}Weapon{xf}: {read('Items/active_weapon', default='none')}
     {xa}Head{xf}:   {read('Items/active_head', default='none')}
     {xa}Armor{xf}:  {read('Items/active_body', default='none')}
+    {xa}Fragment{xf}: {read('Items/active_fragment', default='none')}
 
 {xf}Choose slot:
     {xa}[W]{xf} Weapon
     {xa}[H]{xf} Head
     {xa}[A]{xf} Armor
+    {xa}[F]{xf} Fragment
 
 {xc}[B]{xf} Back
 {reset}
 """)
 
-                    slot_choice = read_key_choice({"w", "h", "a", "b"})
+                    slot_choice = read_key_choice({"w", "h", "a", "f", "b"})
                     if slot_choice == "b":
                         break
 
@@ -1561,6 +1590,25 @@ Type an attribute name to override.
                 elif target_obj is setting and field in getattr(setting, "_persistent", {}):
                     setting.save()
                     save_note = " (saved to Settings/settings.txt)"
+                elif target_obj in (item, head, armor, fragment):
+                    category_map = {
+                        item: ("Items/active_weapon", "Weapons"),
+                        head: ("Items/active_head", "Helmets"),
+                        armor: ("Items/active_body", "Bodywear"),
+                        fragment: ("Items/active_fragment", "Fragments"),
+                    }
+                    active_path, category_name = category_map[target_obj]
+                    active_id = read(active_path, default=0)
+                    try:
+                        active_id = int(active_id)
+                    except Exception:
+                        active_id = 0
+
+                    if active_id > 0:
+                        save_item(active_id, category_name)
+                        save_note = f" (saved to Items/{category_name}/item{active_id}.txt)"
+                    else:
+                        save_note = " (runtime only: no active item id to save)"
                 else:
                     save_note = ""
 
