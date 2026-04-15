@@ -1213,6 +1213,7 @@ def mainmenu():
     while True:
         offset += 0.005
         print(f"[33;1H{x8}______│_____│_______│_____│_______│__[ == ==]/{x7}.::::::;;; {xlred}{bold}{shine("[B] to battle",offset=offset, color=(255, 71, 76), bold=True)}{reset}{x7} ;;;:::::::.{x8}\\[=  == ]___│_______│_______│_______│___│__{reset}")
+        print(f"[36;1H{reset}{shine('> [Ctrl+T] to modify data <', offset=offset-0.5, bold=True, color=(132, 224, 133))}",end="")
         k = key(timeout=0)
         if k.lower() == "b":
             sound("woosh")
@@ -1223,7 +1224,242 @@ def mainmenu():
             sound("door2")
             game.goto = house
             return
+        # cheats interface (terminal) => Ctrl+T
+        if k.lower() == "ctrl/t":
+            game.goto = modify
+            return
         time.sleep(0.01)
+
+def modify():
+    def parse_override_value(raw):
+        text = raw.strip()
+        lowered = text.lower()
+
+        if lowered == "none":
+            return None
+        if lowered == "true":
+            return True
+        if lowered == "false":
+            return False
+
+        try:
+            return ast.literal_eval(text)
+        except Exception:
+            pass
+
+        try:
+            return int(text)
+        except Exception:
+            pass
+
+        try:
+            return float(text)
+        except Exception:
+            return text
+
+    def read_key_choice(valid_choices):
+        valid = {c.lower() for c in valid_choices}
+        while True:
+            k = key()
+            if not isinstance(k, str):
+                continue
+            k = k.lower()
+            if k in valid:
+                return k
+
+    def obj_full_preview(obj, limit=24):
+        attrs = sorted(vars(obj).items())
+        if not attrs:
+            return f"  {xa}(no attributes yet){xf}"
+
+        lines = []
+        for name, value in attrs[:limit]:
+            lines.append(f"  {xa}{name}{xf}: {value!r}")
+
+        if len(attrs) > limit:
+            lines.append(f"  {x8}... and {len(attrs) - limit} more{xf}")
+
+        return "\n".join(lines)
+
+    player.load()
+    setting.load()
+    bind.load()
+    setbinds()
+    load_item(0)
+
+    targets = {
+        "p": ("player", player),
+        "w": ("weapon", item),
+        "h": ("head", head),
+        "a": ("armor", armor),
+        "g": ("general", d),
+        "y": ("system", game),
+        "s": ("settings", setting),
+    }
+
+    slot_paths = {
+        "w": ("Weapon", "Items/active_weapon"),
+        "h": ("Head", "Items/active_head"),
+        "a": ("Armor", "Items/active_body"),
+    }
+
+    cursor(True)
+    try:
+        while True:
+            cls()
+            print(f"""
+{xb}{bold}=== QUICK OVERRIDE ==={reset}
+{xf}Choose an area:
+        {xa}[P]{xf} 👤 Player fields
+        {xa}[W]{xf} ⚔️ Equipped weapon
+        {xa}[H]{xf} 🪖 Equipped head
+        {xa}[A]{xf} 🛡️ Equipped armor
+        {xa}[G]{xf} 📦 GeneralVariables
+        {xa}[Y]{xf} 🧠 SystemData
+        {xa}[S]{xf} ⚙️ SettingsData
+        {x3}[E]{xf} 🎯 Equipped IDs (active weapon/head/armor)
+        {x3}[K]{xf} ⌨️ Keybinds
+
+{xc}[B]{xf} Back to main menu
+{reset}
+""")
+
+            choice = read_key_choice({"p", "w", "h", "a", "g", "y", "s", "e", "k", "b"})
+
+            if choice == "b":
+                game.goto = mainmenu
+                return
+
+            if choice == "e":
+                while True:
+                    cls()
+                    print(f"""
+{xb}{bold}=== EQUIPPED SLOT IDS ==={reset}
+{xf}Current IDs:
+    {xa}Weapon{xf}: {read('Items/active_weapon', default='none')}
+    {xa}Head{xf}:   {read('Items/active_head', default='none')}
+    {xa}Armor{xf}:  {read('Items/active_body', default='none')}
+
+{xf}Choose slot:
+    {xa}[W]{xf} Weapon
+    {xa}[H]{xf} Head
+    {xa}[A]{xf} Armor
+
+{xc}[B]{xf} Back
+{reset}
+""")
+
+                    slot_choice = read_key_choice({"w", "h", "a", "b"})
+                    if slot_choice == "b":
+                        break
+
+                    slot_name, slot_path = slot_paths[slot_choice]
+                    raw_id = input(f"{x3}New numeric item ID for {slot_name}{xf} ({xc}B{xf}=back): ").strip()
+                    if raw_id.lower() == "b":
+                        continue
+
+                    try:
+                        new_id = int(raw_id)
+                        if new_id < 0:
+                            raise ValueError()
+                    except ValueError:
+                        input(f"{xlred}Please enter a valid non-negative number.{xf} Press Enter to continue...")
+                        continue
+
+                    update(slot_path, new_id)
+                    try:
+                        load_item(0)
+                        msg = f"{x2}Updated{xf} {slot_name} slot to item ID {new_id}."
+                    except Exception as exc:
+                        msg = f"{xlorange}Updated file, but loading failed:{xf} {exc}"
+                    input(msg + " Press Enter to continue...")
+                continue
+
+            if choice == "k":
+                while True:
+                    cls()
+                    fields = sorted(bind._persistent_fields.keys())
+                    current = "\n".join([f"  {xa}{name}{xf}: {getattr(bind, name, '')}" for name in fields])
+
+                    print(f"""
+{xb}{bold}=== KEYBINDS ==={reset}
+{xf}Current binds:
+{current}
+
+{xf}Type a keybind name to edit.
+{xc}Type [B] to go back.{xf}
+{reset}
+""")
+
+                    field = input(f"{x3}Keybind{xf}: ").strip().lower()
+                    if field == "b":
+                        break
+                    if field not in bind._persistent_fields:
+                        input(f"{xlred}Unknown keybind.{xf} Press Enter to continue...")
+                        continue
+
+                    raw_value = input(f"{x3}New value for {field}{xf} (current={getattr(bind, field)!r}) [{xc}B{xf}=back]: ").strip()
+                    if raw_value.lower() == "b":
+                        continue
+                    if raw_value == "":
+                        input(f"{xlred}Keybind cannot be empty.{xf} Press Enter to continue...")
+                        continue
+
+                    setattr(bind, field, raw_value.lower())
+                    bind.save()
+                    setbinds()
+                    input(f"{x2}Saved{xf} keybind {field} = {raw_value.lower()!r}. Press Enter to continue...")
+                continue
+
+            if choice not in targets:
+                input(f"{xlred}Invalid option.{xf} Press Enter to continue...")
+                continue
+
+            target_name, target_obj = targets[choice]
+
+            while True:
+                cls()
+                preview = obj_full_preview(target_obj)
+
+                print(f"""
+{xb}{bold}Editing: {target_name}{reset}
+
+{xf}Current attributes preview:
+{preview}
+
+Type an attribute name to override.
+{xc}Type [B] to go back.{xf}
+{reset}
+""")
+
+                field = input(f"{x3}Attribute{xf}: ").strip()
+
+                if field.lower() == "b":
+                    break
+
+                current_value = getattr(target_obj, field, "<missing>")
+                raw_value = input(f"{x3}New value for {field}{xf} (current={current_value!r}) [{xc}B{xf}=back]: ").strip()
+
+                if raw_value.lower() == "b":
+                    continue
+
+                new_value = parse_override_value(raw_value)
+                setattr(target_obj, field, new_value)
+
+                # Persist canonical player/settings fields automatically.
+                if target_obj is player and field in getattr(player, "_persistent_fields", {}):
+                    player.save()
+                    save_note = " (saved to Player/data.txt)"
+                elif target_obj is setting and field in getattr(setting, "_persistent", {}):
+                    setting.save()
+                    save_note = " (saved to Settings/settings.txt)"
+                else:
+                    save_note = ""
+
+                print(f"{xa}Set{xf} {target_name}.{field} = {new_value!r}{save_note}")
+                input("Press Enter to continue...")
+    finally:
+        cursor(False)
 
 def battle():
     cls()
@@ -1676,18 +1912,18 @@ def character():
 [36;42H{RGB}173;216;225m╰───────────────────────────────────────╯ {RGB}255;203;204m╰─────────────────────────────────────────╯
 [36;3H{x7}╰────────────────────────────────────╯{reset}
 """.strip().replace("\n", ""),end="",flush=True)
-    if item.type_raw != None: print(f"""
+    if item.type_raw is not None: print(f"""
 [18;46HYour {item.type_raw} {bold}crits {RGB}255;219;187m{player.crit_rate}%{reset} of the time,{reset}
 [19;46H{reset}in which case you deal {RGB}255;219;187m{bold}+{item.atkcrit}%{reset} DMG:
 [22;44H{reset}{RGB}255;219;187m•{xf} 
 [22;46HDamage every critical hit: {RGB}255;219;187m{bold}{totalcritdmg}{reset}
 [23;44H{reset}{RGB}255;219;187m•{xf} 
 [23;46HExpected average damage: {RGB}255;219;187m{bold}{expected}{reset}
-""".strip().replace("\n",""),end="",flush=True)
-    if item.type_raw == None or item.type_raw == "None": print(f"""
+""".strip().replace("\n",""),end="",flush=True)  # noqa: E701
+    if item.type_raw is None or item.type_raw == "None": print(f"""
 [18;46HYour fists are {xlred}too weak{reset} to crit,{reset}
 [19;46H{reset}so all your hits perform the same:
-""".strip().replace("\n",""),end="",flush=True)                                                                   
+""".strip().replace("\n",""),end="",flush=True)  # noqa: E701
         # ===== RESULT =====
     print(f"[12;101H{reset}✧ [12;103H{RGB}186;243;219mLevel{x8}---------{xa}{bold}{player.level}{reset}{RGB}186;243;219m/100{reset}")
     EXP = 0
