@@ -1897,14 +1897,86 @@ def screensetup():
             game.goto = screensetup
             return
 
+def setup():
+    cls()
+    print(f"""
+[10;1H
+{x6}                                                       
+{x6}           ████████████                ████████████                  ██████████████                  ██████████████    
+{x6}         ██            ██            ██            ██              ██              ██              ██              ██  
+{x6}       ██                ████████████                ██████████████                  ██████████████                  ██
+
+
+{xe}                                       ██    ██    ████    ██  ██            ██
+{xe}                                       ██    ██  ██    ██  ██  ██    ████    ██
+{xe}                                       ████████  ██████    ██  ██  ██    ██  ██
+{xe}                                       ██    ██  ██        ██  ██  ██    ██  
+{xe}                                       ██    ██    █████   ██  ██    ████    ██
+
+
+{x6}       ██                ████████████                ██████████████                  ██████████████                  ██
+{x6}         ██            ██            ██            ██              ██              ██              ██              ██  
+{x6}           ████████████                ████████████                  ██████████████                  ██████████████    
+""".strip(),end="",flush=True)
+    center(f"{xlorange}🔸 press A on your keyboard to start setup 🔸",row=29)
+    while True:
+        k = key()
+        if k.lower() == "a":
+            break
+    # Time for the name input:
+    cls()
+    sound("map_right")
+    print(f"""
+{reset}
+
+{xe}                                              (\\ 
+{xe}                                              \\'\\ 
+{xe}                                               \\'\\     __________  
+{xe}                                               / '|   ()_________)
+{xe}                                               \\ '/    \\ ~~~~~~~~ \\
+{xe}                                                 \\       \\ ~~~~~~   \\
+{xe}                                                 ==).      \\__________\\
+{xe}                                                (__)       ()__________)
+
+#3{xlyellow}                ╭─────────────────────────╮
+#4{xlyellow}                ╭─────────────────────────╮
+#3{xlyellow}                │ {bold}{xf}   What's your name?   {reset}{xlyellow} │
+#4{xlyellow}                │ {bold}{xf}   What's your name?   {reset}{xlyellow} │
+#3{xlyellow}                ╰─────────────────────────╯
+#4{xlyellow}                ╰─────────────────────────╯
+
+                  {xlorange}Change the course of history! Enter what you'd want to be called, then hit {bold}Enter {reset}{xlorange}to confirm.
+                 {xlorange}⚠️ Your new name must be between {bold}{xlred}2 and 15 {reset}{xlorange}characters. Try not to become the next Picasso here!
+
+                                {x7}╭┤ {xb}Enter your new name here...{x7} ├─────────────────────╮
+                                {x7}│ {xb}{bold}› {x7}                                                 │
+                                {x7}╰────────────────────────────────────────────────────╯{reset}
+""".strip(),end="",flush=True)
+    player.name = getx(23,35,f"{xb}{bold}› {xf}{bold}",max_len=15)
+    # save player name into settings (general/playername.txt)
+    with open("general/playername.txt", "w") as f:
+        f.write(player.name)
+    # setup confirmed! write into setup
+    with open("general/setup.txt", "w") as f:
+        f.write("okay")
+    sound("level_ascend")
+    # wipe screen with animation (using wipe.py)
+    subprocess.run(["py", "wipe.py", "normal", "15"])
+    game.goto = startup
+    return
+
+
 def startup():
     # check if <cd>/general/screensetup.txt exists
     if not os.path.exists("general/screensetup.txt"):
         game.goto = screensetup
         return
-    else:
-        game.goto = mainmenu
+    # check if <cd>/general/setup.txt exists
+    if not os.path.exists("general/setup.txt"):
+        game.goto = setup
         return
+    game.goto = mainmenu
+    return
 
 """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 PROGRAM PART
