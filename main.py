@@ -1640,8 +1640,6 @@ def character():
 [15;60H{reset}⟐ 
 [15;62H{RGB}255;219;187mSpeed{x8}---------{xlyellow}{bold}{player.speed}{reset}
 [18;44H{reset}{RGB}255;219;187m⇝{xf} 
-[18;46HYour {item.type_raw} {bold}crits {RGB}255;219;187m{player.crit_rate}%{reset} of the time,{reset}
-[19;46H{reset}in which case you deal {RGB}255;219;187m{bold}+{item.atkcrit}%{reset} DMG:
 [13;101H{reset}⌬ 
 [13;103H{RGB}186;243;219mSkill Lv.{x8}-----{xa}{bold}{player.skills}{reset}{RGB}186;243;219m/15{reset}
 [14;101H{reset}⇋ 
@@ -1654,10 +1652,7 @@ def character():
 [23;88Hthey also unlock skill tree items.{reset}
 [21;44H{reset}{RGB}255;219;187m•{xf} 
 [21;46HDamage every normal hit: {RGB}255;219;187m{bold}{totaldmg}{reset}
-[22;44H{reset}{RGB}255;219;187m•{xf} 
-[22;46HDamage every critical hit: {RGB}255;219;187m{bold}{totalcritdmg}{reset}
-[23;44H{reset}{RGB}255;219;187m•{xf} 
-[23;46HExpected average damage: {RGB}255;219;187m{bold}{expected}{reset}
+
 [29;60H{reset}◇ 
 [29;62H{RGB}173;216;225mBase DEF{x8}------{xb}{bold}{basedef}%{reset}
 [30;60H{reset}∆ 
@@ -1681,6 +1676,18 @@ def character():
 [36;42H{RGB}173;216;225m╰───────────────────────────────────────╯ {RGB}255;203;204m╰─────────────────────────────────────────╯
 [36;3H{x7}╰────────────────────────────────────╯{reset}
 """.strip().replace("\n", ""),end="",flush=True)
+    if item.type_raw != None: print(f"""
+[18;46HYour {item.type_raw} {bold}crits {RGB}255;219;187m{player.crit_rate}%{reset} of the time,{reset}
+[19;46H{reset}in which case you deal {RGB}255;219;187m{bold}+{item.atkcrit}%{reset} DMG:
+[22;44H{reset}{RGB}255;219;187m•{xf} 
+[22;46HDamage every critical hit: {RGB}255;219;187m{bold}{totalcritdmg}{reset}
+[23;44H{reset}{RGB}255;219;187m•{xf} 
+[23;46HExpected average damage: {RGB}255;219;187m{bold}{expected}{reset}
+""".strip().replace("\n",""),end="",flush=True)
+    if item.type_raw == None or item.type_raw == "None": print(f"""
+[18;46HYour fists are {xlred}too weak{reset} to crit,{reset}
+[19;46H{reset}so all your hits perform the same:
+""".strip().replace("\n",""),end="",flush=True)                                                                   
         # ===== RESULT =====
     print(f"[12;101H{reset}✧ [12;103H{RGB}186;243;219mLevel{x8}---------{xa}{bold}{player.level}{reset}{RGB}186;243;219m/100{reset}")
     EXP = 0
