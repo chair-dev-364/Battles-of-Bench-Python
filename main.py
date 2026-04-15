@@ -1846,6 +1846,66 @@ def inventory():
             game.goto = house
             return
 
+def screensetup():
+    cls()
+    print(f"""
+[01;1H{xa}██████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████
+[02;1H{xa}██                                                                                                                          ██
+[03;1H{xa}██  {xb}{bold}--- DISPLAY AREA TESTING ---{reset}               {xa}                                                                             ██
+[04;1H{xa}██  {x3}The entire area of the box must fit your window          {xa}                                                               ██
+[05;1H{xa}██  {x3}for the game to display things properly.                 {xa}                                                               ██
+[06;1H{xa}██  {xf}                                                         {xa}                                                               ██
+[07;1H{xa}██  {xf}If the outer box is not displayed well, please:          {xa}                                                               ██
+[08;1H{xa}██  {xf}   1. maximise the window of your terminal;              {xa}                                                               ██
+[09;1H{xa}██  {xf}   2. if needed, adjust the zoom level with Ctrl+scroll; {xa}                                                               ██
+[10;1H{xa}██  {xf}                                                         {xa}                                                               ██
+[11;1H{xa}██  {xf}For the best viewing experience, please follow the       {xa}                                                               ██
+[12;1H{xa}██  {xf}recommendations found in the readme file.                {xa}                                                               ██
+[13;1H{xa}██  {xf}                                                         {xa}                                                               ██
+[14;1H{xa}██  {x2}If you see the entire box well, press Y to continue.     {xa}                                                               ██
+[15;1H{xa}██                                                                                                                          ██
+[16;1H{xa}██  {bold}{xc}Wait one or two seconds after zooming to let the game redraw the UI!{reset}{xa}                                                    ██
+[17;1H{xa}██                                                                                                                          ██
+[18;1H{xa}██                                                                                                                          ██
+[19;1H{xa}██                                                                                                                          ██
+[20;1H{xa}██                                                                                                                          ██
+[21;1H{xa}██                                                                                                                          ██
+[22;1H{xa}██                                                                                                                          ██
+[23;1H{xa}██                                                                                                                          ██
+[24;1H{xa}██                                                                                                                          ██
+[25;1H{xa}██                                                                                                                          ██
+[26;1H{xa}██                                                                                                                          ██
+[27;1H{xa}██                                                                                                                          ██
+[28;1H{xa}██                                                                                                                          ██
+[29;1H{xa}██                                                                                                                          ██
+[30;1H{xa}██                                                                                                                          ██
+[31;1H{xa}██                                                                                                                          ██
+[32;1H{xa}██                                                                                                                          ██
+[33;1H{xa}██                                                                                                                          ██
+[34;1H{xa}██                                                                                                                          ██
+[35;1H{xa}██████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████[01;1H
+    """.strip().replace("\n",""),end="",flush=True)
+    while True:
+        k = key(timeout=1)
+        if k.lower() == "y":
+            # create screensetup.txt with contents "okay"
+            with open("general/screensetup.txt", "w") as f:
+                f.write("okay")
+            game.goto = startup
+            return
+        else:
+            game.goto = screensetup
+            return
+
+def startup():
+    # check if <cd>/general/screensetup.txt exists
+    if not os.path.exists("general/screensetup.txt"):
+        game.goto = screensetup
+        return
+    else:
+        game.goto = mainmenu
+        return
+
 """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 PROGRAM PART
 Yep. This is everything that actually makes the thing work.
@@ -1853,7 +1913,7 @@ Yep. This is everything that actually makes the thing work.
 cls()
 cursor(False)
 
-game.goto = mainmenu # adjust to change your landing!
+game.goto = startup # adjust to change your landing!
 
 while True:
     game.goto()
