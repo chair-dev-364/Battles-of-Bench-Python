@@ -665,6 +665,26 @@ def sound(cmd):
         f.write(str(cmd) + "\n")
 
 
+def stopsound(target=None):
+    """Stop sounds via UDP.
+    - stopsound() -> stops all sounds and music.
+    - stopsound("music") -> stops only streaming music.
+    - stopsound("specific sound") -> stops that specific sound.
+    """
+    import socket
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            if target is None:
+                msg = b"STOP"
+            elif target.lower() == "music":
+                msg = b"STOP MUSIC"
+            else:
+                msg = f"STOP {target}".encode('utf-8')
+            s.sendto(msg, ("127.0.0.1", 65432))
+    except Exception:
+        pass
+
+
 def update(path, value):
     """
     Overwrites a .txt file relative to current directory.
@@ -829,6 +849,7 @@ def load_item(item_id, category="Weapons"):
         }
 
         item.type = type_map.get(item.type_raw, item.type_raw)
+        return item
 
     # ───────────── HELMETS ─────────────
     elif category == "Helmets":
@@ -839,6 +860,7 @@ def load_item(item_id, category="Weapons"):
         head.name = parts[2]
         head.level = int(parts[3])
         head.defense = int(parts[4])
+        return head
 
     # ───────────── BODYWEAR ─────────────
     elif category == "Bodywear":
@@ -849,6 +871,7 @@ def load_item(item_id, category="Weapons"):
         armor.name = parts[2]
         armor.level = int(parts[3])
         armor.defense = int(parts[4])
+        return armor
 
     # ───────────── FRAGMENTS ─────────────
     elif category == "Fragments":
@@ -858,6 +881,8 @@ def load_item(item_id, category="Weapons"):
         fragment.level = int(parts[1])
 
         stats = parts[2:]
+        # process fragments details
+        return fragment
 
         for i in range(0, len(stats), 2):
             stat_name = stats[i]
@@ -1133,8 +1158,8 @@ def shine(text, offset=0, color=(255, 255, 0), bold=False):
     cycle = offset % 1.0
 
     # ⚙️ tuning
-    active_window = 0.5   # how long shine is active
-    width = 0.5           # how wide the shine is
+    active_window = 0.75   # how long shine is active
+    width = 0.6           # how wide the shine is
     intensity = 3         # intensity falloff (higher = sharper shine, lower = more spread out)
 
     for i, char in enumerate(text):
@@ -1171,9 +1196,13 @@ Here's where... you really don't want to look. This is the absolute mess of hard
 creates the actual game interface. It's a nightmare to maintain, but it works, so good luck.
 """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 
-def mainmenu():
+def startup_animation():
     cls()
-    print(f"""
+    fade_duration = 1
+    steps = 25
+    step_delay = fade_duration / steps
+    
+    art = f"""
     [1;4H{x7}⁺    ⁺     ⋆⁺₊⋆⁺₊⋆₊    ⋆⁺ ₊⋆  ⁺₊⋆     ⁺    ⋆⁺    ⋆⁺₊⋆⁺₊⋆   ⁺ ⋆⁺₊⋆₊⋆⁺ ⁺₊⋆     ⁺     ⋆⁺₊⋆⁺₊     ⋆⁺₊⋆  ⁺₊⋆ ⁺        ⋆⁺₊ ⋆⁺₊  {reset}
     [2;4H{xb}{bold}                         ____        _   _   _             {x8}    {xe}{bold} ____                  _     {reset}
     [3;4H{xb}{bold}                        | __ )  __ _| |_| |_| | ___  ___   {x8}    {xe}{bold}| __ )  ___ _ __   ___| |__  {reset}
@@ -1204,11 +1233,73 @@ def mainmenu():
     [31;1H{x8}____│_____│_______│_____│_______│____[=  == ]/ │{x7}.::::::;;:::::::::::::;;;::::::.{x8}│ \\[  === ]______│_______│_______│___________│{x7}   
     [32;1H{x8}      │     │       │     │       │  [ === =] /{x7}.::::::;;::::::::::::::;;;:::::::.{x8}\\ [===  =]   │       │       │       │   │   {x9}
     [33;1H{x8}______│_____│_______│_____│_______│__[ == ==]/{x7}.::::::;;; {xf}{bold}[B] to battle{reset}{x7} ;;;:::::::.{x8}\\[=  == ]___│_______│_______│_______│___│__{reset}
-    """)
+    """
+    
     with open("Scripts/tips.txt", "r", encoding="utf-8") as f:
         tips = [line.strip() for line in f if line.strip()]
+    tip_text = f"{xf}{italic}{random.choice(tips)}{reset}"
+    
+    cursor(False)
+    for step in range(1, steps + 1):
+        t = step / steps
+        def shift_color(match):
+            r, g, b = int(match.group(1)), int(match.group(2)), int(match.group(3))
+            return f"\x1b[38;2;{int(r * t)};{int(g * t)};{int(b * t)}m"
+        
+        frame = re.sub(r'\x1b\[38;2;(\d+);(\d+);(\d+)m', shift_color, art)
+        
+        move(1, 1)
+        print(frame, end="", flush=True)
+        center(re.sub(r'\x1b\[38;2;(\d+);(\d+);(\d+)m', shift_color, tip_text), 8)
+        sys.stdout.flush()
+        time.sleep(step_delay)
 
-    center(f"{italic}{random.choice(tips)}{reset}", 8)
+    game.skip_mainmenu_cls = True
+    game.goto = mainmenu
+    return
+
+
+def mainmenu():
+    if not getattr(game, "skip_mainmenu_cls", False):
+        cls()
+        print(f"""
+        [1;4H{x7}⁺    ⁺     ⋆⁺₊⋆⁺₊⋆₊    ⋆⁺ ₊⋆  ⁺₊⋆     ⁺    ⋆⁺    ⋆⁺₊⋆⁺₊⋆   ⁺ ⋆⁺₊⋆₊⋆⁺ ⁺₊⋆     ⁺     ⋆⁺₊⋆⁺₊     ⋆⁺₊⋆  ⁺₊⋆ ⁺        ⋆⁺₊ ⋆⁺₊  {reset}
+        [2;4H{xb}{bold}                         ____        _   _   _             {x8}    {xe}{bold} ____                  _     {reset}
+        [3;4H{xb}{bold}                        | __ )  __ _| |_| |_| | ___  ___   {x8}    {xe}{bold}| __ )  ___ _ __   ___| |__  {reset}
+        [4;4H{xb}{bold}                        |  _ \\ / _` | __| __| |/ _ \\/ __|  {x7}o   {xe}{bold}|  _ \\ / _ \\ '_ \\ / __| '_ \\ {reset} 
+        [5;4H{xb}{bold}                        | |_) | (_| | |_| |_| |  __/\\__ \\  {x7} f  {xe}{bold}| |_) |  __/ | | | (__| | | |{reset}
+        [6;4H{xb}{bold}                        |____/ \\__,_|\\__|\\__|_|\\___||___/  {x8}    {xe}{bold}|____/ \\___|_| |_|\\___|_| |_|{reset}
+        [10;4H{xlorange}                                                      _│=│__________
+        [11;4H{xlorange}                                                     /              \\
+        [12;4H                            {x9}{italic}{bold}[2]{unbold}{x9}⤵️{unbold}                   {xlorange}/ {rgb(255,202,102)}{bold}{italic}[1]{reset}{rgb(255,202,102)}{italic} Your House{unbold}{xlorange} \\   {xd}      │>>>
+        [13;4H{x9}                         {italic}Blacksmith{unbold}{xlorange}                /__________________\\{unbold}  {xd}      │ 
+        [14;4H{x3}                        ____________ .' '.   {xlorange}       ││  ││ /--\\ ││  ││ {unbold}      {xd} / \\     {x5}{bold}{italic}[3]{unbold}{x5}⤵️{reset}         
+        [15;4H{x3}                       //// ////// /V_.-._\\  {xlorange}       ││[]││ │ .│ ││[]││ {unbold}      {xd}/___\\ {x5}{italic}Viewpoint{reset}             
+        [16;4H{x3}                      // /// // ///==\\ u │.  {xlorange}       ││__││_│__│_││__││ {unbold}      {xd}│ u │_ _ _ _ _ _    
+        [17;4H{x3}                     ///////-\\////====\\==│{x7}:::::::::::::::::::::::::::::::::::{xd}│u u│ U U U U U     
+        [18;4H{x3}                     │----/\\u │--│++++│..│{x7}'''''''''''{x7}::::::::::::::{x7}''''''''''{xd}│+++│+-+-+-+-+-+    
+        [19;4H{x3}                     │u u│u │ │u ││││││..│     {xa}\\│/{x7}      {x7}'::::::::'   {xa}\\│/{x7}     {xd}│===│>=== _ _ ==    
+        [20;4H{x3}                     │===│  │u│==│++++│==│ {xa}\\│/          {x7}.::::::::.{xa}\\│/{x7}        {xd}│ T │....│ V │..    
+        [21;4H{x3}                     │u u│u │ │u ││HH││         {xa}\\│/{x7}    {x7}.::::::::::.            {xa}\\│/                       
+        [22;4H{x3}                     │===│_.│u│_.│+HH+│{x8}_              {x7}.::::::::::::.       {xa}\\│/{x7}   {x8} _                  
+        [23;4H{xe}                                    {x8}__(_)___  {xa}\\│/{x7}    {x7}.::::::::::::::.        {x8} ___(_)__               
+        [24;1H{x8}--------------------------------------/  / \\  /│       {x7}.:::::;;;:::;;:::.       {x8}│\\  / \\  \\------------------------------------   
+        [25;1H{x8}_____________________________________/_______/ │      {x7}.::::::;;:::::;;:::.      {x8}│ \\_______\\___________________________________{x7}   
+        [26;1H{x8}   │     │       │     │       │     [===  =] /│    {x7} .:::::;;;::::::;;;:::.     {x8}│\\ [==  = ]   │       │       │       │   │   {x7}   
+        [27;1H{x8}___│_____│_______│_____│_______│_____[ = == ]/ │    {x7}.:::::;;;:::::::;;;::::.    {x8}│ \\[ ===  ]___│_______│_______│_______│___│___{x7}   
+        [28;1H{x8}│       │     │       │     │       │[  === ] /│   {x7}.:::::;;;::::::::;;;:::::.   {x8}│\\ [=  ===] │       │       │       │   │     {x7}   
+        [29;1H{x8}│_______│_____│_______│_____│_______│[== = =]/ │  {x7}.:::::;;;::::::::::;;;:::::.  {x8}│ \\[ ==  =]_│_______│_______│_______│___│_____{x7}   
+        [30;1H{x8}    │     │       │     │       │    [ == = ] /│ {x7}.::::::;;:::::::::::;;;::::::. {x8}│\\ [== == ]      │       │       │           │{x7}   
+        [31;1H{x8}____│_____│_______│_____│_______│____[=  == ]/ │{x7}.::::::;;:::::::::::::;;;::::::.{x8}│ \\[  === ]______│_______│_______│___________│{x7}   
+        [32;1H{x8}      │     │       │     │       │  [ === =] /{x7}.::::::;;::::::::::::::;;;:::::::.{x8}\\ [===  =]   │       │       │       │   │   {x9}
+        [33;1H{x8}______│_____│_______│_____│_______│__[ == ==]/{x7}.::::::;;; {xf}{bold}[B] to battle{reset}{x7} ;;;:::::::.{x8}\\[=  == ]___│_______│_______│_______│___│__{reset}
+        """)
+        with open("Scripts/tips.txt", "r", encoding="utf-8") as f:
+            tips = [line.strip() for line in f if line.strip()]
+        center(f"{xf}{italic}{random.choice(tips)}{reset}", 8)
+    else:
+        game.skip_mainmenu_cls = False
+
     offset = 0
     while True:
         offset += 0.005
@@ -2255,6 +2346,10 @@ def inventory():
         if k.lower() == bind.back or k.lower() == "esc":
             game.goto = house
             return
+        if k.lower() == "1":
+            game.sel = "Weapons"
+            game.goto = maininv
+            return
 
 def screensetup():
     cls()
@@ -2377,6 +2472,22 @@ def setup():
 
 
 def startup():
+    waiting_file = os.path.join(os.getcwd(), "General", "waiting.txt")
+    # Race guard: sound server may create waiting.txt shortly after startup() begins.
+    saw_waiting_marker = os.path.exists(waiting_file)
+    marker_wait_deadline = time.time() + 3.0
+    while not saw_waiting_marker and time.time() < marker_wait_deadline:
+        if sound_process.poll() is not None:
+            break
+        saw_waiting_marker = os.path.exists(waiting_file)
+        if not saw_waiting_marker:
+            time.sleep(0.05)
+
+    if saw_waiting_marker:
+        while os.path.exists(waiting_file):
+            if sound_process.poll() is not None:
+                break
+            time.sleep(0.1)
     # check if <cd>/general/screensetup.txt exists
     if not os.path.exists("general/screensetup.txt"):
         game.goto = screensetup
@@ -2385,8 +2496,434 @@ def startup():
     if not os.path.exists("general/setup.txt"):
         game.goto = setup
         return
-    game.goto = mainmenu
+    sound("music_alt1")
+    game.goto = startup_animation
     return
+
+
+
+
+def maininv_md():
+    for r in range(19, 29):
+        print(f"\033[{r};20H                                        ")
+
+    d.length = len(list(Path(f"Items/{game.sel}").glob("item*.txt")))
+    d.currsel = (d.page * 10) + 1
+    d.current = d.begin - 1
+
+    if d.length == d.page * 10:
+        itemsel_page_prev()
+        return
+    gdi_pager()
+
+def maininv():
+    d.massdelete = 0
+    d.current = 0
+    d.hold_item = 0
+    d.length = len(list(Path(f"Items/{game.sel}").glob("item*.txt")))
+
+    if d.length == 0:
+        noitems_new()
+        return
+
+    cls()
+    cursor(False)
+
+    # Simplified display logic, utilizing python printing
+    if game.sel == "Bodywear":
+        print("                                                       \033[38;5;8m██████████████        ")
+        print("                                                       \033[38;5;4m██\033[38;5;6m██████████\033[38;5;8m██")
+        print("                                                       \033[38;5;4m██\033[38;5;6m██████████\033[38;5;8m██")
+        print("                                                       \033[38;5;4m ██\033[38;5;6m████████\033[38;5;8m██ ")
+        print("                                                        \033[38;5;4m ██\033[38;5;6m██████\033[38;5;8m██  ")
+        print("                                                          \033[38;5;4m ██\033[38;5;6m██\033[38;5;8m██    ")
+        print("                                                             \033[38;5;4m██              ")
+        print()
+    elif game.sel == "Weapons":
+        print("\n                                                          \033[38;2;2;74;48m██████                             ")
+        print("                                                        \033[38;2;2;74;48m██\033[38;5;2m██\033[38;5;10m██\033[38;5;2m██\033[38;2;2;74;48m██  ")
+        print("                                                      \033[38;2;2;74;48m██\033[38;5;2m██████\033[38;5;10m██\033[38;5;2m██\033[38;2;2;74;48m██")
+        print("                                                      \033[38;2;2;74;48m██\033[38;5;2m\033[38;5;10m██████████\033[38;5;2m\033[38;2;2;74;48m██")
+        print("                                                      \033[38;2;2;74;48m██\033[38;5;2m██████\033[38;5;10m██\033[38;5;2m██\033[38;2;2;74;48m██")
+        print("                                                        \033[38;2;2;74;48m██\033[38;5;2m██\033[38;5;10m██\033[38;5;2m██\033[38;2;2;74;48m██  ")
+        print("                                                          \033[38;2;2;74;48m██████                             ")
+    
+    # Rest of the static UI drawing
+    print(f"\033#3{reset}                  {x2}╭───────────────────────{x2}╮")
+    print(f"\033#4                  {x2}╭───────────────────────{x2}╮")
+    print(f"\033#3                  {x2}│        {bold}{xa}Weapons        {x2}│")
+    print(f"\033#4                  {x2}│        {bold}{xa}Weapons        {x2}│")
+    print(f"\033#3                  {x2}╰───────────────────────{x2}╯")
+    print(f"\033#4                  {x2}╰───────────────────────{x2}╯")
+
+    d.moving_progress = 0
+    d.page = 0
+    d.begin = 1
+    d.end = 10
+
+    # Drawing the borders
+    print(f"{x8}",end="")
+    print(f"{player.color}               {x8} ╭───────────────────────────────────────────┬─────────────────────────────────────────────────╮")
+    print(f"{player.color}               {x8} │                                           │                                                 │")
+    print(f"{player.color}      ██████   {x8} ├───────────────────────────────────────────┼─────────────────────────────────────────────────┤")
+    print(f"{player.color}    ██      ██ {x8} │                                           │                                                 │")
+    print(f"{player.color}    ██ •  • ██ {x8} │                                           │                                                 │")
+    print(f"{player.color}    ██      ██ {x8} │                                           │                                                 │")
+    print(f"{player.color}      ██████   {x8} │                                           │                                                 │")
+    print(f"{player.color}        ██  ██ {x8} │                                           │                                                 │")
+    print(f"{player.color}  ██    ██   ██{x8} │                                           │                                                 │")
+    print(f"{player.color}    ██  ██  ██ {x8} │                                           │                                                 │")
+    print(f"{player.color}      ██████   {x8} │                                           │                                                 │")
+    print(f"{player.color}        ██     {x8} │                                           │                                                 │")
+    print(f"{player.color}        ██     {x8} │                                           │                                                 │")
+    print(f"{player.color}        ██     {x8} │                                           │                                                 │")
+    print(f"{player.color}      ██  ██   {x8} │                                           │                                                 │")
+    print(f"{player.color}    ██      ██ {x8} ├───────────────────────────────────────────┼─────────────────────────────────────────────────┤")
+    print(f"{player.color}               {x8} │                                           │                                                 │")
+    print(f"{player.color}               {x8} ╰───────────────────────────────────────────┴─────────────────────────────────────────────────╯\033[0m")
+
+    print(f"\n                         {italic}{xlorange}Equip an item with {xlyellow}Enter{xlorange}, delete it with {xlyellow}Backspace{xlorange} or level it up with {xlyellow}Space{xlorange}.")
+
+    print(f"{reset}\033[16;19H🔱 {bold}{xlorange}Weapons {xlyellow}{unbold}→ {xlorange}{bold}Page {bold}{d.page + 1} {unbold}{x7}(items: {xf}{bold}{d.length}{x7}{unbold}){reset}")
+    print(f"\033[31;19H{xlorange}Switch pages → {xlyellow}{bold}A/D {reset}{xlorange}| Select an item → {xlyellow}{bold}W/S{reset}")
+
+    d.currsel = 1
+    gdi_pager()
+
+def itemsel_waitkey():
+    d.offset = 0
+    load_item(d.currsel, game.sel)
+    ityped = "🗡️"
+    if item.type == "bow": ityped="🏹"
+    elif item.type == "sword": ityped="⚔️"
+    elif item.type == "knife": ityped="🔪"
+    elif item.type == "axe": ityped="🪓"
+    elif item.type == "hammer": ityped="⚒️"
+    elif item.type == "pistol": ityped="🔫"
+    elif item.type == "wand": ityped="🪄"
+    elif item.type == "book": ityped="📖"
+    ityped = item.type
+    if item.rarity == "08":
+        itemcolour = xf
+        itemcolour_rgb = (255, 255, 255)
+    elif item.rarity == "02":
+        itemcolour = xa
+        itemcolour_rgb = (70, 198, 107)
+    elif item.rarity == "03":
+        itemcolour = xb
+        itemcolour_rgb = (122, 195, 230)
+    elif item.rarity == "0d":
+        itemcolour = xd
+        itemcolour_rgb = (214, 138, 230)
+    elif item.rarity == "0e":
+        itemcolour = xe
+        itemcolour_rgb = (240, 232, 158)
+    counter = 0
+    while True:
+        load_item(d.currsel, game.sel)
+        ityped = "🗡️"
+        if item.type == "bow": ityped="🏹"
+        elif item.type == "sword": ityped="⚔️"
+        elif item.type == "knife": ityped="🔪"
+        elif item.type == "axe": ityped="🪓"
+        elif item.type == "hammer": ityped="⚒️"
+        elif item.type == "pistol": ityped="🔫"
+        elif item.type == "wand": ityped="🪄"
+        elif item.type == "book": ityped="📖"
+        ityped = item.type
+        if item.rarity == "08":
+            itemcolour = xf
+            itemcolour_rgb = (255, 255, 255)
+        elif item.rarity == "02":
+            itemcolour = xa
+            itemcolour_rgb = (70, 198, 107)
+        elif item.rarity == "03":
+            itemcolour = xb
+            itemcolour_rgb = (122, 195, 230)
+        elif item.rarity == "0d":
+            itemcolour = xd
+            itemcolour_rgb = (214, 138, 230)
+        elif item.rarity == "0e":
+            itemcolour = xe
+            itemcolour_rgb = (240, 232, 158)
+        d.offset += 0.0035
+        counter += 1
+        print(f"\033[1;1H{counter} / {d.offset} / currsel: {d.currsel} / current: {d.current} / begin: {d.begin} / end: {d.end} / page: {d.page}")
+        print(f"\033[{d.currselrow};20H{bold}{itemcolour}{d.currsel} {unbold}› {ityped} {shine(text=item.name,bold=True,offset=d.offset,color=itemcolour_rgb)}",end="",flush=True)
+        k = key(timeout=0)  # Use your key fetching function appropriately
+        if k == "w":
+            itemsel_rem()
+        elif k == "s":
+            itemsel_add()
+        elif k == "a":
+            itemsel_page_prev()
+        elif k == "d":
+            itemsel_page_next()
+        elif k == bind.back:
+            game.goto = inventory
+            return
+        time.sleep(0.01)
+
+def unselect_current():
+    item = load_item(d.currsel, game.sel)
+    if not item: return
+    ityped = "🗡️"
+    if item.type == "bow": ityped="🏹"
+    elif item.type == "sword": ityped="⚔️"
+    elif item.type == "knife": ityped="🔪"
+    elif item.type == "axe": ityped="🪓"
+    elif item.type == "hammer": ityped="⚒️"
+    elif item.type == "pistol": ityped="🔫"
+    elif item.type == "wand": ityped="🪄"
+    elif item.type == "book": ityped="📖"
+    
+    ityped = item.type
+
+    colour = x7 if int(item.level) <= int(player.level) else xlred
+    print(f"\033[{d.currselrow};20H\033[38;5;8m{d.currsel} › {ityped} \033[0m{x7}{item.name} \033[{d.currselrow};56H{colour}↑{item.level}")
+
+def itemsel_add():
+    unselect_current()
+    d.currsel += 1
+    if d.currsel > d.length:
+        d.currsel = d.length
+    elif d.currsel > d.current:
+        d.currsel = d.current
+    else:
+        d.currselrow += 1
+    displaynewsel()
+
+def itemsel_rem():
+    unselect_current()
+    d.currsel -= 1
+    if d.currsel < d.begin:
+        d.currsel = (d.page * 10) + 1
+    elif d.currsel == 0:
+        d.currsel = 1
+    else:
+        d.currselrow -= 1
+    displaynewsel()
+
+def gdi_refresh():
+    if d.moving_progress not in (1, 2):
+        d.currsel = (d.page * 10) + 1
+    d.current = d.begin - 1
+
+    if d.moving_progress not in (1, 2):
+        for r in range(19, 29):
+            print(f"\033[{r};20H                                        ")
+    gdi_pager()
+
+def itemsel_page_next():
+    if d.length > 10 + (d.page * 10):
+        d.page += 1
+        d.begin += 10
+        d.end += 10
+        d.currsel = (d.page * 10) + 1
+        d.current = d.begin - 1
+        gdi_refresh()
+
+def itemsel_page_prev():
+    if d.page >= 1:
+        d.page -= 1
+        d.begin -= 10
+        d.end -= 10
+        d.currsel = (d.page * 10) + 1
+        d.current = d.begin - 1
+        gdi_refresh()
+
+def gdi_pager():
+    d.rowdisplay = 18
+    d.currselrow = 19
+
+    for a in range(d.begin, d.end + 1):
+        gdi()
+    displaynewsel()
+    game.goto = itemsel_waitkey
+
+def gdi():
+    while True:
+        if d.length == d.current:
+            break
+        
+        d.current += 1
+        d.rowdisplay += 1
+        
+        item = load_item(d.current, game.sel)
+        if not item: 
+            break
+
+        ityped = "🗡️" # Default
+        if item.type == "bow": ityped="🏹"
+        elif item.type == "sword": ityped="⚔️"
+        elif item.type == "knife": ityped="🔪"
+        elif item.type == "axe": ityped="🪓"
+        elif item.type == "hammer": ityped="⚒️"
+        elif item.type == "pistol": ityped="🔫"
+        elif item.type == "wand": ityped="🪄"
+        elif item.type == "book": ityped="📖"
+        
+        ityped = item.type
+
+        print(f"\033[{d.rowdisplay};20H{x8}{" "*40}{xf}",end="")
+        
+        indicator = "↑"
+        colour = x7 if int(item.level) <= int(player.level) else xlred
+        if item.rarity == "08":
+            itemcolour = xf
+        elif item.rarity == "02":
+            itemcolour = xa
+        elif item.rarity == "03":
+            itemcolour = xb
+        elif item.rarity == "0d":
+            itemcolour = xd
+        elif item.rarity == "0e":
+            itemcolour = xe
+        print(f"\033[{d.rowdisplay};20H\033[38;5;8m{bold}{d.current} {unbold}{x7}› {ityped} {x7}{item.name} {reset}\033[{d.rowdisplay};56H{colour}{indicator}{item.level}")
+        
+        if d.current >= d.end:
+            break
+        print(f"\033[1;1H{x8}page: {d.page} | current: {d.current} | begin: {d.begin} | end: {d.end}        ")
+        if d.current >= (d.page) * 10:
+            break
+
+def displaynewsel():
+    # Always re-calculate current row to prevent cursor drift
+    d.currselrow = 8 + d.currsel - ((d.page - 1) * 10)
+    
+    for r in range(18, 30):
+        if r != 30:
+            print(f"\033[{r};62H                                                ")
+    print(f"\033[31;62H                                                ")
+
+    item = load_item(d.currsel, game.sel)
+    if not item: return
+
+    ityped = "🗡️" # Default or lookup based on item.type
+    if item.type == "bow": ityped="🏹"
+    elif item.type == "sword": ityped="⚔️"
+    elif item.type == "knife": ityped="🔪"
+    elif item.type == "axe": ityped="🪓"
+    elif item.type == "hammer": ityped="⚒️"
+    elif item.type == "pistol": ityped="🔫"
+    elif item.type == "wand": ityped="🪄"
+    elif item.type == "book": ityped="📖"
+    
+    ityped = item.type
+
+    # Write selection in list
+    indicator = "↑"
+    colour = x7 if int(item.level) <= int(player.level) else xlred
+    if item.rarity == "08":
+        itemcolour = xf
+        itemcolour_rgb = (255, 255, 255)
+    elif item.rarity == "02":
+        itemcolour = xa
+        itemcolour_rgb = (70, 198, 107)
+    elif item.rarity == "03":
+        itemcolour = xb
+        itemcolour_rgb = (122, 195, 230)
+    elif item.rarity == "0d":
+        itemcolour = xd
+        itemcolour_rgb = (214, 138, 230)
+    elif item.rarity == "0e":
+        itemcolour = xe
+        itemcolour_rgb = (240, 232, 158)
+    colour = x7 if int(item.level) <= int(player.level) else xlred
+    d.offset = 0
+    print(f"\033[{d.currselrow};20H{bold}{itemcolour}{d.currsel} {unbold}› {ityped} {shine(text=item.name, color=itemcolour_rgb,bold=True,offset=d.offset)} {reset}\033[{d.currselrow};56H{colour}{indicator}{item.level}")
+    #print(f"\033[{d.currselrow};20H{d.current} {unbold}{xa}› {ityped}{itemcolour}{bold} \033[0m{item.name} {reset}\033[{d.rowdisplay};56H{colour}{indicator}{item.level}")
+    # Write Description UI
+    print(f"\033[16;63H{item.type}{bold}{itemcolour} {item.name} {reset}")
+    print(f"\033[24;66H❇️ {xa}{bold}{item.atk}{unbold} ATK")
+    # if item.atkcrit can also be an int (0 after decimal point), convert to int
+    try:
+        atkcrit = int(float(item.atkcrit))
+    except ValueError:
+        atkcrit = item.atkcrit
+    print(f"\033[24;80H✴️ {xlyellow}{bold}{atkcrit}{unbold}% Crit")
+    
+    ability = item.ability if item.ability and item.ability.strip() else "None"
+    print(f"\033[26;63H🍹 {bold}{itemcolour}Combat ability:{reset}")
+    print(f"\033[27;64H› {xf}{ability}")
+    print(f"\033[31;64H📜{xlorange}{italic} {item.description}\033[0m")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 PROGRAM PART

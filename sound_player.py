@@ -21,6 +21,7 @@ import threading
 import os
 import sys
 import time
+import json
 import pygame # Requires: pip install pygame
 
 # --- Configuration ---
@@ -28,7 +29,7 @@ HOST = '127.0.0.1'  # Listen only on the local machine
 PORT = 65432        # Port to listen on (non-privileged ports are > 1023)
 SOUNDS_FOLDER = 'Sounds'
 SETTINGS_FOLDER = 'Settings'
-VOLUME_FILE = 'sound.txt'
+VOLUME_FILE = 'settings.txt'
 BUFFER_SIZE = 1024 # For socket communication
 
 # --- Global Variables ---
@@ -178,6 +179,36 @@ def load_cached_sound(sound_file):
 # --- ID3 tag fixer (attempt to repair or strip malformed ID3 tags) ---
 import shutil
 import subprocess
+
+def stop_specific_sound(sound_name):
+    """Stops all playing instances of a specific sound file (or streaming music)."""
+    try:
+        # Check if the currently streaming music matches the sound_name
+        # Note: Pygame doesn't provide an easy way to get the *name* of the currently playing stream.
+        # But stopping music is safe to do if the user requested to stop a known music track.
+        # We can broadly stop music if we suspect it's playing that track (or just stop music if it's a music command).
+        # We'll just stop the cached sound explicitly first.
+        sound_file_mp3 = os.path.join(SOUNDS_DIR, f"{sound_name}.mp3")
+        sound_file_wav = os.path.join(SOUNDS_DIR, f"{sound_name}.wav")
+        music_file_mp3 = os.path.join(SOUNDS_DIR, 'Music', f"{sound_name}.mp3")
+        music_file_wav = os.path.join(SOUNDS_DIR, 'Music', f"{sound_name}.wav")
+
+        stopped_something = False
+        with sound_cache_lock:
+            for path in [sound_file_mp3, sound_file_wav, music_file_mp3, music_file_wav]:
+                if path in sound_cache:
+                    sound_cache[path].stop()
+                    stopped_something = True
+
+        # If it wasn't in cache, it might be the streaming track (which bypasses cache).
+        # We'll just issue a mixer.music.stop() if we didn't find it in the cache,
+        # assuming it might be the active stream.
+        if not stopped_something:
+             pygame.mixer.music.stop()
+             
+        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Stopped specific sound: {sound_name}")
+    except Exception as e:
+        print(f"Error stopping specific sound {sound_name}: {e}")
 
 def _remove_metadata_with_ffmpeg(mp3_path):
     ffmpeg = shutil.which('ffmpeg')
@@ -358,48 +389,29 @@ def preload_sounds():
         print(f"[Preload] Unexpected error during preload: {e}")
 
 
-def get_volume():
-    """Reads volume from Settings/sound.txt (0-10) and converts to 0.0-1.0"""
+def get_volume(key="sound"):
+    """Reads volume from Settings/settings.txt (0-10) and converts to 0.0-1.0"""
     default_volume = 1.0 # Default to 100% if file is missing or invalid
     try:
-        # Ensure settings directory exists
-        if not os.path.exists(SETTINGS_DIR):
-            print(f"Warning: Settings directory not found: {SETTINGS_DIR}. Creating it.")
-            os.makedirs(SETTINGS_DIR)
-            # Create a default volume file
-            with open(VOLUME_FILE_PATH, 'w') as f:
-                f.write("10") # Default to 10 (100%)
-            print(f"Created default volume file: {VOLUME_FILE_PATH} with value 10.")
-            return default_volume
-
         if not os.path.isfile(VOLUME_FILE_PATH):
              print(f"Warning: Volume file not found: {VOLUME_FILE_PATH}. Using default volume (100%).")
-             # Optionally create a default file here too
-             with open(VOLUME_FILE_PATH, 'w') as f:
-                f.write("10")
-             print(f"Created default volume file: {VOLUME_FILE_PATH} with value 10.")
              return default_volume
 
-        with open(VOLUME_FILE_PATH, 'r') as f:
-            volume_str = f.read().strip()
-            volume_int = int(volume_str)
-            # Clamp volume between 0 and 10
-            volume_int = max(0, min(10, volume_int))
-            return float(volume_int) / 10.0 # Convert to 0.0 - 1.0 range
-
-    except FileNotFoundError:
-        print(f"Warning: Volume file not found: {VOLUME_FILE_PATH}. Using default volume (100%).")
-        # Attempt to create default file if not found
         try:
-            if not os.path.exists(SETTINGS_DIR): os.makedirs(SETTINGS_DIR)
-            with open(VOLUME_FILE_PATH, 'w') as f: f.write("10")
-            print(f"Created default volume file: {VOLUME_FILE_PATH} with value 10.")
-        except Exception as e_create:
-             print(f"Error creating default volume file: {e_create}")
-        return default_volume
-    except ValueError:
-        print(f"Warning: Invalid content in {VOLUME_FILE_PATH}. Expected integer 0-10. Using default volume (100%).")
-        return default_volume
+            with open(VOLUME_FILE_PATH, 'r', encoding='utf-8') as f:
+                settings = json.load(f)
+        except json.JSONDecodeError:
+            print(f"Warning: Invalid JSON in {VOLUME_FILE_PATH}. Using default volume (100%).")
+            return default_volume
+            
+        if key in settings:
+            volume_int = int(settings[key])
+            volume_int = max(0, min(10, volume_int))
+            return float(volume_int) / 10.0
+        else:
+            print(f"Warning: Key '{key}' not found in {VOLUME_FILE_PATH}. Using default volume.")
+            return default_volume
+
     except Exception as e:
         print(f"Error reading volume file: {e}. Using default volume (100%).")
         return default_volume
@@ -411,6 +423,12 @@ def play_sound_thread(sound_name):
     """
     sound_file_mp3 = os.path.join(SOUNDS_DIR, f"{sound_name}.mp3")
     sound_file_wav = os.path.join(SOUNDS_DIR, f"{sound_name}.wav")
+    
+    music_dir = os.path.join(SOUNDS_DIR, 'Music')
+    music_file_mp3 = os.path.join(music_dir, f"{sound_name}.mp3")
+    music_file_wav = os.path.join(music_dir, f"{sound_name}.wav")
+
+    vol_key = "sound"
 
     if os.path.isfile(sound_file_mp3):
         # Clean ID3 tags before loading
@@ -421,8 +439,19 @@ def play_sound_thread(sound_name):
         sound_file = sound_file_mp3
     elif os.path.isfile(sound_file_wav):
         sound_file = sound_file_wav
+    # Fallback to Music folder
+    elif os.path.isfile(music_file_mp3):
+        try:
+            clean_id3_tags(music_file_mp3)
+        except Exception:
+            pass
+        sound_file = music_file_mp3
+        vol_key = "music"
+    elif os.path.isfile(music_file_wav):
+        sound_file = music_file_wav
+        vol_key = "music"
     else:
-        print(f"Error: Sound file not found: {sound_file_mp3} or {sound_file_wav}")
+        print(f"Error: Sound file not found: {sound_file_mp3} or {sound_file_wav} (or in Music folder)")
         return
 
     print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Received request to play: {sound_name} (File: {sound_file})")
@@ -431,8 +460,8 @@ def play_sound_thread(sound_name):
         # If this is a music track (inside Sounds/Music), stream it rather than caching
         relpath = os.path.relpath(sound_file, SOUNDS_DIR)
         topdir = relpath.split(os.sep)[0] if relpath and relpath != os.curdir else ''
-        if topdir.lower() == 'music':
-            volume = get_volume()
+        if topdir.lower() == 'music' or vol_key == 'music':
+            volume = get_volume(key=vol_key) if vol_key == 'music' else get_volume(key="sound")
             print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Streaming music '{sound_name}' at volume {volume*100:.0f}%")
             try:
                 with suppress_stderr():
@@ -449,7 +478,7 @@ def play_sound_thread(sound_name):
             print(f"Error: Failed to load sound: {sound_file}")
             return
 
-        volume = get_volume()
+        volume = get_volume(key=vol_key)
         print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Playing '{sound_name}' at volume {volume*100:.0f}%")
 
         # Play and set volume per-channel (avoids mutating cached Sound object)
@@ -513,17 +542,30 @@ def handle_client(conn, addr):
                  except socket.error as e:
                      print(f"Warning: Failed to send PONG to {addr}: {e}")
 
-            elif command.upper() == "STOP":
-                print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Received STOP command from {addr}. Stopping all sounds.")
-                try:
-                    pygame.mixer.stop() # Stop all currently playing sounds
-                    print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] All sounds stopped.")
-                    # Optionally send acknowledgement
-                    # conn.sendall(b"STOP command executed.\n")
-                except pygame.error as e:
-                     print(f"Error executing pygame.mixer.stop(): {e}")
-                except Exception as e:
-                     print(f"Unexpected error during STOP command execution: {e}")
+            elif command.upper().startswith("STOP"):
+                if command.upper() == "STOP":
+                    print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Received STOP command from {addr}. Stopping all sounds.")
+                    try:
+                        pygame.mixer.stop() # Stop all currently playing sounds
+                        try:
+                            pygame.mixer.music.stop() # Also stop music streams
+                        except Exception:
+                            pass
+                        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] All sounds stopped.")
+                    except pygame.error as e:
+                         print(f"Error executing pygame.mixer.stop(): {e}")
+                    except Exception as e:
+                         print(f"Unexpected error during STOP command execution: {e}")
+                elif command.upper() == "STOP MUSIC":
+                    print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Received STOP MUSIC command from {addr}. Stopping music streams.")
+                    try:
+                        pygame.mixer.music.stop()
+                    except Exception as e:
+                         print(f"Error executing pygame.mixer.music.stop(): {e}")
+                elif command.upper().startswith("STOP "):
+                    sound_name = command[5:].strip()
+                    print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Received STOP command for specific sound '{sound_name}' from {addr}.")
+                    stop_specific_sound(sound_name)
                 # Keep the connection open for further commands unless the client closes it
 
             else:
@@ -581,13 +623,28 @@ def handle_udp_command(command, addr=None, sock=None):
                 sock.sendto(b"PONG\n", addr)
             except Exception as e:
                 print(f"Warning: Failed to send PONG to {addr} via UDP: {e}")
-    elif cmd_up == "STOP":
-        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Received STOP command from {addr}. Stopping all sounds.")
-        try:
-            pygame.mixer.stop()
-            print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] All sounds stopped.")
-        except Exception as e:
-            print(f"Error executing STOP: {e}")
+    elif cmd_up.startswith("STOP"):
+        if cmd_up == "STOP":
+            print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Received STOP command from {addr}. Stopping all sounds.")
+            try:
+                pygame.mixer.stop()
+                try:
+                    pygame.mixer.music.stop()
+                except Exception:
+                    pass
+                print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] All sounds stopped.")
+            except Exception as e:
+                print(f"Error executing STOP: {e}")
+        elif cmd_up == "STOP MUSIC":
+            print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Received STOP MUSIC command from {addr}. Stopping music.")
+            try:
+                pygame.mixer.music.stop()
+            except Exception:
+                pass
+        elif cmd_up.startswith("STOP "):
+            sound_name = command[5:].strip()
+            print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Received STOP command for {sound_name} from {addr}.")
+            stop_specific_sound(sound_name)
     else:
         # Play sound name (fire-and-forget)
         playback_thread = threading.Thread(target=play_sound_thread, args=(command,), daemon=True)
