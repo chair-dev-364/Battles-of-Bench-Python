@@ -1,3 +1,5 @@
+# PRE-RELEASE! Expect bugs.
+### Parts of this readme were restructured with help of AI from my old website that I made.
 
 # Battles of Bench (Python) 
 
@@ -85,19 +87,3 @@ you're welcome to.
 
 * 💾 **Profiles & backups**
   Multiple playstyles, safe local storage, easy restore
-
----
-
-## 🚀 Getting started
-
-### Requirements
-
-* Python 3.10+
-
-### Run
-
-```bash
-git clone https://github.com/chair-dev-364/Battles-of-Bench-Python.git
-cd Battles-of-Bench-Python
-python main.py
-```
