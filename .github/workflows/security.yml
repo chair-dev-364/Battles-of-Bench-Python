@@ -16,6 +16,8 @@ jobs:
   tests:
     name: Pytest (skip test four)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -38,6 +40,8 @@ jobs:
   bandit:
     name: Bandit SAST
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -57,8 +61,7 @@ jobs:
           bandit -r . \
             --exclude ./.git,./venv,./.venv,./tests \
             --severity-level medium \
-            -f txt \
-            --exit-zero
+            -f txt
 
   # -------------------------------------------------------------------------
   # 3. pip-audit — dependency vulnerability scanning
@@ -66,6 +69,8 @@ jobs:
   pip-audit:
     name: pip-audit (dependency CVE scan)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
 

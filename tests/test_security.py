@@ -168,9 +168,6 @@ def test_6_sort_argument_validation():
     valid = ("1", "2", "3", "4", "5", "6")
     invalid = ("0", "7", "12", "1a", "", "123456", "-1", "6 ", " 1")
 
-    for v in valid:
-        assert v in valid, f"{v!r} should be a valid sort mode"
-
     for iv in invalid:
         assert iv not in valid, f"{iv!r} should NOT be a valid sort mode"
         # The corrected check: must be exactly one of the allowed values
