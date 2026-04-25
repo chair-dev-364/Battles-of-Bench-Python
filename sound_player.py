@@ -16,6 +16,7 @@ except Exception:
 # Track which MP3s have been cleaned this session
 _already_cleaned_mp3s = set()
 # sound_player.py
+import re
 import socket
 import threading
 import os
@@ -23,6 +24,9 @@ import sys
 import time
 import json
 import pygame # Requires: pip install pygame
+
+# --- Sound name validation (shared with _sound_validator.py) ---
+from _sound_validator import is_safe_sound_name as _is_safe_sound_name
 
 # --- Configuration ---
 HOST = '127.0.0.1'  # Listen only on the local machine
@@ -182,6 +186,9 @@ import subprocess
 
 def stop_specific_sound(sound_name):
     """Stops all playing instances of a specific sound file (or streaming music)."""
+    if not _is_safe_sound_name(sound_name):
+        print(f"[Security] Rejected unsafe sound name in stop request: {sound_name!r}")
+        return
     try:
         # Check if the currently streaming music matches the sound_name
         # Note: Pygame doesn't provide an easy way to get the *name* of the currently playing stream.
@@ -421,6 +428,9 @@ def play_sound_thread(sound_name):
 
     Uses per-play channel volume (doesn't mutate the cached Sound volume).
     """
+    if not _is_safe_sound_name(sound_name):
+        print(f"[Security] Rejected unsafe sound name: {sound_name!r}")
+        return
     sound_file_mp3 = os.path.join(SOUNDS_DIR, f"{sound_name}.mp3")
     sound_file_wav = os.path.join(SOUNDS_DIR, f"{sound_name}.wav")
     

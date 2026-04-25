@@ -31,7 +31,7 @@ subversion=0
 RGB="[38;2;"
 TITLE = f"Battles of Bench - a{version}.{subversion}"
 
-os.system(f"title {TITLE}")
+ctypes.windll.kernel32.SetConsoleTitleW(TITLE)
 sys.stdout.reconfigure(encoding="utf-8") # actually make it display shit
 
 sound_process = subprocess.Popen(

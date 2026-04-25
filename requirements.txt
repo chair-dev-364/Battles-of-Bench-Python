@@ -1,0 +1,10 @@
+# Runtime dependencies
+pygame>=2.5.2
+mutagen>=1.47.0
+
+# Security scanning (dev / CI)
+bandit>=1.7.10
+pip-audit>=2.7.3
+
+# Testing
+pytest>=8.3.5

@@ -6,7 +6,7 @@ import sys
 folder = os.path.join(os.getcwd(), "Items", "Weapons")
 
 # Get the sorting method from command-line arguments
-if len(sys.argv) != 2 or sys.argv[1] not in "123456":
+if len(sys.argv) != 2 or sys.argv[1] not in ("1", "2", "3", "4", "5", "6"):
     print("Usage: sort.py [1-6]")
     print("1: Ascending by ilevel (token 4)")
     print("2: Descending by ilevel (token 4)")
