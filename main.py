@@ -1320,6 +1320,29 @@ def mainmenu():
             game.goto = modify
             return
         time.sleep(0.01)
+        # play sound: ctrl+R
+        if k.lower() == "ctrl/r":
+            game.goto = sounds_test
+            return
+
+def sounds_test():
+    while True:
+        # enter sound
+        cls()
+        # ask for sound and pitch with input
+        print("Enter sound name:")
+        name = input().strip()
+        # if name is back, go back to main menu
+        if name.lower() == "back":
+            game.goto = mainmenu
+            return
+        print("Enter pitch:")
+        try:
+            pitch = float(input().strip())
+        except ValueError:
+            pitch = 1.0
+        sound(f"{name} {pitch}")
+
 
 def modify():
     def parse_override_value(raw):
@@ -1793,10 +1816,10 @@ def house():
             blank(32,20,34,60)
             pitch = 1
             for i in range(a):
-                sound(f"volume_down {pitch}")
+                sound(f"exp {pitch}")
                 # write out i at [1;1]
-                pitch = 1 + 0.007 * i ** 1.3
-                delay = 0.1-(i**1.5*0.0002)
+                pitch = 1 + 0.005 * i ** 1.1
+                delay = 0.3-(i**2*0.00035)
                 # must make sure delay is not small
                 if delay < 0.025:
                     delay = 0.025
@@ -1807,9 +1830,7 @@ def house():
                 print(f"[1;1HPlaying sound {i+1:3}/{a:3} ({pitch:.3f}x; {delay:.3f}s)   ", end="", flush=True)
             # clear sound command queue (set file contents to empty)
             # file: General / Temp / sound_cmd_queue.txt
-            with open(os.path.join("General", "Temp", "sound_cmd_queue.txt"), "w") as f:
-                f.write("")
-            stopsound("volume_down")
+            sound(f"big_level {pitch}")
 
 # (i'm sorry)
 def character():

@@ -501,22 +501,51 @@ def get_pitched_sound(sound_file, base_sound, pitch):
         if arr.size == 0:
             return base_sound
 
-        if arr.ndim == 1:
-            total_samples = arr.shape[0]
+        # Convert to float32 for DSP, then resample with anti-alias filtering.
+        arr_f = arr.astype(_np.float32)
+
+        # Target length factor relative to source. Example: pitch=2.0 -> factor=0.5.
+        factor = 1.0 / float(pitch)
+        if factor <= 0:
+            return base_sound
+
+        try:
+            from fractions import Fraction
+            from scipy import signal as _signal
+
+            # Polyphase FIR resampling is much cleaner than index stepping and
+            # strongly reduces high-pitch aliasing artifacts.
+            ratio = Fraction(factor).limit_denominator(1000)
+            up = int(ratio.numerator)
+            down = int(ratio.denominator)
+            pitched_arr_f = _signal.resample_poly(arr_f, up, down, axis=0, window=('kaiser', 8.6))
+        except Exception:
+            # Fallback path when scipy is unavailable.
+            total_samples = arr_f.shape[0]
+            idx = _np.arange(0, total_samples, pitch, dtype=_np.float64)
+            if idx.size == 0:
+                return base_sound
+            orig_idx = _np.arange(total_samples, dtype=_np.float64)
+            if arr_f.ndim == 1:
+                pitched_arr_f = _np.interp(idx, orig_idx, arr_f).astype(_np.float32)
+            else:
+                pitched_arr_f = _np.empty((len(idx), arr_f.shape[1]), dtype=_np.float32)
+                for c in range(arr_f.shape[1]):
+                    pitched_arr_f[:, c] = _np.interp(idx, orig_idx, arr_f[:, c])
+
+        if pitched_arr_f.size == 0:
+            return base_sound
+
+        # Convert back to original dtype safely and avoid clipping distortion.
+        if _np.issubdtype(arr.dtype, _np.integer):
+            info = _np.iinfo(arr.dtype)
+            peak = float(_np.max(_np.abs(pitched_arr_f)))
+            if peak > info.max and peak > 0:
+                pitched_arr_f = pitched_arr_f * (float(info.max) / peak)
+            pitched_arr = _np.clip(pitched_arr_f, info.min, info.max).astype(arr.dtype)
         else:
-            total_samples = arr.shape[0]
+            pitched_arr = pitched_arr_f.astype(arr.dtype)
 
-        # Resample by index stepping: pitch>1 => fewer samples (higher pitch),
-        # pitch<1 => more samples (lower pitch).
-        idx = _np.arange(0, total_samples, pitch, dtype=_np.float64)
-        if idx.size == 0:
-            return base_sound
-        idx = idx.astype(_np.int64)
-        idx = idx[idx < total_samples]
-        if idx.size == 0:
-            return base_sound
-
-        pitched_arr = arr[idx]
         with suppress_stderr():
             pitched_sound = _sndarray.make_sound(pitched_arr)
 
