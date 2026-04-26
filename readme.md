@@ -1,3 +1,5 @@
+# PRE-RELEASE! Expect bugs.
+### Parts of this readme were restructured with help of AI from my old website that I made.
 
 # Battles of Bench (Python) 
 
