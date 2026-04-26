@@ -1786,12 +1786,30 @@ def house():
             sound("map_right")
             game.goto = character
             return
+        # this is the pitch testing code!
         if k.lower() == "o":
-            draw_box(32,20,34,60,text="Enter a float 20-50:",bold=True,text_color=xlyellow)
-            a = getx(33,22,prompt="› ",expect="float",max_len=25,min_val=20,max_val=50,highlight_prefix=f"{xlorange}{bold}",highlight_suffix=reset)
+            draw_box(32,20,34,60,text="Enter an int 1 to 50:",bold=True,text_color=xlyellow)
+            a = getx(33,22,prompt="› ",expect="int",max_len=25,min_val=1,max_val=50,highlight_prefix=f"{xlorange}{bold}",highlight_suffix=reset)
             blank(32,20,34,60)
-            print(a)
-            sound("xpboost")
+            pitch = 1
+            for i in range(a):
+                sound(f"volume_down {pitch}")
+                # write out i at [1;1]
+                pitch = 1 + 0.007 * i ** 1.3
+                delay = 0.1-(i**1.5*0.0002)
+                # must make sure delay is not small
+                if delay < 0.025:
+                    delay = 0.025
+                # and that pitch is not excessively high
+                if pitch > 2.2:
+                    pitch = 2.2
+                time.sleep(delay)
+                print(f"[1;1HPlaying sound {i+1:3}/{a:3} ({pitch:.3f}x; {delay:.3f}s)   ", end="", flush=True)
+            # clear sound command queue (set file contents to empty)
+            # file: General / Temp / sound_cmd_queue.txt
+            with open(os.path.join("General", "Temp", "sound_cmd_queue.txt"), "w") as f:
+                f.write("")
+            stopsound("volume_down")
 
 # (i'm sorry)
 def character():

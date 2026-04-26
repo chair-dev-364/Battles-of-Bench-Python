@@ -57,6 +57,9 @@ shutdown_flag = threading.Event() # Used to signal shutdown
 sound_cache = {}  # path -> pygame.mixer.Sound
 sound_cache_lock = threading.Lock()
 
+# Cache for pitch-shifted sounds to avoid rebuilding every request.
+pitched_sound_cache = {}  # (path, pitch_key) -> pygame.mixer.Sound
+
 # --- Helper to silence noisy C-level stderr messages (context manager)
 from contextlib import contextmanager
 
@@ -396,34 +399,136 @@ def preload_sounds():
         print(f"[Preload] Unexpected error during preload: {e}")
 
 
+_volume_cache = {}
+_volume_file_mtime = 0
+
 def get_volume(key="sound"):
-    """Reads volume from Settings/settings.txt (0-10) and converts to 0.0-1.0"""
+    """Reads volume from Settings/settings.txt (0-10) and converts to 0.0-1.0 using cache"""
+    global _volume_cache, _volume_file_mtime
     default_volume = 1.0 # Default to 100% if file is missing or invalid
     try:
         if not os.path.isfile(VOLUME_FILE_PATH):
-             print(f"Warning: Volume file not found: {VOLUME_FILE_PATH}. Using default volume (100%).")
              return default_volume
+
+        current_mtime = os.path.getmtime(VOLUME_FILE_PATH)
+        if current_mtime == _volume_file_mtime and key in _volume_cache:
+            return _volume_cache[key]
 
         try:
             with open(VOLUME_FILE_PATH, 'r', encoding='utf-8') as f:
                 settings = json.load(f)
         except json.JSONDecodeError:
-            print(f"Warning: Invalid JSON in {VOLUME_FILE_PATH}. Using default volume (100%).")
             return default_volume
             
-        if key in settings:
-            volume_int = int(settings[key])
-            volume_int = max(0, min(10, volume_int))
-            return float(volume_int) / 10.0
-        else:
-            print(f"Warning: Key '{key}' not found in {VOLUME_FILE_PATH}. Using default volume.")
-            return default_volume
+        settings_dict = {}
+        for k in ["sound", "music"]:
+            if k in settings:
+                val = int(settings[k])
+                settings_dict[k] = float(max(0, min(10, val))) / 10.0
+            else:
+                settings_dict[k] = default_volume
 
-    except Exception as e:
-        print(f"Error reading volume file: {e}. Using default volume (100%).")
+        _volume_cache = settings_dict
+        _volume_file_mtime = current_mtime
+
+        return _volume_cache.get(key, default_volume)
+
+    except Exception:
         return default_volume
 
-def play_sound_thread(sound_name):
+
+def parse_sound_and_pitch(command):
+    """Parse optional trailing pitch value from command.
+
+    Expected formats:
+      - "sound_name"
+      - "sound_name 2"
+      - "sound_name 1.04"
+    """
+    if not command:
+        return "", 1.0
+
+    text = command.strip()
+    if not text:
+        return "", 1.0
+
+    head, sep, tail = text.rpartition(' ')
+    if not sep:
+        return text, 1.0
+
+    tail = tail.strip()
+    if not tail:
+        return text, 1.0
+
+    try:
+        pitch = float(tail)
+    except ValueError:
+        return text, 1.0
+
+    if not head.strip():
+        return text, 1.0
+
+    if pitch <= 0:
+        print(f"Warning: Invalid pitch '{tail}' in command '{command}'. Using 1.0.")
+        pitch = 1.0
+
+    return head.strip(), pitch
+
+
+def get_pitched_sound(sound_file, base_sound, pitch):
+    """Return a pitch-shifted Sound object using sample-rate style resampling."""
+    if abs(pitch - 1.0) < 1e-9:
+        return base_sound
+
+    try:
+        import numpy as _np
+        from pygame import sndarray as _sndarray
+    except Exception:
+        print("Warning: Pitch requested but numpy/pygame.sndarray is unavailable. Playing original pitch.")
+        return base_sound
+
+    # Quantize cache key to avoid huge float-key churn from tiny precision differences.
+    pitch_key = f"{pitch:.4f}"
+    cache_key = (sound_file, pitch_key)
+
+    with sound_cache_lock:
+        cached = pitched_sound_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+    try:
+        arr = _sndarray.array(base_sound)
+        if arr.size == 0:
+            return base_sound
+
+        if arr.ndim == 1:
+            total_samples = arr.shape[0]
+        else:
+            total_samples = arr.shape[0]
+
+        # Resample by index stepping: pitch>1 => fewer samples (higher pitch),
+        # pitch<1 => more samples (lower pitch).
+        idx = _np.arange(0, total_samples, pitch, dtype=_np.float64)
+        if idx.size == 0:
+            return base_sound
+        idx = idx.astype(_np.int64)
+        idx = idx[idx < total_samples]
+        if idx.size == 0:
+            return base_sound
+
+        pitched_arr = arr[idx]
+        with suppress_stderr():
+            pitched_sound = _sndarray.make_sound(pitched_arr)
+
+        with sound_cache_lock:
+            pitched_sound_cache[cache_key] = pitched_sound
+
+        return pitched_sound
+    except Exception as e:
+        print(f"Warning: Failed to apply pitch {pitch} for {os.path.basename(sound_file)}: {e}")
+        return base_sound
+
+def play_sound_thread(sound_name, pitch=1.0):
     """Plays a single sound file in a separate thread using cached Sound objects.
 
     Uses per-play channel volume (doesn't mutate the cached Sound volume).
@@ -461,13 +566,13 @@ def play_sound_thread(sound_name):
         print(f"Error: Sound file not found: {sound_file_mp3} or {sound_file_wav} (or in Music folder)")
         return
 
-    print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Received request to play: {sound_name} (File: {sound_file})")
+    print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Received request to play: {sound_name} (File: {sound_file}, Pitch: {pitch:.3f}x)")
 
     try:
         # If this is a music track (inside Sounds/Music), stream it rather than caching
         relpath = os.path.relpath(sound_file, SOUNDS_DIR)
         topdir = relpath.split(os.sep)[0] if relpath and relpath != os.curdir else ''
-        if topdir.lower() == 'music' or vol_key == 'music':
+        if (topdir.lower() == 'music' or vol_key == 'music') and abs(pitch - 1.0) < 1e-9:
             volume = get_volume(key=vol_key) if vol_key == 'music' else get_volume(key="sound")
             print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Streaming music '{sound_name}' at volume {volume*100:.0f}%")
             try:
@@ -485,11 +590,14 @@ def play_sound_thread(sound_name):
             print(f"Error: Failed to load sound: {sound_file}")
             return
 
+        # If pitch differs from 1.0, build/reuse a pitch-shifted copy.
+        play_obj = get_pitched_sound(sound_file, sound_obj, pitch)
+
         volume = get_volume(key=vol_key)
-        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Playing '{sound_name}' at volume {volume*100:.0f}%")
+        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Playing '{sound_name}' at volume {volume*100:.0f}% (pitch {pitch:.3f}x)")
 
         # Play and set volume per-channel (avoids mutating cached Sound object)
-        ch = sound_obj.play()
+        ch = play_obj.play()
         if ch is None:
             print(f"Warning: No available channel to play {sound_name}.")
             return
@@ -498,7 +606,7 @@ def play_sound_thread(sound_name):
         except Exception:
             # Older pygame versions may not support set_volume on channel
             try:
-                sound_obj.set_volume(volume)
+                play_obj.set_volume(volume)
             except Exception:
                 pass
 
@@ -576,10 +684,12 @@ def handle_client(conn, addr):
                 # Keep the connection open for further commands unless the client closes it
 
             else:
-                # Assume it's a sound name
-                sound_name = command
+                # Assume it's a sound name with optional trailing pitch
+                sound_name, pitch = parse_sound_and_pitch(command)
+                if not sound_name:
+                    continue
                 # Start playback in a new thread to avoid blocking the listener
-                playback_thread = threading.Thread(target=play_sound_thread, args=(sound_name,), daemon=True)
+                playback_thread = threading.Thread(target=play_sound_thread, args=(sound_name, pitch), daemon=True)
                 # Daemon=True allows the main program to exit even if these threads are running
                 playback_thread.start()
                 # Optionally send an ack back
@@ -653,8 +763,11 @@ def handle_udp_command(command, addr=None, sock=None):
             print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Received STOP command for {sound_name} from {addr}.")
             stop_specific_sound(sound_name)
     else:
-        # Play sound name (fire-and-forget)
-        playback_thread = threading.Thread(target=play_sound_thread, args=(command,), daemon=True)
+        # Play sound name with optional trailing pitch (fire-and-forget)
+        sound_name, pitch = parse_sound_and_pitch(command)
+        if not sound_name:
+            return
+        playback_thread = threading.Thread(target=play_sound_thread, args=(sound_name, pitch), daemon=True)
         playback_thread.start()
 
 
@@ -699,7 +812,7 @@ def udp_listener():
 # --- File-queue fast-path (zero-launch) ---
 # Uses an append-only queue file that CMD can write to with built-in `echo`.
 QUEUE_FILE = os.path.join(BASE_DIR, 'General', 'Temp', 'sound_cmd_queue.txt')
-QUEUE_POLL_INTERVAL = 0.005  # 20 ms poll for low-latency
+QUEUE_POLL_INTERVAL = 0.001  # 1 ms poll for extreme low-latency
 
 
 def file_queue_listener():
@@ -779,8 +892,8 @@ def main():
 
     # Initialize Pygame Mixer
     try:
-        # Using pre_init can sometimes help with latency or specific audio card issues
-        pygame.mixer.pre_init(frequency=44100, size=-16, channels=2, buffer=2048)
+        # Using pre_init with smaller buffer (512) for near-instant (11ms) playback latency
+        pygame.mixer.pre_init(frequency=44100, size=-16, channels=2, buffer=512)
         pygame.init() # Initializes all Pygame modules needed
         # pygame.mixer.init() # Explicitly init mixer (good practice) - redundant if pygame.init() called
         print(f"Pygame Mixer initialized successfully.")
