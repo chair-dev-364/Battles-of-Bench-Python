@@ -1,4 +1,4 @@
-import os
+﻿import os
 import shutil
 import re
 
@@ -45,6 +45,7 @@ def fix_inventory():
 
     # 1. Check for item0.txt
     if item_files and item_files[0][0] == 0:
+        #print("[1;1H[!] item0.txt found. Shifting everything up...")
         fixes += 1
         for index, filename in reversed(item_files):
             fixes += 1
@@ -58,6 +59,7 @@ def fix_inventory():
     # 2. Move extra .txt files to the end
     if extra_files:
         last_index = max([i for i, _ in item_files], default=0)
+        #print(f"[1;1H[!] Found {len(extra_files)} nonstandard .txt files. Moving to end...")
         for f in extra_files:
             fixes += 1
             last_index += 1
@@ -75,17 +77,19 @@ def fix_inventory():
     for actual_index, filename in item_files:
         if actual_index != expected:
             fixes += 1
+            #print(f"[1;1H[!] Gap detected: {filename} should be item{expected}.txt")
             os.rename(
                 os.path.join(ITEMS_FOLDER, filename),
                 os.path.join(ITEMS_FOLDER, f"item{expected}.txt")
             )
-            corrected.append(f"item{actual_index}.txt → item{expected}.txt")
+            corrected.append(f"item{actual_index}.txt â†’ item{expected}.txt")
         expected += 1
 
     # 4. Check total consistency
     total_files = len([f for f in os.listdir(ITEMS_FOLDER) if f.endswith(".txt")])
     if total_files != expected - 1:
         fixes += 1
+        #print("[1;1H[!!!] Emergency repair mode activated.")
         all_txts = [f for f in os.listdir(ITEMS_FOLDER) if f.endswith(".txt")]
         all_txts.sort()  # for consistent output, not important
         for i, f in enumerate(all_txts, start=1):
@@ -95,12 +99,12 @@ def fix_inventory():
                 os.path.join(ITEMS_FOLDER, f),
                 os.path.join(ITEMS_FOLDER, newname)
             )
-        #print("[1;1H[✓] Files forcibly reordered.")
+        #print("[1;1H[âœ“] Files forcibly reordered.")
 
     if corrected:
         for line in corrected:
             print("[1;1H" + line)
-        print(f"[1;1H⚠  Inventory unstable -> We applied {fixes} fixes to your weapons. They should be back to normal now!           ")
+        print(f"[1;1Hâš   Inventory unstable -> We applied {fixes} fixes to your weapons. They should be back to normal now!           ")
 
 if __name__ == "__main__":
     make_backup()

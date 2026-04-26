@@ -8,49 +8,43 @@ Originally built in Batch (yes...), now being rewritten in Python so more people
 
 ## ⚔️ What is this?
 
-Battles of Bench is best described as:
-
-> **a turn-based, text-interface RPG with both retro and modern elements**
-
-It’s a mix of:
-
+Battles of Bench is best described as **a turn-based, text-interface RPG with both retro and modern elements.** It’s a mix of:
 * classic terminal-style gameplay
 * modern UI behavior and feedback
 * layered progression systems
 * and a slightly unhinged amount of detail
 
-Inspired by *Battles of Batch*.
+Inspired by *Battles of Batch*. Check out the project on [136MasterNR's GitHub page!](https://www.github.com/136MasterNR/Battles-Of-Batch)
 
 ---
 
-## 🧠 What you can expect
+## What can you expect?
 
-### 📝 Fit it how you want it
+### 📝 1. Fit it how you want it
 
 A game with more settings than it probably should have.
-From naming and pronouns to accessibility features and UI behavior — everything is customizable.
+From naming and pronouns to accessibility features and UI behavior, everything is customizable.
 
 ---
 
-### 🔮 A clean text UI
+### 🔮 2. A clean text UI
 
-Looks matter even in a terminal.
+Looks matter even in a terminal game. This is why we're striving to make:
 
 * Clear layout and visual hierarchy
-* Animations that guide you
-* Full keyboard control (no mouse required)
+* Animations that look pretty
+* Full keyboard control
 
 ---
 
-### ✈️ Runs locally. No nonsense.
+### ✈️ 3. Runs locally. No nonsense.
 
 No:
-
 * launchers,
 * massive downloads, or
-* data collection
+* data collection.
 
-> It just runs. Two clicks. No fuss.
+It just runs. Two clicks. No fuss.
 
 ---
 
@@ -66,8 +60,8 @@ you're welcome to.
 
 ---
 
-## ✨ Core features planned for release
-
+## ✨ Features planned for release
+> These are mostly things I made in the Batch version that I now wanna bring here.
 * 📦 **Smart inventory system**
   Sorting, locking, batch actions, and zero clutter
 
@@ -93,6 +87,8 @@ you're welcome to.
 ### Requirements
 
 * Python 3.10+
+* Install the Python packages with `pip install -r requirements.txt`
+* If you are using a fresh environment, run the install command before launching `main.py`
 
 ### Run
 

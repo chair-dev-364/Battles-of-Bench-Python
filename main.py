@@ -2523,7 +2523,7 @@ def maininv():
     d.length = len(list(Path(f"Items/{game.sel}").glob("item*.txt")))
 
     if d.length == 0:
-        noitems_new()
+        # noitems_new() -> just placeholder for now
         return
 
     cls()
