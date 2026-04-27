@@ -1296,13 +1296,17 @@ def mainmenu():
         """)
         with open("Scripts/tips.txt", "r", encoding="utf-8") as f:
             tips = [line.strip() for line in f if line.strip()]
-        center(f"{xf}{italic}{random.choice(tips)}{reset}", 8)
+        if not game.updatable:
+            center(f"{xf}{italic}{random.choice(tips)}{reset}", 8)
+        else:
+            time.sleep(0.2)
+            center(f"{xf}{italic}{random.choice(tips)}{reset}    {xb}{bold}✨ New Battles of Bench update available!{reset} {xf}Press {bold}[Ctrl+U]{reset} to update the game.{reset}", 8)    
     else:
         game.skip_mainmenu_cls = False
     # display announcement if new version is available:
     if game.updatable:
             sound("announcement")
-            center(f"{xb}{bold}New version available!{reset} {xa}{bold}Press [Ctrl+U] to update the game.{reset}", 8)
+            game.updatable = False  # prevent repeated announcements
     offset = 0
     while True:
         offset += 0.005
@@ -2576,9 +2580,9 @@ def updater():
             ignored.append(".git")
         return ignored
 
-    print(f"{x8}Preparing backup...{reset}", flush=True)
+    print(f"{x7}\n[1] Backup creation in progress...{reset}", flush=True)
     shutil.copytree(base_dir, target_backup, ignore=ignore_sounds)
-    print(f"{xa}Backup created:{reset} {target_backup}", flush=True)
+    print(f"{xa}Backup created!{reset} {target_backup}", flush=True)
 
     updater_script = f'''import os
 import shutil
@@ -2597,7 +2601,7 @@ extract_dir = os.path.join(backup_dir, "Battles-of-Bench-Python-main")
 def log(message):
     print(message, flush=True)
 
-log("Downloading latest version...")
+log("Downloading the latest version...")
 req = urllib.request.Request(zip_url, headers={{'User-Agent': 'Mozilla/5.0'}})
 with urllib.request.urlopen(req) as response, open(zip_path, "wb") as out_file:
     while True:
@@ -2606,7 +2610,7 @@ with urllib.request.urlopen(req) as response, open(zip_path, "wb") as out_file:
             break
         out_file.write(chunk)
 
-log("Download complete.")
+log("Download completed!")
 log("Extracting files...")
 with zipfile.ZipFile(zip_path, "r") as zip_ref:
     zip_ref.extractall(backup_dir)
@@ -2663,7 +2667,7 @@ try:
 except OSError:
     pass
 
-log("Update applied. Please restart the game manually.")
+log(f"\n{x7}---------------------------------------------\n{xa}Update applied. Please restart the game manually!{reset}")
 '''
 
     fd, script_path = tempfile.mkstemp(prefix="bob_updater_", suffix=".py")
