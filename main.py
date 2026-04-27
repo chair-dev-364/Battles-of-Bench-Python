@@ -1300,12 +1300,13 @@ def mainmenu():
             center(f"{xf}{italic}{random.choice(tips)}{reset}", 8)
         else:
             time.sleep(0.2)
-            center(f"{xf}{italic}{random.choice(tips)}{reset}    {xb}{bold}✨ New Battles of Bench update available!{reset} {xf}Press {bold}[Ctrl+U]{reset} to update the game.{reset}", 8)    
+            center(f"{xb}{bold}✨ New Battles of Bench update available!{reset} {xf}Press {bold}[Ctrl+U]{reset} to update the game.{reset}", 8)    
     else:
         game.skip_mainmenu_cls = False
     # display announcement if new version is available:
     if game.updatable:
             sound("announcement")
+            center(f"{xb}{bold}✨ New Battles of Bench update available!{reset} {xf}Press {bold}[Ctrl+U]{reset} to update the game.{reset}", 8)    
             game.updatable = False  # prevent repeated announcements
     offset = 0
     while True:
