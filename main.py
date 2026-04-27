@@ -1197,6 +1197,7 @@ creates the actual game interface. It's a nightmare to maintain, but it works, s
 """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 
 def startup_animation():
+    # Quick fade in.
     cls()
     fade_duration = 1.25
     steps = 15
