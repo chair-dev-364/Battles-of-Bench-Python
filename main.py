@@ -1198,8 +1198,8 @@ creates the actual game interface. It's a nightmare to maintain, but it works, s
 
 def startup_animation():
     cls()
-    fade_duration = 1
-    steps = 25
+    fade_duration = 1.25
+    steps = 15
     step_delay = fade_duration / steps
     
     art = f"""
@@ -1299,7 +1299,6 @@ def mainmenu():
         if not game.updatable:
             center(f"{xf}{italic}{random.choice(tips)}{reset}", 8)
         else:
-            time.sleep(0.2)
             center(f"{xb}{bold}✨ New Battles of Bench update available!{reset} {xf}Press {bold}[Ctrl+U]{reset} to update the game.{reset}", 8)    
     else:
         game.skip_mainmenu_cls = False
