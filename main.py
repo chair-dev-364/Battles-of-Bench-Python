@@ -1319,7 +1319,6 @@ def mainmenu():
             game.goto = battle
             return
         if k.lower() == "1":
-            sound("door2")
             game.goto = house
             return
         # cheats interface (terminal) => Ctrl+T
@@ -1333,6 +1332,7 @@ def mainmenu():
             return
         # update game: ctrl+U
         if k.lower() == "ctrl/u" and game.updatable:
+            sound("pop_1")
             game.goto = updater
             return
 
@@ -2667,14 +2667,14 @@ try:
 except OSError:
     pass
 
-log(f"\n{x7}---------------------------------------------\n{xa}Update applied. Please restart the game manually!{reset}")
+log("Update applied. Please restart the game manually!")
 '''
 
     fd, script_path = tempfile.mkstemp(prefix="bob_updater_", suffix=".py")
     with os.fdopen(fd, "w", encoding="utf-8") as script_file:
         script_file.write(updater_script)
 
-    print(f"{x2}Running update command live...{reset}", flush=True)
+    print(f"{x2}Running update command...{reset}", flush=True)
     subprocess.run([sys.executable, "-u", script_path], cwd=base_dir)
 
     try:
