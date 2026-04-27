@@ -25,7 +25,7 @@ import msvcrt, os, time, sys, ctypes, ast, operator as op, subprocess, json, re,
 from pathlib import Path  # noqa: E402
 from typing import Literal  # noqa: E402
 
-version=26
+version=1
 subversion=0
 
 RGB="[38;2;"
@@ -493,7 +493,9 @@ class HeadwearData:
     pass
 head = HeadwearData()
 class SystemData:
-    pass
+    def __init__(self):
+        self.updatable = False
+
 game = SystemData()
 class KeyBinds:
     def __init__(self, filename="keybinds.txt"):
@@ -1184,10 +1186,8 @@ def shine(text, offset=0, color=(255, 255, 0), bold=False):
             r = int(255 * (1 - strength) + color[0] * strength)
             g = int(255 * (1 - strength) + color[1] * strength)
             b = int(255 * (1 - strength) + color[2] * strength)
-
         style = "\033[1m" if bold else ""
         result += f"\033[38;2;{r};{g};{b}m{style}{char}"
-
     return result + "\033[0m"
 
 """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
@@ -1299,7 +1299,10 @@ def mainmenu():
         center(f"{xf}{italic}{random.choice(tips)}{reset}", 8)
     else:
         game.skip_mainmenu_cls = False
-
+    # display announcement if new version is available:
+    if game.updatable:
+            sound("announcement")
+            center(f"{xb}{bold}New version available!{reset} {xa}{bold}Press [Ctrl+U] to update the game.{reset}", 8)
     offset = 0
     while True:
         offset += 0.005
@@ -1323,6 +1326,10 @@ def mainmenu():
         # play sound: ctrl+R
         if k.lower() == "ctrl/r":
             game.goto = sounds_test
+            return
+        # update gane: ctrl+U
+        if k.lower() == "ctrl/u" and game.updatable:
+            game.goto = updater
             return
 
 def sounds_test():
@@ -2510,7 +2517,99 @@ def setup():
     return
 
 
+def check_update():
+    import urllib.request
+    try:
+        req = urllib.request.Request(
+            'https://api.github.com/repos/chair-dev-364/Battles-of-Bench-Python/commits/main',
+            headers={'User-Agent': 'Mozilla/5.0'}
+        )
+        with urllib.request.urlopen(req, timeout=3) as response:
+            data = json.loads(response.read().decode())
+            remote_sha = data.get('sha')
+        
+        local_sha = None
+        version_file = os.path.join(os.getcwd(), "General", "version.txt")
+        if os.path.exists(version_file):
+            with open(version_file, "r") as f:
+                local_sha = f.read().strip()
+        else:
+            try:
+                local_sha = subprocess.check_output(['git', 'log', '-1', '--format=%H'], stderr=subprocess.DEVNULL).decode().strip()
+            except Exception:
+                pass
+                
+        if remote_sha and local_sha != remote_sha:
+            game.updatable = True
+            game.remote_sha = remote_sha
+        else:
+            game.updatable = False
+    except Exception:
+        game.updatable = False
+
+def updater():
+    import urllib.request
+    import shutil
+    import zipfile
+    
+    base_dir = os.getcwd()
+    backup_dir = os.path.join(base_dir, "Backup")
+    os.makedirs(backup_dir, exist_ok=True)
+    
+    n = 1
+    while os.path.exists(os.path.join(backup_dir, f"Backup{n}")):
+        n += 1
+    target_backup = os.path.join(backup_dir, f"Backup{n}")
+    
+    def ignore_sounds(src_dir, contents):
+        ignored = []
+        if os.path.basename(src_dir) == "Sounds":
+            return contents
+        if "Sounds" in contents:
+            ignored.append("Sounds")
+        if "Backup" in contents and src_dir == base_dir:
+            ignored.append("Backup")
+        if ".git" in contents and src_dir == base_dir:
+            ignored.append(".git")
+        return ignored
+        
+    shutil.copytree(base_dir, target_backup, ignore=ignore_sounds)
+    
+    try:
+        zip_url = "https://github.com/chair-dev-364/Battles-of-Bench-Python/archive/refs/heads/main.zip"
+        zip_path = os.path.join(backup_dir, "update.zip")
+        
+        req = urllib.request.Request(zip_url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req) as response, open(zip_path, "wb") as out_file:
+            shutil.copyfileobj(response, out_file)
+            
+        with zipfile.ZipFile(zip_path, "r") as zip_ref:
+            zip_ref.extractall(backup_dir)
+            
+        extracted_folder = os.path.join(backup_dir, "Battles-of-Bench-Python-main")
+        
+        for item in os.listdir(extracted_folder):
+            s = os.path.join(extracted_folder, item)
+            d = os.path.join(base_dir, item)
+            if os.path.isdir(s):
+                shutil.copytree(s, d, dirs_exist_ok=True)
+            else:
+                shutil.copy2(s, d)
+                
+        version_file = os.path.join(os.getcwd(), "General", "version.txt")
+        if getattr(game, "remote_sha", None):
+            with open(version_file, "w") as f:
+                f.write(game.remote_sha)
+                
+        os.remove(zip_path)
+        shutil.rmtree(extracted_folder)
+    except Exception:
+        pass
+        
+    sys.exit(0)
+
 def startup():
+    check_update()
     waiting_file = os.path.join(os.getcwd(), "General", "waiting.txt")
     # Race guard: sound server may create waiting.txt shortly after startup() begins.
     saw_waiting_marker = os.path.exists(waiting_file)
