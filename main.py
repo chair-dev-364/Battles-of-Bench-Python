@@ -2548,19 +2548,22 @@ def check_update():
         game.updatable = False
 
 def updater():
-    import urllib.request
     import shutil
-    import zipfile
-    
+    import tempfile
+    import stat
+
+    cursor(True)
+    cls()
+
     base_dir = os.getcwd()
     backup_dir = os.path.join(base_dir, "Backup")
     os.makedirs(backup_dir, exist_ok=True)
-    
+
     n = 1
     while os.path.exists(os.path.join(backup_dir, f"Backup{n}")):
         n += 1
     target_backup = os.path.join(backup_dir, f"Backup{n}")
-    
+
     def ignore_sounds(src_dir, contents):
         ignored = []
         if os.path.basename(src_dir) == "Sounds":
@@ -2572,40 +2575,109 @@ def updater():
         if ".git" in contents and src_dir == base_dir:
             ignored.append(".git")
         return ignored
-        
+
+    print(f"{x8}Preparing backup...{reset}", flush=True)
     shutil.copytree(base_dir, target_backup, ignore=ignore_sounds)
-    
+    print(f"{xa}Backup created:{reset} {target_backup}", flush=True)
+
+    updater_script = f'''import os
+import shutil
+import sys
+import urllib.request
+import zipfile
+import stat
+
+base_dir = r"{base_dir}"
+backup_dir = r"{backup_dir}"
+remote_sha = {getattr(game, "remote_sha", None)!r}
+zip_url = "https://github.com/chair-dev-364/Battles-of-Bench-Python/archive/refs/heads/main.zip"
+zip_path = os.path.join(backup_dir, "update.zip")
+extract_dir = os.path.join(backup_dir, "Battles-of-Bench-Python-main")
+
+def log(message):
+    print(message, flush=True)
+
+log("Downloading latest version...")
+req = urllib.request.Request(zip_url, headers={{'User-Agent': 'Mozilla/5.0'}})
+with urllib.request.urlopen(req) as response, open(zip_path, "wb") as out_file:
+    while True:
+        chunk = response.read(1024 * 64)
+        if not chunk:
+            break
+        out_file.write(chunk)
+
+log("Download complete.")
+log("Extracting files...")
+with zipfile.ZipFile(zip_path, "r") as zip_ref:
+    zip_ref.extractall(backup_dir)
+
+log("Copying updated files into place...")
+def make_writable(path):
     try:
-        zip_url = "https://github.com/chair-dev-364/Battles-of-Bench-Python/archive/refs/heads/main.zip"
-        zip_path = os.path.join(backup_dir, "update.zip")
-        
-        req = urllib.request.Request(zip_url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req) as response, open(zip_path, "wb") as out_file:
-            shutil.copyfileobj(response, out_file)
-            
-        with zipfile.ZipFile(zip_path, "r") as zip_ref:
-            zip_ref.extractall(backup_dir)
-            
-        extracted_folder = os.path.join(backup_dir, "Battles-of-Bench-Python-main")
-        
-        for item in os.listdir(extracted_folder):
-            s = os.path.join(extracted_folder, item)
-            d = os.path.join(base_dir, item)
-            if os.path.isdir(s):
-                shutil.copytree(s, d, dirs_exist_ok=True)
-            else:
-                shutil.copy2(s, d)
-                
-        version_file = os.path.join(os.getcwd(), "General", "version.txt")
-        if getattr(game, "remote_sha", None):
-            with open(version_file, "w") as f:
-                f.write(game.remote_sha)
-                
-        os.remove(zip_path)
-        shutil.rmtree(extracted_folder)
-    except Exception:
+        os.chmod(path, stat.S_IWRITE)
+    except OSError:
         pass
-        
+
+def replace_path(source, destination):
+    if os.path.isdir(source):
+        if os.path.isfile(destination) or os.path.islink(destination):
+            make_writable(destination)
+            try:
+                os.remove(destination)
+            except OSError:
+                pass
+        os.makedirs(destination, exist_ok=True)
+        for name in os.listdir(source):
+            replace_path(os.path.join(source, name), os.path.join(destination, name))
+        return
+
+    if os.path.isdir(destination):
+        shutil.rmtree(destination, ignore_errors=True)
+    elif os.path.exists(destination):
+        make_writable(destination)
+        try:
+            os.remove(destination)
+        except OSError:
+            pass
+
+    os.makedirs(os.path.dirname(destination), exist_ok=True)
+    shutil.copy2(source, destination)
+
+for item in os.listdir(extract_dir):
+    source = os.path.join(extract_dir, item)
+    destination = os.path.join(base_dir, item)
+    replace_path(source, destination)
+
+if remote_sha:
+    version_file = os.path.join(base_dir, "General", "version.txt")
+    with open(version_file, "w", encoding="utf-8") as f:
+        f.write(remote_sha)
+
+try:
+    os.remove(zip_path)
+except OSError:
+    pass
+
+try:
+    shutil.rmtree(extract_dir)
+except OSError:
+    pass
+
+log("Update applied. Please restart the game manually.")
+'''
+
+    fd, script_path = tempfile.mkstemp(prefix="bob_updater_", suffix=".py")
+    with os.fdopen(fd, "w", encoding="utf-8") as script_file:
+        script_file.write(updater_script)
+
+    print(f"{x2}Running update command live...{reset}", flush=True)
+    subprocess.run([sys.executable, "-u", script_path], cwd=base_dir)
+
+    try:
+        os.remove(script_path)
+    except OSError:
+        pass
+
     sys.exit(0)
 
 def startup():
