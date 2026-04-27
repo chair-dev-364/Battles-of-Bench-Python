@@ -1305,7 +1305,7 @@ def mainmenu():
         game.skip_mainmenu_cls = False
     # display announcement if new version is available:
     if game.updatable:
-            sound("announcement")
+            sound("pop_2")
             center(f"{xb}{bold}✨ New Battles of Bench update available!{reset} {xf}Press {bold}[Ctrl+U]{reset} to update the game.{reset}", 8)    
     offset = 0
     while True:
@@ -1313,9 +1313,6 @@ def mainmenu():
         print(f"[33;1H{x8}______│_____│_______│_____│_______│__[ == ==]/{x7}.::::::;;; {xlred}{bold}{shine("[B] to battle",offset=offset, color=(255, 71, 76), bold=True)}{reset}{x7} ;;;:::::::.{x8}\\[=  == ]___│_______│_______│_______│___│__{reset}")
         print(f"[34;1H{reset}{shine('[Ctrl+T] to modify data', offset=offset, bold=True, color=(132, 224, 133))}",end="",flush=True)
         k = key(timeout=0)
-        # disable update capability if you pressed anything else than updater
-        if k.lower() != "ctrl/u":
-            game.updatable = False
         if k.lower() == "b":
             sound("woosh")
             subprocess.run(["py", "wipe.py", "normal", "10"])
@@ -1334,7 +1331,7 @@ def mainmenu():
         if k.lower() == "ctrl/r":
             game.goto = sounds_test
             return
-        # update gane: ctrl+U
+        # update game: ctrl+U
         if k.lower() == "ctrl/u" and game.updatable:
             game.goto = updater
             return
