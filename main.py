@@ -423,7 +423,7 @@ class SettingsData:
             "datatype": 1,
             "sorting": 0,
             "levelup_mode": 0,
-            "music": 5,
+            "music": 3,
             "pronouns": "they/them/their",
             "sfx": 10,
             "skipboot": 0,

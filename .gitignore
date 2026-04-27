@@ -23,3 +23,7 @@ symbols.txt
 Backup/
 screensetup.txt
 General/screensetup.txt
+setup.txt
+General/setup.txt
+*.bak
+Docs/

@@ -1,5 +1,5 @@
 {
-    "attack": "a",
+    "attack": "space",
     "heal": "+",
     "skill": "s",
     "ult": "w",
