@@ -1,1 +1,1 @@
-book;;0e;;Befriend a Shark in 30 Days;;75;;15400;;275;;Regeneration;;19;;Filled with shark facts and... fanfics?!;;4;;A shark will attack after you do! (30% DMG);;0;;1
+book;;0e;;Befriend a Shark in 30 Days;;75;;15400;;275.0;;Regeneration;;19;;Filled with shark facts and... fanfics?!;;4;;A shark will attack after you do! (30% DMG);;1;;1

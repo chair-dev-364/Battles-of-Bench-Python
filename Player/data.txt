@@ -1,7 +1,7 @@
 {
     "dust": 10,
     "gems": 10,
-    "level": 1,
+    "level": 90,
     "money": 500,
     "skills": 1,
     "xp": 0,

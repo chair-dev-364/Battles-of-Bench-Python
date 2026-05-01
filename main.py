@@ -21,7 +21,7 @@
 *                                                                                *                                                                                
 *******************************************************************************"""
 
-import msvcrt, os, time, sys, ctypes, ast, operator as op, subprocess, json, re, random  # noqa: E401, E402
+import msvcrt, os, time, sys, ctypes, ast, operator as op, subprocess, json, re, random, shutil, socket, tempfile, stat, urllib.request  # noqa: E401, E402
 from pathlib import Path  # noqa: E402
 from typing import Literal  # noqa: E402
 
@@ -583,6 +583,7 @@ xbrown = rgb(137, 81, 42)
 xg = rgb(137, 81, 42)
 xh = rgb(137, 81, 42)
 xlyellow = rgb(255, 202, 102)
+xb0 = rgback(12, 12, 12)
 xb1 = rgback(0, 74, 171)
 xb2 = rgback(15, 138, 12)
 xb3 = rgback(59, 149, 219)
@@ -673,7 +674,6 @@ def stopsound(target=None):
     - stopsound("music") -> stops only streaming music.
     - stopsound("specific sound") -> stops that specific sound.
     """
-    import socket
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             if target is None:
@@ -2522,7 +2522,6 @@ def setup():
 
 
 def check_update():
-    import urllib.request
     try:
         req = urllib.request.Request(
             'https://api.github.com/repos/chair-dev-364/Battles-of-Bench-Python/commits/main',
@@ -2552,10 +2551,6 @@ def check_update():
         game.updatable = False
 
 def updater():
-    import shutil
-    import tempfile
-    import stat
-
     cursor(True)
     cls()
 
@@ -2754,21 +2749,28 @@ def maininv():
         print("                                                             \033[38;5;4m██              ")
         print()
     elif game.sel == "Weapons":
-        print("\n                                                          \033[38;2;2;74;48m██████                             ")
-        print("                                                        \033[38;2;2;74;48m██\033[38;5;2m██\033[38;5;10m██\033[38;5;2m██\033[38;2;2;74;48m██  ")
-        print("                                                      \033[38;2;2;74;48m██\033[38;5;2m██████\033[38;5;10m██\033[38;5;2m██\033[38;2;2;74;48m██")
-        print("                                                      \033[38;2;2;74;48m██\033[38;5;2m\033[38;5;10m██████████\033[38;5;2m\033[38;2;2;74;48m██")
-        print("                                                      \033[38;2;2;74;48m██\033[38;5;2m██████\033[38;5;10m██\033[38;5;2m██\033[38;2;2;74;48m██")
-        print("                                                        \033[38;2;2;74;48m██\033[38;5;2m██\033[38;5;10m██\033[38;5;2m██\033[38;2;2;74;48m██  ")
-        print("                                                          \033[38;2;2;74;48m██████                             ")
+        atksymbol1=f"{x6}██████{xlyellow}"
+        atksymbol2=f"{x6}██{xlyellow}██{xe}██{xlyellow}██{x6}██{xlyellow}"
+        atksymbol3=f"{x6}██{xlyellow}██████{xe}██{xlyellow}██{x6}██{xlyellow}"
+        atksymbol4=f"{x6}██{xlyellow}{xe}██████████{xlyellow}{x6}██{xlyellow}"
+        atksymbol5=f"{x6}██{xlyellow}██████{xe}██{xlyellow}██{x6}██{xlyellow}"
+        atksymbol6=f"{x6}██{xlyellow}██{xe}██{xlyellow}██{x6}██{xlyellow}"
+        atksymbol7=f"{x6}██████{xlyellow}"
+        print(f"\n                                                          \033[38;2;2;74;48m{atksymbol1}")
+        print(f"                                                        \033[38;2;2;74;48m{atksymbol2}")
+        print(f"                                                      \033[38;2;2;74;48m{atksymbol3}")
+        print(f"                                                      \033[38;2;2;74;48m{atksymbol4}")
+        print(f"                                                      \033[38;2;2;74;48m{atksymbol5}")
+        print(f"                                                        \033[38;2;2;74;48m{atksymbol6}")
+        print(f"                                                          \033[38;2;2;74;48m{atksymbol7}")
     
     # Rest of the static UI drawing
-    print(f"\033#3{reset}                  {x2}╭───────────────────────{x2}╮")
-    print(f"\033#4                  {x2}╭───────────────────────{x2}╮")
-    print(f"\033#3                  {x2}│        {bold}{xa}Weapons        {x2}│")
-    print(f"\033#4                  {x2}│        {bold}{xa}Weapons        {x2}│")
-    print(f"\033#3                  {x2}╰───────────────────────{x2}╯")
-    print(f"\033#4                  {x2}╰───────────────────────{x2}╯")
+    print(f"\033#3{reset}                  {xlorange}╭───────────────────────{xlorange}╮")
+    print(f"\033#4                  {xlorange}╭───────────────────────{xlorange}╮")
+    print(f"\033#3                  {xlorange}│        {bold}{xlyellow}Weapons        {xlorange}│")
+    print(f"\033#4                  {xlorange}│        {bold}{xlyellow}Weapons        {xlorange}│")
+    print(f"\033#3                  {xlorange}╰───────────────────────{xlorange}╯")
+    print(f"\033#4                  {xlorange}╰───────────────────────{xlorange}╯")
 
     d.moving_progress = 0
     d.page = 0
@@ -2796,7 +2798,7 @@ def maininv():
     print(f"{player.color}               {x8} │                                           │                                                 │")
     print(f"{player.color}               {x8} ╰───────────────────────────────────────────┴─────────────────────────────────────────────────╯\033[0m")
 
-    print(f"\n                         {italic}{xlorange}Equip an item with {xlyellow}Enter{xlorange}, delete it with {xlyellow}Backspace{xlorange} or level it up with {xlyellow}Space{xlorange}.")
+    #print(f"\n                         {italic}{xlorange}Equip an item with {xlyellow}Enter{xlorange}, delete it with {xlyellow}Backspace{xlorange} or level it up with {xlyellow}Space{xlorange}.")
 
     print(f"{reset}\033[16;19H🔱 {bold}{xlorange}Weapons {xlyellow}{unbold}→ {xlorange}{bold}Page {bold}{d.page + 1} {unbold}{x7}(items: {xf}{bold}{d.length}{x7}{unbold}){reset}")
     print(f"\033[31;19H{xlorange}Switch pages → {xlyellow}{bold}A/D {reset}{xlorange}| Select an item → {xlyellow}{bold}W/S{reset}")
@@ -2806,7 +2808,7 @@ def maininv():
 
 def itemsel_waitkey():
     d.offset = 0
-    load_item(d.currsel, game.sel)
+    item = load_item(d.currsel, game.sel)
     ityped = "🗡️"
     if item.type == "bow": ityped="🏹"
     elif item.type == "sword": ityped="⚔️"
@@ -2834,7 +2836,7 @@ def itemsel_waitkey():
         itemcolour_rgb = (240, 232, 158)
     counter = 0
     while True:
-        load_item(d.currsel, game.sel)
+        item = load_item(d.currsel, game.sel)
         ityped = "🗡️"
         if item.type == "bow": ityped="🏹"
         elif item.type == "sword": ityped="⚔️"
@@ -2862,20 +2864,164 @@ def itemsel_waitkey():
             itemcolour_rgb = (240, 232, 158)
         d.offset += 0.0035
         counter += 1
-        print(f"\033[1;1H{counter} / {d.offset} / currsel: {d.currsel} / current: {d.current} / begin: {d.begin} / end: {d.end} / page: {d.page}")
+        #print(f"\033[1;1Hcounter: {counter} / offset: {round(d.offset,2)} / currsel: {d.currsel} / current: {d.current} / begin: {d.begin} / end: {d.end} / page: {d.page}                    ")
         print(f"\033[{d.currselrow};20H{bold}{itemcolour}{d.currsel} {unbold}› {ityped} {shine(text=item.name,bold=True,offset=d.offset,color=itemcolour_rgb)}",end="",flush=True)
         k = key(timeout=0)  # Use your key fetching function appropriately
-        if k == "w":
+        if k == "w" or k == "up":
             itemsel_rem()
-        elif k == "s":
+        elif k == "s" or k == "down":
             itemsel_add()
-        elif k == "a":
+        elif k == "a" or k == "left":
             itemsel_page_prev()
-        elif k == "d":
+        elif k == "d" or k == "right":
             itemsel_page_next()
         elif k == bind.back:
             game.goto = inventory
             return
+        elif k in ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]:
+            # switch cursor to select that item on the page, if it exists
+            target = (d.page * 10) + int(k)
+            if target <= d.length and target >= d.begin:
+                unselect_current()
+                d.currsel = target
+                d.currselrow = 19 + (d.currsel - d.begin)
+                displaynewsel()
+            # if pressed 0, treat as 10
+            if k == "0":
+                target = (d.page * 10) + 10
+                if target <= d.length and target >= d.begin:
+                    unselect_current()
+                    d.currsel = target
+                    d.currselrow = 19 + (d.currsel - d.begin)
+                    displaynewsel()
+        # if E is pressed, open file in notepad
+        elif k.lower() == "e":
+            item_path = f"Items/{game.sel}/item{d.currsel}.txt"
+            sound("positive7")
+            if os.path.exists(item_path):
+                subprocess.run(["notepad.exe", item_path])
+        # equip item with enter
+        elif k.lower() == "enter":
+            if game.sel == "Weapons":
+                item = load_item(d.currsel, game.sel)
+                if item.level <= player.level:
+                    current_equipped = str(read("Items/active_weapon", default="none")).strip()
+                    if current_equipped == str(d.currsel):
+                        sound("pop_1")
+                        update("Items/active_weapon", "none")
+                    else:
+                        sound(f"equip_{random.choice(['1','2','3'])}")
+                        update("Items/active_weapon", d.currsel)
+                    load_item(0)
+                    displaynewsel()
+                else:
+                    blank(31,62, 31,62+48)
+                    print(f"\033[31;63H🚫 {xlred}This weapon requires level {bold}{item.level}{reset}{xlorange} (+{item.level-player.level} more){reset}{xlred}!")
+                    sound("error2")
+        # when you press L, lock the item (item.locked = 1)
+        elif k.lower() == "l":
+            item = load_item(d.currsel, game.sel)
+            if item.locked == 1:
+                item.locked = 0
+                sound("lock 1")
+            else:
+                item.locked = 1
+                sound("lock 1")
+            # save the locked status into the item file
+            save_item(item_id=d.currsel, category=game.sel)
+            displaynewsel()
+        # Ctrl+D duplicates selected item (developer function). The dupe will be saved as the next item (duping item 5 will create item 6, shifting all subsequent items up by one if they exist)
+        elif k == "ctrl/d":
+            for i in range(d.length, d.currsel, -1):
+                src = os.path.join("Items", game.sel, f"item{i}.txt")
+                dst = os.path.join("Items", game.sel, f"item{i+1}.txt")
+                if os.path.exists(src):
+                    shutil.move(src, dst)
+            
+            src = os.path.join("Items", game.sel, f"item{d.currsel}.txt")
+            dst = os.path.join("Items", game.sel, f"item{d.currsel+1}.txt")
+            if os.path.exists(src):
+                shutil.copy(src, dst)
+                
+            d.length += 1
+            sound("pop_2")
+            game.goto = gdi_refresh
+            d.preserved_item_id = d.currsel
+            return
+            
+        # Ctrl+X deletes selected item (developer function). Shifts subsequent items down.
+        elif k == "ctrl/x":
+            target = os.path.join("Items", game.sel, f"item{d.currsel}.txt")
+            if os.path.exists(target):
+                os.remove(target)
+            
+            for i in range(d.currsel + 1, d.length + 1):
+                src = os.path.join("Items", game.sel, f"item{i}.txt")
+                dst = os.path.join("Items", game.sel, f"item{i-1}.txt")
+                if os.path.exists(src):
+                    shutil.move(src, dst)
+                    
+            if d.length > 0:
+                d.length -= 1
+            sound("pop_1")
+            game.goto = gdi_refresh
+            d.preserved_item_id = max(1, min(d.currsel, d.length))
+            return
+        
+        # Backspace: production version to delete with confirmation
+        elif k == "backspace":
+            blank(16,63, 16,110)
+            blank(18,63, 29,110)
+            blank(31,63, 31,110)
+            print(f"\033[16;63H{bold}🗑️ {xlred}Delete {item.name}?{reset}")
+            xpbar = ""
+            filled = 0
+            empty = 43-filled
+            for i in range(filled):
+                xpbar += f"{xc}█"
+            for i in range(empty):
+                xpbar += f"{rgb(48, 18, 18)}█"
+            print(f"[19;63H{x0}███████████████████████████████████████████████")
+            print(f"[20;63H██{xpbar}{x0}██")
+            print(f"[21;63H██{xpbar}{x0}██")
+            print(f"[22;63H{x0}███████████████████████████████████████████████")
+            print(reset, end="")
+            
+            print(f"[24;63H{reset}{xf}→ {xc}📛 Hold {bold}{xlred}{bind.confirm.capitalize()}{reset}{xc} to delete weapon.{reset}")
+            print(f"[25;63H{reset}{xf}→ {xb}💤 Press {bold}{x3}{bind.back.upper()} {reset}{xb}or {bold}{x3}{bind.deny.upper()}{reset} {xb}to cancel deletion.{reset}")
+            
+            print(f"[27;63H{reset}{xf}{rgb(255, 206, 124)}📦 Deleting this weapon will give you:{reset}")
+            
+            # gold multipliers and bases dictionary based on rarity:
+            gold_bases = {
+                "08": (100, 50),
+                "02": (150, 200),
+                "03": (250, 350),
+                "0d": (350, 450),
+                "0e": (750, 500)
+            }
+            goldmult, goldbonus = gold_bases.get(item.rarity, (1.0, 100))
+            
+            # dust multipliers and bases dictionary based on rarity:
+            dust_bases = {
+                "08": (100, 1),
+                "02": (150, 3),
+                "03": (250, 5),
+                "0d": (350, 12),
+                "0e": (750, 24)
+            }
+            dustmult, dustbonus = dust_bases.get(item.rarity, (1.0, 10))
+            
+            # calculate final payback
+            goldpayback = round((goldmult * item.level**2) / 98 + goldbonus)
+            dustpayback = round((dustmult * item.level) / (150 / item.level_power) + dustbonus)
+            # at higher values:
+            if dustpayback >= 1000:
+                dustpayback = round(dustpayback, -1) # round to nearest 10
+            
+            print(f"[28;66H{reset}{x7}╰─ ✨ {xlyellow}{bold}{dustpayback} {reset}{xlyellow}magic dust")
+            
+            print(f"\033[31;63H{xlorange}⚠️ You will lose this weapon permanently!{reset}")
         time.sleep(0.01)
 
 def unselect_current():
@@ -2920,7 +3066,14 @@ def itemsel_rem():
 
 def gdi_refresh():
     if d.moving_progress not in (1, 2):
-        d.currsel = (d.page * 10) + 1
+        if getattr(d, 'preserved_item_id', None) is not None:
+            d.currsel = d.preserved_item_id
+            d.page = (d.currsel - 1) // 10
+            d.begin = (d.page * 10) + 1
+            d.end = d.begin + 9
+            d.preserved_item_id = None
+        else:
+            d.currsel = (d.page * 10) + 1
     d.current = d.begin - 1
 
     if d.moving_progress not in (1, 2):
@@ -2997,11 +3150,12 @@ def gdi():
         
         if d.current >= d.end:
             break
-        print(f"\033[1;1H{x8}page: {d.page} | current: {d.current} | begin: {d.begin} | end: {d.end}        ")
+        #print(f"\033[1;1H{x8}page: {d.page} | current: {d.current} | begin: {d.begin} | end: {d.end}        ")
         if d.current >= (d.page) * 10:
             break
 
 def displaynewsel():
+    print(f"{reset}\033[16;19H🔱 {bold}{xlorange}Weapons {xlyellow}{unbold}→ {xlorange}{bold}Page {bold}{d.page + 1} {unbold}{x7}(items: {xf}{bold}{d.length}{x7}{unbold}){reset}")
     # Always re-calculate current row to prevent cursor drift
     d.currselrow = 8 + d.currsel - ((d.page - 1) * 10)
     
@@ -3048,7 +3202,39 @@ def displaynewsel():
     print(f"\033[{d.currselrow};20H{bold}{itemcolour}{d.currsel} {unbold}› {ityped} {shine(text=item.name, color=itemcolour_rgb,bold=True,offset=d.offset)} {reset}\033[{d.currselrow};56H{colour}{indicator}{item.level}")
     #print(f"\033[{d.currselrow};20H{d.current} {unbold}{xa}› {ityped}{itemcolour}{bold} \033[0m{item.name} {reset}\033[{d.rowdisplay};56H{colour}{indicator}{item.level}")
     # Write Description UI
-    print(f"\033[16;63H{item.type}{bold}{itemcolour} {item.name} {reset}")
+    blank(16,63, 16,110)
+    blank(18,63, 29,110)
+    
+    # Create XP bar
+    xpbar = ""
+    filled = round((item.level*43)/100)
+    empty = 43-filled
+    
+    for i in range(filled):
+        xpbar += f"{xb}█"
+    for i in range(empty):
+        xpbar += f"{rgb(17,45,69)}█"
+    
+    print(f"[19;63H{x0}███████████████████████████████████████████████")
+    print(f"[20;63H██{xpbar}{x0}██")
+    print(f"[21;63H██{xpbar}{x0}██")
+    print(f"[22;63H{x0}███████████████████████████████████████████████")
+    print(reset, end="")
+    indicators = ""
+    # If equipped, show equipped indicator
+    if str(d.currsel) == str(read("Items/active_weapon")):
+        indicators += f"✅"
+    # If locked (item.locked = 1), show locked indicator
+    if str(item.locked) == "1":
+        indicators += f"🔒"
+    # If item.level > player.level, show level requirement indicator
+    if int(item.level) > int(player.level):
+        indicators += f"🚫"
+    if not indicators == "":
+        print(f"\033[16;63H{item.type} {bold}{underline}{itemcolour}{item.name}{reset}{x7} ({item.type_raw} → {reset}{indicators}{reset}{x7}){reset}")
+    # if no indicators, don't show any, neither the arrow
+    if indicators == "":
+        print(f"\033[16;63H{item.type} {bold}{underline}{itemcolour}{item.name}{reset}{x7} ({item.type_raw}){reset}")
     print(f"\033[24;66H❇️ {xa}{bold}{item.atk}{unbold} ATK")
     # if item.atkcrit can also be an int (0 after decimal point), convert to int
     try:
@@ -3058,9 +3244,9 @@ def displaynewsel():
     print(f"\033[24;80H✴️ {xlyellow}{bold}{atkcrit}{unbold}% Crit")
     
     ability = item.ability if item.ability and item.ability.strip() else "None"
-    print(f"\033[26;63H🍹 {bold}{itemcolour}Combat ability:{reset}")
+    print(f"\033[26;63H🍹 {bold}{xlorange}Combat ability:{reset}")
     print(f"\033[27;64H› {xf}{ability}")
-    print(f"\033[31;64H📜{xlorange}{italic} {item.description}\033[0m")
+    print(f"\033[31;63H📜{xlorange} {item.description}\033[0m")
 
 
 
