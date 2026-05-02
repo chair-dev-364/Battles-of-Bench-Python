@@ -1204,7 +1204,6 @@ def startup_animation():
     step_delay = fade_duration / steps
     
     art = f"""
-    [1;4H{x7}⁺    ⁺     ⋆⁺₊⋆⁺₊⋆₊    ⋆⁺ ₊⋆  ⁺₊⋆     ⁺    ⋆⁺    ⋆⁺₊⋆⁺₊⋆   ⁺ ⋆⁺₊⋆₊⋆⁺ ⁺₊⋆     ⁺     ⋆⁺₊⋆⁺₊     ⋆⁺₊⋆  ⁺₊⋆ ⁺        ⋆⁺₊ ⋆⁺₊  {reset}
     [2;4H{xb}{bold}                         ____        _   _   _             {x8}    {xe}{bold} ____                  _     {reset}
     [3;4H{xb}{bold}                        | __ )  __ _| |_| |_| | ___  ___   {x8}    {xe}{bold}| __ )  ___ _ __   ___| |__  {reset}
     [4;4H{xb}{bold}                        |  _ \\ / _` | __| __| |/ _ \\/ __|  {x7}o   {xe}{bold}|  _ \\ / _ \\ '_ \\ / __| '_ \\ {reset} 
@@ -1263,8 +1262,18 @@ def startup_animation():
 def mainmenu():
     if not getattr(game, "skip_mainmenu_cls", False):
         cls()
+        # if it's nighttime (between 8pm and 6am), display stars in the background (but only if there is space and isn't already being occupied)
+        current_hour = time.localtime().tm_hour
+        if current_hour >= 20 or current_hour < 6:
+            for _ in range(random.randint(30, 100)):
+                x = random.randint(1, os.get_terminal_size().columns)
+                y = random.randint(1, 15)
+                # make the stars more random in shape
+                star_shape = random.choice(["⁺", "⋆", "₊"])
+                # and variable in color with randint RGB values to keep them gray-to-white
+                star_color = rgb(random.randint(200, 255), random.randint(200, 255), random.randint(200, 255))
+                print(f"\033[{y};{x}H{star_color}{star_shape}\x1b[0m", end="", flush=True)
         print(f"""
-        [1;4H{x7}⁺    ⁺     ⋆⁺₊⋆⁺₊⋆₊    ⋆⁺ ₊⋆  ⁺₊⋆     ⁺    ⋆⁺    ⋆⁺₊⋆⁺₊⋆   ⁺ ⋆⁺₊⋆₊⋆⁺ ⁺₊⋆     ⁺     ⋆⁺₊⋆⁺₊     ⋆⁺₊⋆  ⁺₊⋆ ⁺        ⋆⁺₊ ⋆⁺₊  {reset}
         [2;4H{xb}{bold}                         ____        _   _   _             {x8}    {xe}{bold} ____                  _     {reset}
         [3;4H{xb}{bold}                        | __ )  __ _| |_| |_| | ___  ___   {x8}    {xe}{bold}| __ )  ___ _ __   ___| |__  {reset}
         [4;4H{xb}{bold}                        |  _ \\ / _` | __| __| |/ _ \\/ __|  {x7}o   {xe}{bold}|  _ \\ / _ \\ '_ \\ / __| '_ \\ {reset} 
@@ -1302,16 +1311,16 @@ def mainmenu():
         else:
             center(f"{xb}{bold}✨ New Battles of Bench update available!{reset} {xf}Press {bold}[Ctrl+U]{reset} to update the game.{reset}", 8)    
     else:
-        game.skip_mainmenu_cls = False
+        game.skip_mainmenu_cls = False    
+            
     # display announcement if new version is available:
     if game.updatable:
-            sound("pop_2")
             center(f"{xb}{bold}✨ New Battles of Bench update available!{reset} {xf}Press {bold}[Ctrl+U]{reset} to update the game.{reset}", 8)    
     offset = 0
     while True:
         offset += 0.005
         print(f"[33;1H{x8}______│_____│_______│_____│_______│__[ == ==]/{x7}.::::::;;; {xlred}{bold}{shine("[B] to battle",offset=offset, color=(255, 71, 76), bold=True)}{reset}{x7} ;;;:::::::.{x8}\\[=  == ]___│_______│_______│_______│___│__{reset}")
-        print(f"[34;1H{reset}{shine('[Ctrl+T] to modify data', offset=offset, bold=True, color=(132, 224, 133))}",end="",flush=True)
+        print(f"[35;53H{reset}{shine('[Ctrl+T] to modify data', offset=offset, bold=True,color=(132, 224, 133))}",end="",flush=True)
         k = key(timeout=0)
         if k.lower() == "b":
             sound("woosh")
@@ -2705,7 +2714,7 @@ def startup():
     if not os.path.exists("general/setup.txt"):
         game.goto = setup
         return
-    sound("music_alt1")
+    sound(random.choice(["music_default"]))
     game.goto = startup_animation
     return
 
@@ -2804,10 +2813,22 @@ def maininv():
     print(f"\033[31;19H{xlorange}Switch pages → {xlyellow}{bold}A/D {reset}{xlorange}| Select an item → {xlyellow}{bold}W/S{reset}")
 
     d.currsel = 1
+    game.preserve_offset = False
+    
+    # make comparison array empty
+    game.comparing = []
+    # comparing is false
+    game.is_comparing = False
+    
+    
     gdi_pager()
 
 def itemsel_waitkey():
-    d.offset = 0
+    # only reset offset if preservation was off
+    if not game.preserve_offset:
+        d.offset = 0
+    else:
+        game.preserve_offset = False
     item = load_item(d.currsel, game.sel)
     ityped = "🗡️"
     if item.type == "bow": ityped="🏹"
@@ -2913,6 +2934,8 @@ def itemsel_waitkey():
                         sound(f"equip_{random.choice(['1','2','3'])}")
                         update("Items/active_weapon", d.currsel)
                     load_item(0)
+                    # preserve current offset for shine effect
+                    game.preserve_offset = True
                     displaynewsel()
                 else:
                     blank(31,62, 31,62+48)
@@ -2929,6 +2952,7 @@ def itemsel_waitkey():
                 sound("lock 1")
             # save the locked status into the item file
             save_item(item_id=d.currsel, category=game.sel)
+            game.preserve_offset = True
             displaynewsel()
         # Ctrl+D duplicates selected item (developer function). The dupe will be saved as the next item (duping item 5 will create item 6, shifting all subsequent items up by one if they exist)
         elif k == "ctrl/d":
@@ -2945,6 +2969,7 @@ def itemsel_waitkey():
                 
             d.length += 1
             sound("pop_2")
+            game.preserve_offset = True
             game.goto = gdi_refresh
             d.preserved_item_id = d.currsel
             return
@@ -3022,6 +3047,109 @@ def itemsel_waitkey():
             print(f"[28;66H{reset}{x7}╰─ ✨ {xlyellow}{bold}{dustpayback} {reset}{xlyellow}magic dust")
             
             print(f"\033[31;63H{xlorange}⚠️ You will lose this weapon permanently!{reset}")
+        
+        # Pressing space adds item to comparison
+        elif k == "space":
+            # append current selection to comparison array if it's not already in there
+            # if 2 items are in the comparison array already, delete the array and start over with the new selection
+            
+            if len(game.comparing) >= 2:
+                game.comparing.clear()
+                game.is_comparing = False
+                
+            if d.currsel not in game.comparing:
+                game.comparing.append(d.currsel)
+                blank(31,63, 31,110)
+                print(f"\033[31;63H{reset}{xa}✅ Weapon {bold}added{unbold} to comparison! {x7}({len(game.comparing)}/2){reset}")
+                sound("pop_2")
+                #game.preserve_offset = True
+                #displaynewsel()
+            else:
+                game.comparing.remove(d.currsel)
+                blank(31,63, 31,110)
+                print(f"\033[31;63H{reset}{xlred}❌ Weapon {bold}removed{unbold} from comparison! {x7}({len(game.comparing)}/2){reset}")
+                sound("pop_1")
+                #game.preserve_offset = True
+                #displaynewsel()
+                
+            if len(game.comparing) == 2:
+                game.is_comparing = True
+                sound("pop_3")
+                # preserve offset for shine effect
+                game.preserve_offset = True
+                # delete all past comparison variables, if applicable: like item1, item2, item1_dmg, item2_dmg, comparison_winner, dmg_diff_percentage
+                try:
+                    del item1
+                    del item2
+                    del item1_dmg
+                    del item2_dmg
+                    del comparison_winner
+                    del dmg_diff_percentage
+                except NameError:
+                    pass
+                # load first item for comparison
+                item1 = load_item(game.comparing[0], game.sel)
+                item1_dmg = item1.atk * item1.atkcrit
+                item2 = load_item(game.comparing[1], game.sel)
+                # calculate expected damage: item.atk * item.atkcrit
+                item2_dmg = item2.atk * item2.atkcrit
+                # determine if item2 is an upgrade or downgrade
+                if item2_dmg > item1_dmg:
+                    comparison_winner = 2
+                elif item2_dmg < item1_dmg:
+                    comparison_winner = 1
+                else:
+                    comparison_winner = 0
+                # if item 2 wins, calculate its win percentage
+                if comparison_winner == 2:
+                    dmg_diff_percentage = round(((item2_dmg - item1_dmg) / item1_dmg) * 100)
+                elif comparison_winner == 1:
+                    dmg_diff_percentage = round(((item1_dmg - item2_dmg) / item2_dmg) * 100)
+                else:
+                    dmg_diff_percentage = 0
+                blank(16,63, 16,110)
+                blank(18,63, 29,110)
+                blank(31,63, 31,110)
+                print(f"\033[16;63H{bold}⚖ {xlyellow}{bold} Weapon comparison complete!{reset}")
+                
+                # line 18: display only item 1 type, name in bold and level
+                # determine item1 color based on whether it's an upgrade or downgrade compared to item2
+                item1_tag = ""
+                item2_tag = ""
+                if comparison_winner == 1:
+                    item1_color = xlyellow
+                    item2_color = xlorange
+                    item1_tag = f"{xf}← {bold}Winner{reset}"
+                    winner_name = item1.name
+                elif comparison_winner == 2:
+                    item1_color = xlorange
+                    item2_color = xlyellow
+                    item2_tag = f"{xf}← {bold}Winner{reset}"
+                    winner_name = item2.name
+                else:
+                    item1_color = xlorange
+                    item2_color = xlorange
+                    item1_tag = f"{xf}← {bold}Tie{reset}"
+                    item2_tag = f"{xf}← {bold}Tie{reset}"
+                item1 = load_item(game.comparing[0], game.sel)
+                print(f"\033[19;63H{reset}{item1.type} {x7}↑{item1.level} {item1_color}{bold}{item1.name}{unbold} {item1_tag}{reset}")
+                
+                item2 = load_item(game.comparing[1], game.sel)
+                print(f"\033[21;63H{reset}{item2.type} {x7}↑{item2.level} {item2_color}{bold}{item2.name}{unbold} {item2_tag}{reset}")
+                print(f"\033[23;61H{reset}{x8}├─────────────────────────────────────────────────┤{reset}")
+                if not comparison_winner == 0:
+                    print(f"\033[25;63H{reset}{xlorange}⇝ {xf}Using weapon {bold}{xlorange}#{comparison_winner}{reset} will give you {bold}{xlorange}{dmg_diff_percentage}% more DMG{reset}")
+                    print(f"\033[26;63H{reset}{xf}  compared to the other selected weapon ({bold}#{3 - comparison_winner}{unbold}).{reset}")
+                    if comparison_winner == 1:
+                        print(f"\033[28;63H{reset}{xlorange}• {xlyellow}{bold}{round(item1_dmg)} {reset}vs {bold}{xlorange}{round(item2_dmg)} {reset}average damage{reset}")
+                    if comparison_winner == 2:
+                        print(f"\033[28;63H{reset}{xlorange}• {xlorange}{bold}{round(item1_dmg)} {reset}vs {bold}{xlyellow}{round(item2_dmg)} {reset}average damage{reset}")
+                else:
+                    print(f"\033[25;63H{reset}{xlorange}⇝ {xf}Both weapons have the {bold}{xlorange}exact same{reset} damage!{reset}")
+                    print(f"\033[26;63H{reset}{xf}  Check other stats to determine your choice.{reset}")
+                    print(f"\033[28;63H{reset}{xlorange}• {bold}{round(item1_dmg)} {reset}average damage for both weapons{reset}")
+                # finally, in row 31, print instructions for the user
+                print(f"\033[31;63H{reset}{xf}📜 Navigate any way to exit comparison.{reset}")
         time.sleep(0.01)
 
 def unselect_current():
@@ -3155,6 +3283,12 @@ def gdi():
             break
 
 def displaynewsel():
+    # clear the line the comparison made, if any
+    print(f"\033[23;61H{reset}{x8}│                                                 │{reset}")
+    # if compared, set compared to false and clear variable
+    if game.is_comparing:
+        game.is_comparing = False
+        game.comparing.clear()
     print(f"{reset}\033[16;19H🔱 {bold}{xlorange}Weapons {xlyellow}{unbold}→ {xlorange}{bold}Page {bold}{d.page + 1} {unbold}{x7}(items: {xf}{bold}{d.length}{x7}{unbold}){reset}")
     # Always re-calculate current row to prevent cursor drift
     d.currselrow = 8 + d.currsel - ((d.page - 1) * 10)
@@ -3198,7 +3332,10 @@ def displaynewsel():
         itemcolour = xe
         itemcolour_rgb = (240, 232, 158)
     colour = x7 if int(item.level) <= int(player.level) else xlred
-    d.offset = 0
+    if not game.preserve_offset:
+        d.offset = 0
+    else:
+        game.preserve_offset = False
     print(f"\033[{d.currselrow};20H{bold}{itemcolour}{d.currsel} {unbold}› {ityped} {shine(text=item.name, color=itemcolour_rgb,bold=True,offset=d.offset)} {reset}\033[{d.currselrow};56H{colour}{indicator}{item.level}")
     #print(f"\033[{d.currselrow};20H{d.current} {unbold}{xa}› {ityped}{itemcolour}{bold} \033[0m{item.name} {reset}\033[{d.rowdisplay};56H{colour}{indicator}{item.level}")
     # Write Description UI
@@ -3230,6 +3367,9 @@ def displaynewsel():
     # If item.level > player.level, show level requirement indicator
     if int(item.level) > int(player.level):
         indicators += f"🚫"
+    # If item is currently in comparison, show comparison indicator
+    if d.currsel in game.comparing:
+        indicators += f"⚔️"
     if not indicators == "":
         print(f"\033[16;63H{item.type} {bold}{underline}{itemcolour}{item.name}{reset}{x7} ({item.type_raw} → {reset}{indicators}{reset}{x7}){reset}")
     # if no indicators, don't show any, neither the arrow

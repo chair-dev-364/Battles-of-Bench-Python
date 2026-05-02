@@ -41,3 +41,48 @@ Your inventory is not a museum.
 If you keep losing, the game is teaching you something rude.
 Combat is mostly decisions made 10 minutes earlier.
 Every bad run is just data with attitude.
+Equip wisely! Different weapons have unique advantages. Experiment to find your perfect strategy.
+Enhance your chances of victory by equipping items that complement your playstyle.
+Strategize your attacks. Sometimes, a well-timed defense can be just as effective as a strong offense.
+Keep an eye on your opponent's weaknesses. Exploit them to gain an upper hand in battle.
+Balanced stats matter. Don't just focus on offense; defense and agility can save you too.
+Upgrade your equipment regularly. A better sword might be the key to overcoming tough opponents.
+Collect diverse weapons. Having options ensures you're ready for any enemy encounter.
+Inventory items can turn the tide. Healing potions and status remedies can be game-changers.
+Consider the order of attacks. Timing can impact the outcome of battles.
+Training pays off. Keep battling to gain experience and improve your skills.
+Variety is your friend. Don't limit yourself to a single weapon type; versatility can be a game-winning strategy.
+Strive for a mix of offense and defense. A well-rounded character can handle a variety of challenges.
+Don't underestimate enemy tactics. Some foes might have surprising moves up their sleeves.
+Patience is a virtue in battles. Rushing in might not always be the best option.
+Pay attention to battle feedback. Adjust your tactics based on what's working and what isn't.
+Status effects matter. Inflict them on enemies and guard against them to gain an edge.
+Upgrade your skills. Progression isn't just about equipment; improving abilities is essential too.
+Study enemy patterns. Predicting their moves can give you a significant advantage.
+Remember, battles aren't just about power; strategy can make all the difference.
+Take time to prepare before engaging tough opponents. A little planning can save you a lot of trouble.
+Organize your inventory for quick access during battles and exploration.
+Regularly sell or discard outdated equipment to make room for new treasures.
+Mark important items as favorites to prevent accidental selling or deletion.
+Equip stat-boosting items strategically to optimize your character's strengths.
+Keep an eye out for unique and rare equipment. They might provide special advantages in battles.
+Compare new items to your current equipment before deciding to switch. Numbers matter!
+Be cautious with consumable items. Use them when they'll have the most impact.
+Seek out items of legendary and divine rarity. Their exceptional bonuses can turn your character into a force to be reckoned with.
+Rarity matters! Aspire to equip rarer items to enjoy higher critical hit chances, attack power, and the potential for bigger upgrades.
+Rarer gear offers enhanced critical hit potential. Embrace these items to tip the scales of battle in your favor.
+Every weapon and piece of armor serves a purpose. Equip strategically based on the enemy you're facing to maximize your strengths.
+Legendary items aren't just gear – they're a testament to your prowess. Treasure them and utilize them wisely.
+Each upgrade should have a purpose. Consider the impact on your gear's special stat before committing to an enhancement.
+Customization is key. Tailor your gear to your unique battling style to dominate opponents with finesse.
+Progress through the rarity tiers to ascend to new heights of power. Each step brings greater potential and new challenges.
+Use your basic attack to strike enemies and conserve energy for crucial moments.
+Double the impact! Try a charged attack for double the hits and a small energy cost!
+Keep an eye on your energy gauge – it fuels your powerful attacks and abilities.
+Channel your ultimate ability to engulf your weapon in fire, dealing massive damage and potentially finishing off foes.
+Strategize your special ability's explosion to hit enemies at their weakest moments.
+Land a critical hit during your ultimate ability's fire infusion for a devastating blow.
+Choose between regular attacks and charged attacks based on your energy availability and battle circumstances.
+Save up energy for a game-changing ultimate ability or spend it for consistent damage with charged attacks.
+Utilize your special ability's immobilization to control enemy actions and gain the upper hand.
+Flex your strategy according to the battle situation – sometimes a basic attack can be just as effective as a special move.

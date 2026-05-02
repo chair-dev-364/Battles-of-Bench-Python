@@ -608,7 +608,7 @@ def play_sound_thread(sound_name, pitch=1.0):
                 with suppress_stderr():
                     pygame.mixer.music.load(sound_file)
                 pygame.mixer.music.set_volume(volume)
-                pygame.mixer.music.play()
+                pygame.mixer.music.play(loops=-1)
             except Exception as e:
                 print(f"Error streaming music {sound_name}: {e}")
             return

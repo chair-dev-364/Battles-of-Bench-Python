@@ -3,7 +3,7 @@
     "datatype": 1,
     "sorting": 0,
     "levelup_mode": 0,
-    "music": 0,
+    "music": 5,
     "pronouns": "he/him/his",
     "sfx": 10,
     "skipboot": 0,

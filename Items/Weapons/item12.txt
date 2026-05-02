@@ -1,1 +1,1 @@
-book;;0d;;Krita User Manual;;77;;17577;;176;;Regeneration;;25;;The mental health destroyer.;;3;;Hitting an enemy gives it color theory;;0;;1
+knife;;02;;Knife something idk;;25;;1016;;38;;Defence;;5;;Knife yay;;2;;ability;;1;;0
