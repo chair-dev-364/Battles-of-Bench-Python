@@ -1,2 +1,1 @@
-bodywear;;02;;Linux Socks;;2;;15
-
+bodywear;;02;;Linux Socks;;2;;15;;None;;None;;0

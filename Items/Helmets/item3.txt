@@ -1,2 +1,2 @@
-helmet;;0c;;Adventurer's Insane Bodywear;;100;;100
+helmet;;0c;;Adventurer's Insane Helmet;;100;;40;;None;;None;;0
 

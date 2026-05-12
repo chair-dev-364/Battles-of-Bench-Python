@@ -1,3 +1,1 @@
-bodywear;;07;;Adventurer's Weird Bodywear;;1;;50
-
-
+bodywear;;03;;Adventurer's Weird Bodywear;;1;;50;;None;;None;;0

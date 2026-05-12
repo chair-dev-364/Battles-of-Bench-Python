@@ -21,7 +21,7 @@
 *                                                                                *                                                                                
 *******************************************************************************"""
 
-import msvcrt, os, time, sys, ctypes, ast, operator as op, subprocess, json, re, random, shutil, socket, tempfile, stat, urllib.request  # noqa: E401, E402
+import msvcrt, os, time, sys, ctypes, ast, math, operator as op, subprocess, json, re, random, shutil, socket, tempfile, stat, urllib.request  # noqa: E401, E402
 from pathlib import Path  # noqa: E402
 from typing import Literal  # noqa: E402
 
@@ -732,7 +732,8 @@ def _reset_object(obj, defaults):
     for key, value in defaults.items():
         setattr(obj, key, value)
 
-# Loads an item by ID and category. If ID is 0, loads equipped items from the "active_*.txt" files. Otherwise, loads from the corresponding item file.
+# Loads an item by ID and category. If ID is 0, loads equipped items from the "active_*.txt" files.
+# Otherwise, loads from the corresponding item file.
 def load_item(item_id, category="Weapons"):
     base_dir = os.getcwd()
     items_dir = os.path.join(base_dir, "Items")
@@ -764,8 +765,34 @@ def load_item(item_id, category="Weapons"):
                     "specialvalue": 0,
                 },
             ),
-            "active_body.txt": ("Bodywear", armor, {"type_raw": None, "rarity": None, "name": None, "level": 0, "defense": 0}),
-            "active_head.txt": ("Helmets", head, {"type_raw": None, "rarity": None, "name": None, "level": 0, "defense": 0}),
+            "active_body.txt": (
+                "Bodywear",
+                armor,
+                {
+                    "type_raw": None,
+                    "rarity": None,
+                    "name": None,
+                    "level": 0,
+                    "defense": 0,
+                    "description": None,
+                    "ability": None,
+                    "locked": 0,
+                },
+            ),
+            "active_head.txt": (
+                "Helmets",
+                head,
+                {
+                    "type_raw": None,
+                    "rarity": None,
+                    "name": None,
+                    "level": 0,
+                    "defense": 0,
+                    "description": None,
+                    "ability": None,
+                    "locked": 0,
+                },
+            ),
             "active_fragment.txt": ("Fragments", fragment, {"name": None, "level": 0}),
         }
 
@@ -857,22 +884,28 @@ def load_item(item_id, category="Weapons"):
     elif category == "Helmets":
         _clear_object(head)
 
-        head.type_raw = parts[0]
-        head.rarity = parts[1]
-        head.name = parts[2]
-        head.level = int(parts[3])
-        head.defense = int(parts[4])
+        head.type_raw = parts[0] if len(parts) > 0 else None
+        head.rarity = parts[1] if len(parts) > 1 else None
+        head.name = parts[2] if len(parts) > 2 else None
+        head.level = int(parts[3]) if len(parts) > 3 and parts[3] else 0
+        head.defense = int(parts[4]) if len(parts) > 4 and parts[4] else 0
+        head.description = parts[5] if len(parts) > 5 else ""
+        head.ability = parts[6] if len(parts) > 6 else ""
+        head.locked = int(parts[7]) if len(parts) > 7 and parts[7] != "" else 0
         return head
 
     # ───────────── BODYWEAR ─────────────
     elif category == "Bodywear":
         _clear_object(armor)
 
-        armor.type_raw = parts[0]
-        armor.rarity = parts[1]
-        armor.name = parts[2]
-        armor.level = int(parts[3])
-        armor.defense = int(parts[4])
+        armor.type_raw = parts[0] if len(parts) > 0 else None
+        armor.rarity = parts[1] if len(parts) > 1 else None
+        armor.name = parts[2] if len(parts) > 2 else None
+        armor.level = int(parts[3]) if len(parts) > 3 and parts[3] else 0
+        armor.defense = int(parts[4]) if len(parts) > 4 and parts[4] else 0
+        armor.description = parts[5] if len(parts) > 5 else ""
+        armor.ability = parts[6] if len(parts) > 6 else ""
+        armor.locked = int(parts[7]) if len(parts) > 7 and parts[7] != "" else 0
         return armor
 
     # ───────────── FRAGMENTS ─────────────
@@ -931,21 +964,27 @@ def save_item(item_id, category="Weapons"):
     # ───────────── HELMETS ─────────────
     elif category == "Helmets":
         parts = [
-            head.type_raw,
-            head.rarity,
-            head.name,
-            str(head.level),
-            str(head.defense)
+            str(getattr(head, "type_raw", "") or ""),
+            str(getattr(head, "rarity", "") or ""),
+            str(getattr(head, "name", "") or ""),
+            str(getattr(head, "level", 0)),
+            str(getattr(head, "defense", 0)),
+            str(getattr(head, "description", "") or ""),
+            str(getattr(head, "ability", "") or ""),
+            str(getattr(head, "locked", 0))
         ]
 
     # ───────────── BODYWEAR ─────────────
     elif category == "Bodywear":
         parts = [
-            armor.type_raw,
-            armor.rarity,
-            armor.name,
-            str(armor.level),
-            str(armor.defense)
+            str(getattr(armor, "type_raw", "") or ""),
+            str(getattr(armor, "rarity", "") or ""),
+            str(getattr(armor, "name", "") or ""),
+            str(getattr(armor, "level", 0)),
+            str(getattr(armor, "defense", 0)),
+            str(getattr(armor, "description", "") or ""),
+            str(getattr(armor, "ability", "") or ""),
+            str(getattr(armor, "locked", 0))
         ]
 
     # ───────────── FRAGMENTS ─────────────
@@ -1190,11 +1229,225 @@ def shine(text, offset=0, color=(255, 255, 0), bold=False):
         result += f"\033[38;2;{r};{g};{b}m{style}{char}"
     return result + "\033[0m"
 
+# big numbers for easier access!
+def get_digit_art(digit):
+    art = {
+        '0': [
+            "  ████  ",
+            "██    ██",
+            "██    ██",
+            "██    ██",
+            "  ████  "
+        ],
+        '1': [
+            "    ██  ",
+            "  ████  ",
+            "██  ██  ",
+            "    ██  ",
+            "  ██████"
+        ],
+        '2': [
+            "  ████  ",
+            "██    ██",
+            "    ██  ",
+            "  ██    ",
+            "████████"
+        ],
+        '3': [
+            "  ████  ",
+            "██    ██",
+            "   ███  ",
+            "██    ██",
+            "  ████  "
+        ],
+        '4': [
+            "██    ██",
+            "██    ██",
+            "████████",
+            "      ██",
+            "      ██"
+        ],
+        '5': [
+            "████████",
+            "██      ",
+            "██████  ",
+            "      ██",
+            "██████  "
+        ],
+        '6': [
+            "  █████ ",
+            "██      ",
+            "██████  ",
+            "██    ██",
+            "  ████  "
+        ],
+        '7': [
+            "████████",
+            "      ██",
+            "    ██  ",
+            "  ██    ",
+            "  ██    "
+        ],
+        '8': [
+            "  ████  ",
+            "██    ██",
+            "  ████  ",
+            "██    ██",
+            "  ████  "
+        ],
+        '9': [
+            "  ████  ",
+            "██    ██",
+            "  ██████",
+            "      ██",
+            " █████  "
+        ]
+    }
+    return art.get(digit, ["        "] * 5)
+
+def bignumber(number_str, display=False):
+    if not number_str.isdigit() or len(number_str) < 1 or len(number_str) > 3:
+        return None
+
+    digit_arts = [get_digit_art(digit) for digit in number_str]
+    
+    result_lines = []
+    for line_idx in range(5):
+        line_parts = [art[line_idx] for art in digit_arts]
+        result_lines.append(" ".join(line_parts))
+
+    if display:
+        print("\n".join(result_lines))
+    
+    return result_lines
+
 """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 INTERFACE
 Here's where... you really don't want to look. This is the absolute mess of hardcoded coordinates, colors, and styles that
 creates the actual game interface. It's a nightmare to maintain, but it works, so good luck.
 """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+
+def levelup():
+    # don't overflow :c
+    max_level = 100
+    if player.level >= max_level:
+        game.goto = mainmenu
+        return
+
+    # calculate how many times we can level up based on current XP and required XP for next level
+    level = player.level
+    levels_gained = 0
+    xp_for_next = player.xpneeded
+    player.xp -= xp_for_next
+    level += 1
+    levels_gained += 1
+    while level < max_level:
+        xp_for_next = round(xp_for_next + 15 + level / 4) # determines curve
+        if player.xp >= xp_for_next:
+            player.xp -= xp_for_next
+            level += 1
+            levels_gained += 1
+        else:
+            break
+
+    player.level = level
+    player.xpneeded = round(xp_for_next)
+    player.save()
+    
+    # if that's done, "level" should show the new level
+    # (player.level only updates when we save)
+    
+    
+    
+    # get how you look!
+    player.load() # just for safety
+    thresholds = [
+        (0, x8), (5, x7), (10, xf),(15, x3),(20, x9),(25, xb),(30, x2),(35, xa),(40, xlorange),(45, xlyellow),(50, xe),(55, x5),(60, xd),(65, xlred),(70, xc),(75, x4),(80, rgb(184, 172, 246)),(85, rgb(254, 163, 98)),(90, rgb(186, 243, 219)),(95, rgb(255, 131, 101)),(100, rgb(227, 62, 57)),
+    ]
+    player.color = None
+    for req_level, color in thresholds:
+        if player.level >= req_level:
+            player.color = color
+    sound("celebration")
+    sound("swish")
+    subprocess.run(["py", "wipe.py", "center", "15"]) # clear screen
+    cls()
+    delay = 0.05
+    print(f"[10;1H{xf}                                  | |   _ / /__\\\\[ \\ [  ]/ /__\\\\ | |  [  | | |[ '/'`\\ \\| | ")
+    time.sleep(delay)
+    print(f"[10;1H{xf}{player.color}                                  | |   _ / /__\\\\[ \\ [  ]/ /__\\\\ | |  [  | | |[ '/'`\\ \\| | ")
+    print(f"[9;1H{xf}                                  | |      .---.  _   __  .---.  | |   __   _  _ .--.  | | ")
+    print(f"[11;1H{xf}                                 _| |__/ || \\__., \\ \\/ / | \\__., | |   | \\_/ |,| \\__/ ||_| ")
+    time.sleep(delay)
+    print(f"[9;1H{xf}{player.color}                                  | |      .---.  _   __  .---.  | |   __   _  _ .--.  | | ")
+    print(f"[11;1H{xf}{player.color}                                 _| |__/ || \\__., \\ \\/ / | \\__., | |   | \\_/ |,| \\__/ ||_| ")
+    time.sleep(delay)
+    print(f"[8;1H{xf}                                |_   _|                         [  |                   | | ")
+    print(f"[12;1H{xf}                                |________| '.__.'  \\__/   '.__.'[___]  '.__.'_/| ;.__/ (_) ")
+    time.sleep(delay)
+    print(f"[8;1H{xf}{player.color}                                |_   _|                         [  |                   | | ")
+    print(f"[12;1H{xf}{player.color}                                |________| '.__.'  \\__/   '.__.'[___]  '.__.'_/| ;.__/ (_) ")
+    print(f"[7;1H{xf}{bold}                                 _____                           __                     _  ")
+    print(f"[13;1H{xf}                                                                              [__|         {reset}")
+    time.sleep(delay)
+    print(f"[7;1H{xf}{bold}{player.color}                                 _____                           __                     _  ")
+    print(f"[13;1H{xf}{player.color}                                                                              [__|         {reset}")
+    
+    added_attack = levels_gained * 10
+    added_defense = levels_gained * 5
+    x = player.level
+    basehp = round(50 + (x-1)*20 + ((x-1)*(x+2))/4)
+    a = player.level
+    b = level
+    added_health=round((b - a)*20 + ((b - 1)*(b + 2) - (a - 1)*(a + 2)) / 4)
+    
+    added_defense = levels_gained * 0.3
+    
+    graph = bignumber(str(level), display=False)
+
+    print(f"""
+{player.color}[15;1H                                                  ██████
+{player.color}                                                ██      ██  
+{player.color}                                                ██ •  • ██  
+{player.color}                                                ██      ██  
+{player.color}                                                  ██████      {xf}{graph[0]}
+{player.color}                                                    ██        {xf}{graph[1]}                                     
+{player.color}                                                    ██    ██  {xf}{graph[2]}   
+{player.color}                                                    ██  ██    {xf}{graph[3]}                                        
+{player.color}                                                 ███████      {xf}{graph[4]}
+{player.color}                                               ██   ██       
+{player.color}                                                    ██      
+{player.color}                                                    ██      
+{player.color}                                                  ██  ██    
+{player.color}                                                ██      ██  
+""".strip(), end="")
+    center(f"{xf}› press any key to confirm ‹", 31)
+    pause = key()
+    game.goto = mainmenu
+    return
+    
+    
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 def startup_animation():
     # Quick fade in.
@@ -1317,6 +1570,12 @@ def mainmenu():
     if game.updatable:
             center(f"{xb}{bold}✨ New Battles of Bench update available!{reset} {xf}Press {bold}[Ctrl+U]{reset} to update the game.{reset}", 8)    
     offset = 0
+    
+    # check if you can level up
+    if player.xp >= player.xpneeded and player.level < 100:
+        game.goto = levelup
+        return
+    
     while True:
         offset += 0.005
         print(f"[33;1H{x8}______│_____│_______│_____│_______│__[ == ==]/{x7}.::::::;;; {xlred}{bold}{shine("[B] to battle",offset=offset, color=(255, 71, 76), bold=True)}{reset}{x7} ;;;:::::::.{x8}\\[=  == ]___│_______│_______│_______│___│__{reset}")
@@ -1343,6 +1602,12 @@ def mainmenu():
         if k.lower() == "ctrl/u" and game.updatable:
             sound("pop_1")
             game.goto = updater
+            return
+        # force levelup: ctrl+L
+        if k.lower() == "ctrl/l":
+            player.xp = player.xpneeded
+            player.save()
+            game.goto = mainmenu
             return
 
 def sounds_test():
@@ -1804,7 +2069,7 @@ def house():
 {player.color}     ██      ██     {x8}│{x9}                                {x8}     │                                    {x8} │ 
 {player.color}       ██████       {x8}│{player.color}{bold}  This is your house, welcome in!  {reset}{x8}  │  {xlyellow}{bold}[C]{reset}{xe} 🚶 Manage character          {x8}  │ 
 {player.color}         ██         {x8}│{x9}                                    {x8} │   ╰─ {x2}{bold}[I]{reset}{xa} 💼 Enter inventory       {x8}  │           
-{player.color}         ██    ██   {x8}│{xlyellow}  Everything related to you, your   {x8} │{x8}   ╰─ {x3}{bold}[E]{reset}{xb} 💎 Convert excess XP     {x8}  │ 
+
 {player.color}         ██  ██     {x8}│{xlyellow}  character or personalization will {x8} │{x1}                                   {x8}  │ 
 {player.color}      ███████       {x8}│{xlyellow}  be displayed here on the right!   {x8} │  {x7}{bold}[S]{reset}{xf} ⚙️ Settings & info           {x8}  │ 
 {player.color}    ██   ██         {x8}│{x9}                                    {x8} │{x1}                                   {x8}  │  
@@ -1814,21 +2079,118 @@ def house():
 {player.color}     ██      ██     {x8}│{x9}                                    {x8} │                                     │              
 {player.color}                    {x8}╰{x8}────────────────────────────────────{x8}─┴─────────────────────────────────────╯         
     """)
+    if player.level >= 100:
+        print(f"[23;1H{reset}{player.color}         ██    ██   {x8}│{xlyellow}  Everything related to you, your   {x8} │{x8}   ╰─ {x3}{bold}[E]{reset}{xb} 💎 Convert excess XP     {x8}  │ ")
+    else:
+        print(f"[23;1H{reset}{player.color}         ██    ██   {x8}│{xlyellow}  Everything related to you, your   {x8} │{x8}   ╰─ {x3}{bold}[G]{reset}{xb} 🦮 Level guide/Builder   {x8}  │ ")
     while True:
         k = key()
         if k.lower() == bind.back or k.lower() == "esc":
             game.goto = mainmenu
             return
         if k.lower() == "s":
+            sound("map_switch2")
             game.goto = settings
             return
         if k.lower() == "i":
+            sound("map_switch2")
             game.goto = inventory
             return
         if k.lower() == "c":
-            sound("map_right")
+            sound("map_switch2")
             game.goto = character
             return
+        # xp time
+        if k.lower() == "x":
+            # move to 1;1 and ask how much xp you wanna earn
+            move(1, 1)
+            x = int(input("Enter XP to earn: "))
+            player.xp += x
+            player.save()
+            blank(1,1,1,30)
+            
+        # convert excess XP into coins
+        if k.lower() == "e" and player.level >= 100:
+            player.load()
+            # stuff goes here
+            excess_xp = player.xp
+            if excess_xp <= 5000:
+                gold = excess_xp * 4
+
+            elif excess_xp <= 15000:
+                gold = (5000 * 4) + ((excess_xp - 5000) * 2)
+
+            else:
+                gold = (5000 * 4) + (10000 * 2) + ((excess_xp - 15000) * 1)
+            # if there's nothing to convert:
+            if gold <= 0:
+                sound("ultimatehit")
+                print(f"[23;1H{reset}{player.color}         ██    ██   {x8}│{xlyellow}  Everything related to you, your   {x8} │{x8}   ╰─ {x4}{bold}[E]{reset}{xc}                {x7}          {reset}")
+                print(f"[23;1H{reset}{player.color}         ██    ██   {x8}│{xlyellow}  Everything related to you, your   {x8} │{x8}   ╰─ {x4}{bold}[E]{reset}{x4} 🚫 No XP to convert! {reset}")
+                time.sleep(0.025)
+                print(f"[23;1H{reset}{player.color}         ██    ██   {x8}│{xlyellow}  Everything related to you, your   {x8} │{x8}   ╰─ {x4}{bold}[E]{reset}{xc} 🚫 No XP to convert!{reset}")
+            else:
+                # determine reward sound from 1 to 5 based on xp amount (max 25,000)
+                if excess_xp <= 1500:
+                    reward_sound = "reward_1"
+                elif excess_xp <= 2500:
+                    reward_sound = "reward_2"
+                elif excess_xp <= 5000:
+                    reward_sound = "reward_3"
+                elif excess_xp <= 7500:
+                    reward_sound = "reward_4"
+                else:
+                    reward_sound = "reward_5"
+                #sound("pop_2")
+                #time.sleep(0.15)
+                print(f"[23;1H{reset}{player.color}         ██    ██   {x8}│{xlyellow}  Everything related to you, your   {x8} │{x8}   ╰─ {x6}{bold}[E]{reset}{xe} ⏳ Working          ")
+                #time.sleep(0.4)
+                update("Player/xp", 0)
+                player.xp = 0
+                player.money += gold
+                player.save()
+                pitch = 1
+                dotsdisplay = "..."
+                
+                counts = min(20, int(math.sqrt(excess_xp / 1000) * 4))
+                for i in range(counts):
+                    # change dots
+                    if dotsdisplay == ".  ":
+                        dotsdisplay = ".. "
+                    elif dotsdisplay == ".. ":
+                        dotsdisplay = "..."
+                    else:
+                        dotsdisplay = ".  "
+                    sound(f"pickup_coin {pitch}")
+                    if gold/counts*(i+1) < 100000:
+                        print(f"[23;1H{reset}{player.color}         ██    ██   {x8}│{xlyellow}  Everything related to you, your   {x8} │{x8}   ╰─ {x6}{bold}[E]{reset}{xe} ⏳ Working{dotsdisplay} {xlyellow}({bold}+{round(gold/counts*(i+1))}{reset}🪙{xlyellow}) {reset}")
+                    else:
+                        # normalize to "k"
+                        print(f"[23;1H{reset}{player.color}         ██    ██   {x8}│{xlyellow}  Everything related to you, your   {x8} │{x8}   ╰─ {x6}{bold}[E]{reset}{xlred} 🔥 Working{dotsdisplay} {xlyellow}({bold}+{round(gold/counts*(i+1)/1000, 1)}k{reset}🪙{xlyellow}) {reset}")
+                    progress = i / counts
+                    pitch = 1 + (progress ** 1.5) * 1.5
+                    delay = max(
+                        0.012,
+                        0.18 * (0.92 ** i)
+                    )
+                    # must make sure delay is not small...
+                    # and that pitch is not excessively high
+                    if pitch > 2.5:
+                        pitch = 2.5
+                    if delay < 0.001:
+                        delay = 0.001
+                    time.sleep(delay)
+                
+                sound("map_right")
+            
+                sound(reward_sound)
+                time.sleep(0.1)
+                if gold < 100000:
+                    print(f"[23;1H{reset}{player.color}         ██    ██   {x8}│{xlyellow}  Everything related to you, your   {x8} │{x8}   ╰─ {x3}{bold}[E]{reset}{xb} 💎 Converted! {xlyellow}({bold}+{round(gold)}{reset}🪙{xlyellow})   {reset}")
+                else:
+                    # normalize to k
+                    print(f"[23;1H{reset}{player.color}         ██    ██   {x8}│{xlyellow}  Everything related to you, your   {x8} │{x8}   ╰─ {x3}{bold}[E]{reset}{xb} 💎 Converted! {xlyellow}({bold}+{round(gold/1000, 1)}k{reset}🪙{xlyellow})  {reset}")
+                
         # this is the pitch testing code!
         if k.lower() == "o":
             draw_box(32,20,34,60,text="Enter an int 1 to 50:",bold=True,text_color=xlyellow)
@@ -1950,7 +2312,7 @@ def character():
     abilityatk=0
     abilitydef=0
     abilityhp=0
-    totaldmg=round(baseatk*185/100 + abilityatk*4 + item.atk/5)
+    totaldmg=baseatk + abilityatk + item.atk
     totalcritdmg=round(totaldmg*(1+item.atkcrit/100))
     item.atkcrit = round(item.atkcrit)
     basehp = round(basehp)
@@ -2008,18 +2370,18 @@ def character():
     # make dodge, effect res, life steal and regen work normally
     
     # dodge rate = base dodge + (dodge from item) - (enemy accuracy debuff)
-    # base dodge rate is 5
-    base_dodge = 5
-    # for every 10 levels in armor, +0.1% dodge rate
-    armor_dodge = (getattr(armor, "level", 0) // 10) * 0.1
+    # base dodge rate is 2% and 0.1% per player level
+    base_dodge = 2 + (player.level * 0.1)
+    # for every 10 levels in armor, +0.3% dodge rate
+    armor_dodge = (getattr(armor, "level", 0) // 10) * 0.3
     # weapon if substat if dodge, add the same
     weapon_dodge = 0
     if getattr(item, "substat", None) == "Dodge":
         weapon_dodge = item.substat_value
     # headwear dodge functions exactly like armor
-    head_dodge = (getattr(head, "level", 0) // 10) * 0.1
+    head_dodge = (getattr(head, "level", 0) // 10) * 0.3
     player.dodge = base_dodge + armor_dodge + weapon_dodge + head_dodge
-    del base_dodge, armor_dodge, weapon_dodge, head_dodge  
+    del base_dodge, armor_dodge, weapon_dodge, head_dodge
     
     # now, let's do effect res
     # for example, either reduce duration of negative effects by x%, or reduce their potency by x%
@@ -2037,9 +2399,20 @@ def character():
     
     # now, life steal
     # base life steal is 0
-    base_life_steal = 0.1
+    base_life_steal = 0
     # for every 10 levels in weapon, +0.05% life steal
     weapon_life_steal = (getattr(item, "level", 0) // 10) * 0.05
+    # weapon life steal multiplier based on rarity of weapon
+    rarity_multiplier = {
+        "08": 1.0,
+        "02": 2.0,
+        "03": 3.0,
+        "0d": 4.0,
+        "0e": 5.0,
+    }
+    weapon_life_steal *= rarity_multiplier.get(getattr(item, "rarity", "08"), 1.0)
+    # round it to at most one decimal place
+    weapon_life_steal = round(weapon_life_steal, 1)
     # if weapon substat, add the same
     if getattr(item, "substat", None) == "Life Steal":
         weapon_life_steal += item.substat_value    
@@ -2320,6 +2693,7 @@ def character():
     while True:
         k = key()
         if k.lower() == bind.back or k.lower() == "esc":
+            
             game.goto = house
             return
 
@@ -2363,6 +2737,7 @@ def settings():
     while True:
         k = key()
         if k.lower() == bind.back or k.lower() == "esc":
+            sound("map_switch1")
             game.goto = house
             return
             
@@ -2403,10 +2778,19 @@ def inventory():
     while True:
         k = key()
         if k.lower() == bind.back or k.lower() == "esc":
+            sound("map_switch1")
             game.goto = house
             return
         if k.lower() == "1":
             game.sel = "Weapons"
+            game.goto = maininv
+            return
+        if k.lower() == "2":
+            game.sel = "Bodywear"
+            game.goto = maininv
+            return
+        if k.lower() == "3":
+            game.sel = "Helmets"
             game.goto = maininv
             return
 
@@ -2719,6 +3103,70 @@ def startup():
     return
 
 
+def inv_category_title(category):
+    return {
+        "Weapons": "Weapons",
+        "Bodywear": " Armor ",
+        "Helmets": "Helmets",
+    }.get(category, str(category))
+
+
+def inv_item_label(category):
+    return {
+        "Weapons": "weapon",
+        "Bodywear": "armour",
+        "Helmets": "helmet",
+    }.get(category, "item")
+
+
+def inv_active_path(category):
+    return {
+        "Weapons": "Items/active_weapon",
+        "Bodywear": "Items/active_body",
+        "Helmets": "Items/active_head",
+    }.get(category)
+
+
+def inv_type_icon(item_obj):
+    type_raw = getattr(item_obj, "type_raw", None)
+    type_map = {
+        None: "❌",
+        "None": "❌",
+        "bow": "🏹",
+        "sword": "⚔️",
+        "knife": "🔪",
+        "dagger": "🗡️",
+        "helmet": "⛑️",
+        "bodywear": "👗",
+        "book": "📖",
+        "wand": "🪄",
+        "axe": "🪓",
+        "hammer": "⚒️",
+        "pistol": "🔫",
+        "flower": "🌹",
+    }
+    if type_raw in (None, "", "None"):
+        return "❌"
+    return type_map.get(type_raw, type_raw)
+
+
+def inv_type_label(item_obj):
+    type_raw = getattr(item_obj, "type_raw", None)
+    if not type_raw or type_raw == "None":
+        return "None"
+    return str(type_raw).title()
+
+
+def inv_compare_label(category):
+    return "DMG" if category == "Weapons" else "DEF"
+
+
+def inv_compare_value(item_obj, category):
+    if category == "Weapons":
+        return float(getattr(item_obj, "atk", 0)) * (1 + float(getattr(item_obj, "atkcrit", 0)/100))
+    return float(getattr(item_obj, "defense", 0))
+
+
 
 
 def maininv_md():
@@ -2746,17 +3194,19 @@ def maininv():
 
     cls()
     cursor(False)
+    print()
 
-    # Simplified display logic, utilizing python printing
-    if game.sel == "Bodywear":
-        print("                                                       \033[38;5;8m██████████████        ")
-        print("                                                       \033[38;5;4m██\033[38;5;6m██████████\033[38;5;8m██")
-        print("                                                       \033[38;5;4m██\033[38;5;6m██████████\033[38;5;8m██")
-        print("                                                       \033[38;5;4m ██\033[38;5;6m████████\033[38;5;8m██ ")
-        print("                                                        \033[38;5;4m ██\033[38;5;6m██████\033[38;5;8m██  ")
-        print("                                                          \033[38;5;4m ██\033[38;5;6m██\033[38;5;8m██    ")
-        print("                                                             \033[38;5;4m██              ")
-        print()
+    category_title = inv_category_title(game.sel)
+
+    # top symbols for stuff
+    if game.sel in ("Bodywear", "Helmets"):
+        print("                                                      \033[38;5;4m██████████████        ")
+        print("                                                      \033[38;5;4m██\033[38;5;6m██████████\033[38;5;4m██")
+        print("                                                      \033[38;5;4m██\033[38;5;6m██████████\033[38;5;4m██")
+        print("                                                      \033[38;5;4m ██\033[38;5;6m████████\033[38;5;4m██ ")
+        print("                                                       \033[38;5;4m ██\033[38;5;6m██████\033[38;5;4m██  ")
+        print("                                                         \033[38;5;4m ██\033[38;5;6m██\033[38;5;4m██    ")
+        print("                                                            \033[38;5;4m██              ")
     elif game.sel == "Weapons":
         atksymbol1=f"{x6}██████{xlyellow}"
         atksymbol2=f"{x6}██{xlyellow}██{xe}██{xlyellow}██{x6}██{xlyellow}"
@@ -2765,7 +3215,7 @@ def maininv():
         atksymbol5=f"{x6}██{xlyellow}██████{xe}██{xlyellow}██{x6}██{xlyellow}"
         atksymbol6=f"{x6}██{xlyellow}██{xe}██{xlyellow}██{x6}██{xlyellow}"
         atksymbol7=f"{x6}██████{xlyellow}"
-        print(f"\n                                                          \033[38;2;2;74;48m{atksymbol1}")
+        print(f"                                                          \033[38;2;2;74;48m{atksymbol1}")
         print(f"                                                        \033[38;2;2;74;48m{atksymbol2}")
         print(f"                                                      \033[38;2;2;74;48m{atksymbol3}")
         print(f"                                                      \033[38;2;2;74;48m{atksymbol4}")
@@ -2773,11 +3223,11 @@ def maininv():
         print(f"                                                        \033[38;2;2;74;48m{atksymbol6}")
         print(f"                                                          \033[38;2;2;74;48m{atksymbol7}")
     
-    # Rest of the static UI drawing
+    # title
     print(f"\033#3{reset}                  {xlorange}╭───────────────────────{xlorange}╮")
     print(f"\033#4                  {xlorange}╭───────────────────────{xlorange}╮")
-    print(f"\033#3                  {xlorange}│        {bold}{xlyellow}Weapons        {xlorange}│")
-    print(f"\033#4                  {xlorange}│        {bold}{xlyellow}Weapons        {xlorange}│")
+    print(f"\033#3                  {xlorange}│        {bold}{xlyellow}{category_title}        {xlorange}│")
+    print(f"\033#4                  {xlorange}│        {bold}{xlyellow}{category_title}        {xlorange}│")
     print(f"\033#3                  {xlorange}╰───────────────────────{xlorange}╯")
     print(f"\033#4                  {xlorange}╰───────────────────────{xlorange}╯")
 
@@ -2786,7 +3236,7 @@ def maininv():
     d.begin = 1
     d.end = 10
 
-    # Drawing the borders
+    # border & character
     print(f"{x8}",end="")
     print(f"{player.color}               {x8} ╭───────────────────────────────────────────┬─────────────────────────────────────────────────╮")
     print(f"{player.color}               {x8} │                                           │                                                 │")
@@ -2809,7 +3259,7 @@ def maininv():
 
     #print(f"\n                         {italic}{xlorange}Equip an item with {xlyellow}Enter{xlorange}, delete it with {xlyellow}Backspace{xlorange} or level it up with {xlyellow}Space{xlorange}.")
 
-    print(f"{reset}\033[16;19H🔱 {bold}{xlorange}Weapons {xlyellow}{unbold}→ {xlorange}{bold}Page {bold}{d.page + 1} {unbold}{x7}(items: {xf}{bold}{d.length}{x7}{unbold}){reset}")
+    print(f"{reset}\033[16;19H🔱 {bold}{xlorange}{category_title} {xlyellow}{unbold}→ {xlorange}{bold}Page {bold}{d.page + 1} {unbold}{x7}(items: {xf}{bold}{d.length}{x7}{unbold}){reset}")
     print(f"\033[31;19H{xlorange}Switch pages → {xlyellow}{bold}A/D {reset}{xlorange}| Select an item → {xlyellow}{bold}W/S{reset}")
 
     d.currsel = 1
@@ -2830,16 +3280,9 @@ def itemsel_waitkey():
     else:
         game.preserve_offset = False
     item = load_item(d.currsel, game.sel)
-    ityped = "🗡️"
-    if item.type == "bow": ityped="🏹"
-    elif item.type == "sword": ityped="⚔️"
-    elif item.type == "knife": ityped="🔪"
-    elif item.type == "axe": ityped="🪓"
-    elif item.type == "hammer": ityped="⚒️"
-    elif item.type == "pistol": ityped="🔫"
-    elif item.type == "wand": ityped="🪄"
-    elif item.type == "book": ityped="📖"
-    ityped = item.type
+    ityped = inv_type_icon(item)
+    itemcolour = xf
+    itemcolour_rgb = (255, 255, 255)
     if item.rarity == "08":
         itemcolour = xf
         itemcolour_rgb = (255, 255, 255)
@@ -2858,16 +3301,9 @@ def itemsel_waitkey():
     counter = 0
     while True:
         item = load_item(d.currsel, game.sel)
-        ityped = "🗡️"
-        if item.type == "bow": ityped="🏹"
-        elif item.type == "sword": ityped="⚔️"
-        elif item.type == "knife": ityped="🔪"
-        elif item.type == "axe": ityped="🪓"
-        elif item.type == "hammer": ityped="⚒️"
-        elif item.type == "pistol": ityped="🔫"
-        elif item.type == "wand": ityped="🪄"
-        elif item.type == "book": ityped="📖"
-        ityped = item.type
+        ityped = inv_type_icon(item)
+        itemcolour = xf
+        itemcolour_rgb = (255, 255, 255)
         if item.rarity == "08":
             itemcolour = xf
             itemcolour_rgb = (255, 255, 255)
@@ -2887,7 +3323,7 @@ def itemsel_waitkey():
         counter += 1
         #print(f"\033[1;1Hcounter: {counter} / offset: {round(d.offset,2)} / currsel: {d.currsel} / current: {d.current} / begin: {d.begin} / end: {d.end} / page: {d.page}                    ")
         print(f"\033[{d.currselrow};20H{bold}{itemcolour}{d.currsel} {unbold}› {ityped} {shine(text=item.name,bold=True,offset=d.offset,color=itemcolour_rgb)}",end="",flush=True)
-        k = key(timeout=0)  # Use your key fetching function appropriately
+        k = key(timeout=0)  # wait a very very short time for key input to allow shine effect to update at the same time
         if k == "w" or k == "up":
             itemsel_rem()
         elif k == "s" or k == "down":
@@ -2923,28 +3359,33 @@ def itemsel_waitkey():
                 subprocess.run(["notepad.exe", item_path])
         # equip item with enter
         elif k.lower() == "enter":
-            if game.sel == "Weapons":
-                item = load_item(d.currsel, game.sel)
-                if item.level <= player.level:
-                    current_equipped = str(read("Items/active_weapon", default="none")).strip()
-                    if current_equipped == str(d.currsel):
-                        sound("pop_1")
-                        update("Items/active_weapon", "none")
-                    else:
-                        sound(f"equip_{random.choice(['1','2','3'])}")
-                        update("Items/active_weapon", d.currsel)
-                    load_item(0)
-                    # preserve current offset for shine effect
-                    game.preserve_offset = True
-                    displaynewsel()
+            item = load_item(d.currsel, game.sel)
+            equipped_path = inv_active_path(game.sel)
+            if not equipped_path:
+                continue
+            if item.level <= player.level:
+                current_equipped = str(read(equipped_path, default="none")).strip()
+                if current_equipped == str(d.currsel):
+                    sound("pop_1")
+                    update(equipped_path, "none")
                 else:
-                    blank(31,62, 31,62+48)
-                    print(f"\033[31;63H🚫 {xlred}This weapon requires level {bold}{item.level}{reset}{xlorange} (+{item.level-player.level} more){reset}{xlred}!")
-                    sound("error2")
+                    sound(f"equip_{random.choice(['1','2','3'])}")
+                    update(equipped_path, d.currsel)
+                load_item(0)
+                # preserve current offset for shine effect
+                game.preserve_offset = True
+                displaynewsel()
+            else:
+                blank(31,62, 31,62+48)
+                item_label = inv_item_label(game.sel)
+                print(f"\033[31;63H🚫 {xlred}This {item_label} requires level {bold}{item.level}{reset}{xlorange} (+{item.level-player.level} more){reset}{xlred}!")
+                sound("error2")
         # when you press L, lock the item (item.locked = 1)
         elif k.lower() == "l":
             item = load_item(d.currsel, game.sel)
-            if item.locked == 1:
+            if getattr(item, "locked", None) is None:
+                continue
+            if int(getattr(item, "locked", 0)) == 1:
                 item.locked = 0
                 sound("lock 1")
             else:
@@ -3012,10 +3453,11 @@ def itemsel_waitkey():
             print(f"[22;63H{x0}███████████████████████████████████████████████")
             print(reset, end="")
             
-            print(f"[24;63H{reset}{xf}→ {xc}📛 Hold {bold}{xlred}{bind.confirm.capitalize()}{reset}{xc} to delete weapon.{reset}")
+            item_label = inv_item_label(game.sel)
+            print(f"[24;63H{reset}{xf}→ {xc}📛 Hold {bold}{xlred}{bind.confirm.capitalize()}{reset}{xc} to delete {item_label}.{reset}")
             print(f"[25;63H{reset}{xf}→ {xb}💤 Press {bold}{x3}{bind.back.upper()} {reset}{xb}or {bold}{x3}{bind.deny.upper()}{reset} {xb}to cancel deletion.{reset}")
             
-            print(f"[27;63H{reset}{xf}{rgb(255, 206, 124)}📦 Deleting this weapon will give you:{reset}")
+            print(f"[27;63H{reset}{xf}{rgb(255, 206, 124)}📦 Deleting this {item_label} will give you:{reset}")
             
             # gold multipliers and bases dictionary based on rarity:
             gold_bases = {
@@ -3039,14 +3481,17 @@ def itemsel_waitkey():
             
             # calculate final payback
             goldpayback = round((goldmult * item.level**2) / 98 + goldbonus)
-            dustpayback = round((dustmult * item.level) / (150 / item.level_power) + dustbonus)
+            if game.sel == "Weapons":
+                dustpayback = round((dustmult * item.level) / (150 / item.level_power) + dustbonus)
+            else:
+                dustpayback = round((dustmult * item.level) / 150 + dustbonus)
             # at higher values:
             if dustpayback >= 1000:
                 dustpayback = round(dustpayback, -1) # round to nearest 10
             
             print(f"[28;66H{reset}{x7}╰─ ✨ {xlyellow}{bold}{dustpayback} {reset}{xlyellow}magic dust")
             
-            print(f"\033[31;63H{xlorange}⚠️ You will lose this weapon permanently!{reset}")
+            print(f"\033[31;63H{xlorange}⚠️ You will lose this {item_label} permanently!{reset}")
         
         # Pressing space adds item to comparison
         elif k == "space":
@@ -3060,14 +3505,14 @@ def itemsel_waitkey():
             if d.currsel not in game.comparing:
                 game.comparing.append(d.currsel)
                 blank(31,63, 31,110)
-                print(f"\033[31;63H{reset}{xa}✅ Weapon {bold}added{unbold} to comparison! {x7}({len(game.comparing)}/2){reset}")
+                print(f"\033[31;63H{reset}{xa}✅ Item {bold}added{unbold} to comparison! {x7}({len(game.comparing)}/2){reset}")
                 sound("pop_2")
                 #game.preserve_offset = True
                 #displaynewsel()
             else:
                 game.comparing.remove(d.currsel)
                 blank(31,63, 31,110)
-                print(f"\033[31;63H{reset}{xlred}❌ Weapon {bold}removed{unbold} from comparison! {x7}({len(game.comparing)}/2){reset}")
+                print(f"\033[31;63H{reset}{xlred}❌ Item {bold}removed{unbold} from comparison! {x7}({len(game.comparing)}/2){reset}")
                 sound("pop_1")
                 #game.preserve_offset = True
                 #displaynewsel()
@@ -3077,40 +3522,43 @@ def itemsel_waitkey():
                 sound("pop_3")
                 # preserve offset for shine effect
                 game.preserve_offset = True
-                # delete all past comparison variables, if applicable: like item1, item2, item1_dmg, item2_dmg, comparison_winner, dmg_diff_percentage
+                # delete all past comparison variables, if applicable
                 try:
                     del item1
                     del item2
-                    del item1_dmg
-                    del item2_dmg
+                    del item1_value
+                    del item2_value
                     del comparison_winner
-                    del dmg_diff_percentage
+                    del stat_diff_percentage
                 except NameError:
                     pass
                 # load first item for comparison
                 item1 = load_item(game.comparing[0], game.sel)
-                item1_dmg = item1.atk * item1.atkcrit
+                item1_value = inv_compare_value(item1, game.sel)
                 item2 = load_item(game.comparing[1], game.sel)
-                # calculate expected damage: item.atk * item.atkcrit
-                item2_dmg = item2.atk * item2.atkcrit
+                item2_value = inv_compare_value(item2, game.sel)
+                stat_label = inv_compare_label(game.sel)
+                
+                
                 # determine if item2 is an upgrade or downgrade
-                if item2_dmg > item1_dmg:
+                if item2_value > item1_value:
                     comparison_winner = 2
-                elif item2_dmg < item1_dmg:
+                elif item2_value < item1_value:
                     comparison_winner = 1
                 else:
                     comparison_winner = 0
                 # if item 2 wins, calculate its win percentage
                 if comparison_winner == 2:
-                    dmg_diff_percentage = round(((item2_dmg - item1_dmg) / item1_dmg) * 100)
+                    stat_diff_percentage = round(((item2_value - item1_value) / item1_value) * 100) if item1_value else 0
                 elif comparison_winner == 1:
-                    dmg_diff_percentage = round(((item1_dmg - item2_dmg) / item2_dmg) * 100)
+                    stat_diff_percentage = round(((item1_value - item2_value) / item2_value) * 100) if item2_value else 0
                 else:
-                    dmg_diff_percentage = 0
+                    stat_diff_percentage = 0
                 blank(16,63, 16,110)
                 blank(18,63, 29,110)
                 blank(31,63, 31,110)
-                print(f"\033[16;63H{bold}⚖ {xlyellow}{bold} Weapon comparison complete!{reset}")
+                item_label_title = inv_item_label(game.sel).title()
+                print(f"\033[16;63H{bold}⚖ {xlyellow}{bold} {item_label_title} comparison complete!{reset}")
                 
                 # line 18: display only item 1 type, name in bold and level
                 # determine item1 color based on whether it's an upgrade or downgrade compared to item2
@@ -3132,22 +3580,26 @@ def itemsel_waitkey():
                     item1_tag = f"{xf}← {bold}Tie{reset}"
                     item2_tag = f"{xf}← {bold}Tie{reset}"
                 item1 = load_item(game.comparing[0], game.sel)
-                print(f"\033[19;63H{reset}{item1.type} {x7}↑{item1.level} {item1_color}{bold}{item1.name}{unbold} {item1_tag}{reset}")
+                item1_icon = inv_type_icon(item1)
+                print(f"\033[19;63H{reset}{item1_icon} {x7}↑{item1.level} {item1_color}{bold}{item1.name}{unbold} {item1_tag}{reset}")
                 
                 item2 = load_item(game.comparing[1], game.sel)
-                print(f"\033[21;63H{reset}{item2.type} {x7}↑{item2.level} {item2_color}{bold}{item2.name}{unbold} {item2_tag}{reset}")
+                item2_icon = inv_type_icon(item2)
+                print(f"\033[21;63H{reset}{item2_icon} {x7}↑{item2.level} {item2_color}{bold}{item2.name}{unbold} {item2_tag}{reset}")
                 print(f"\033[23;61H{reset}{x8}├─────────────────────────────────────────────────┤{reset}")
+                item_label = inv_item_label(game.sel)
+                stat_caption = "average damage" if game.sel == "Weapons" else "defense"
                 if not comparison_winner == 0:
-                    print(f"\033[25;63H{reset}{xlorange}⇝ {xf}Using weapon {bold}{xlorange}#{comparison_winner}{reset} will give you {bold}{xlorange}{dmg_diff_percentage}% more DMG{reset}")
-                    print(f"\033[26;63H{reset}{xf}  compared to the other selected weapon ({bold}#{3 - comparison_winner}{unbold}).{reset}")
+                    print(f"\033[25;63H{reset}{xlorange}⇝ {xf}Using {item_label} {bold}{xlorange}#{comparison_winner}{reset} will give you {bold}{xlorange}{stat_diff_percentage}% more {stat_label}{reset}")
+                    print(f"\033[26;63H{reset}{xf}  compared to the other selected {item_label} ({bold}#{3 - comparison_winner}{unbold}).{reset}")
                     if comparison_winner == 1:
-                        print(f"\033[28;63H{reset}{xlorange}• {xlyellow}{bold}{round(item1_dmg)} {reset}vs {bold}{xlorange}{round(item2_dmg)} {reset}average damage{reset}")
+                        print(f"\033[28;63H{reset}{xlorange}• {xlyellow}{bold}{round(item1_value)} {reset}vs {bold}{xlorange}{round(item2_value)} {reset}{stat_caption}{reset}")
                     if comparison_winner == 2:
-                        print(f"\033[28;63H{reset}{xlorange}• {xlorange}{bold}{round(item1_dmg)} {reset}vs {bold}{xlyellow}{round(item2_dmg)} {reset}average damage{reset}")
+                        print(f"\033[28;63H{reset}{xlorange}• {xlorange}{bold}{round(item1_value)} {reset}vs {bold}{xlyellow}{round(item2_value)} {reset}{stat_caption}{reset}")
                 else:
-                    print(f"\033[25;63H{reset}{xlorange}⇝ {xf}Both weapons have the {bold}{xlorange}exact same{reset} damage!{reset}")
+                    print(f"\033[25;63H{reset}{xlorange}⇝ {xf}Both items have the {bold}{xlorange}exact same{reset} {stat_label}!{reset}")
                     print(f"\033[26;63H{reset}{xf}  Check other stats to determine your choice.{reset}")
-                    print(f"\033[28;63H{reset}{xlorange}• {bold}{round(item1_dmg)} {reset}average damage for both weapons{reset}")
+                    print(f"\033[28;63H{reset}{xlorange}• {bold}{round(item1_value)} {reset}{stat_caption} for both items{reset}")
                 # finally, in row 31, print instructions for the user
                 print(f"\033[31;63H{reset}{xf}📜 Navigate any way to exit comparison.{reset}")
         time.sleep(0.01)
@@ -3155,17 +3607,7 @@ def itemsel_waitkey():
 def unselect_current():
     item = load_item(d.currsel, game.sel)
     if not item: return
-    ityped = "🗡️"
-    if item.type == "bow": ityped="🏹"
-    elif item.type == "sword": ityped="⚔️"
-    elif item.type == "knife": ityped="🔪"
-    elif item.type == "axe": ityped="🪓"
-    elif item.type == "hammer": ityped="⚒️"
-    elif item.type == "pistol": ityped="🔫"
-    elif item.type == "wand": ityped="🪄"
-    elif item.type == "book": ityped="📖"
-    
-    ityped = item.type
+    ityped = inv_type_icon(item)
 
     colour = x7 if int(item.level) <= int(player.level) else xlred
     print(f"\033[{d.currselrow};20H\033[38;5;8m{d.currsel} › {ityped} \033[0m{x7}{item.name} \033[{d.currselrow};56H{colour}↑{item.level}")
@@ -3248,17 +3690,7 @@ def gdi():
         if not item: 
             break
 
-        ityped = "🗡️" # Default
-        if item.type == "bow": ityped="🏹"
-        elif item.type == "sword": ityped="⚔️"
-        elif item.type == "knife": ityped="🔪"
-        elif item.type == "axe": ityped="🪓"
-        elif item.type == "hammer": ityped="⚒️"
-        elif item.type == "pistol": ityped="🔫"
-        elif item.type == "wand": ityped="🪄"
-        elif item.type == "book": ityped="📖"
-        
-        ityped = item.type
+        ityped = inv_type_icon(item)
 
         print(f"\033[{d.rowdisplay};20H{x8}{" "*40}{xf}",end="")
         
@@ -3289,7 +3721,8 @@ def displaynewsel():
     if game.is_comparing:
         game.is_comparing = False
         game.comparing.clear()
-    print(f"{reset}\033[16;19H🔱 {bold}{xlorange}Weapons {xlyellow}{unbold}→ {xlorange}{bold}Page {bold}{d.page + 1} {unbold}{x7}(items: {xf}{bold}{d.length}{x7}{unbold}){reset}")
+    category_title = inv_category_title(game.sel)
+    print(f"{reset}\033[16;19H🔱 {bold}{xlorange}{category_title} {xlyellow}{unbold}→ {xlorange}{bold}Page {bold}{d.page + 1} {unbold}{x7}(items: {xf}{bold}{d.length}{x7}{unbold}){reset}")
     # Always re-calculate current row to prevent cursor drift
     d.currselrow = 8 + d.currsel - ((d.page - 1) * 10)
     
@@ -3301,21 +3734,14 @@ def displaynewsel():
     item = load_item(d.currsel, game.sel)
     if not item: return
 
-    ityped = "🗡️" # Default or lookup based on item.type
-    if item.type == "bow": ityped="🏹"
-    elif item.type == "sword": ityped="⚔️"
-    elif item.type == "knife": ityped="🔪"
-    elif item.type == "axe": ityped="🪓"
-    elif item.type == "hammer": ityped="⚒️"
-    elif item.type == "pistol": ityped="🔫"
-    elif item.type == "wand": ityped="🪄"
-    elif item.type == "book": ityped="📖"
-    
-    ityped = item.type
+    ityped = inv_type_icon(item)
+    type_label = inv_type_label(item)
 
     # Write selection in list
     indicator = "↑"
     colour = x7 if int(item.level) <= int(player.level) else xlred
+    itemcolour = xf
+    itemcolour_rgb = (255, 255, 255)
     if item.rarity == "08":
         itemcolour = xf
         itemcolour_rgb = (255, 255, 255)
@@ -3359,11 +3785,12 @@ def displaynewsel():
     print(reset, end="")
     indicators = ""
     # If equipped, show equipped indicator
-    if str(d.currsel) == str(read("Items/active_weapon")):
-        indicators += f"✅"
+    equipped_path = inv_active_path(game.sel)
+    if equipped_path and str(d.currsel) == str(read(equipped_path)):
+        indicators += "✅"
     # If locked (item.locked = 1), show locked indicator
-    if str(item.locked) == "1":
-        indicators += f"🔒"
+    if str(getattr(item, "locked", 0)) == "1":
+        indicators += "🔒"
     # If item.level > player.level, show level requirement indicator
     if int(item.level) > int(player.level):
         indicators += f"🚫"
@@ -3371,22 +3798,33 @@ def displaynewsel():
     if d.currsel in game.comparing:
         indicators += f"⚔️"
     if not indicators == "":
-        print(f"\033[16;63H{item.type} {bold}{underline}{itemcolour}{item.name}{reset}{x7} ({item.type_raw} → {reset}{indicators}{reset}{x7}){reset}")
+        print(f"\033[16;63H{ityped} {bold}{underline}{itemcolour}{item.name}{reset}{x7} ({type_label} → {reset}{indicators}{reset}{x7}){reset}")
     # if no indicators, don't show any, neither the arrow
     if indicators == "":
-        print(f"\033[16;63H{item.type} {bold}{underline}{itemcolour}{item.name}{reset}{x7} ({item.type_raw}){reset}")
-    print(f"\033[24;66H❇️ {xa}{bold}{item.atk}{unbold} ATK")
-    # if item.atkcrit can also be an int (0 after decimal point), convert to int
-    try:
-        atkcrit = int(float(item.atkcrit))
-    except ValueError:
-        atkcrit = item.atkcrit
-    print(f"\033[24;80H✴️ {xlyellow}{bold}{atkcrit}{unbold}% Crit")
-    
-    ability = item.ability if item.ability and item.ability.strip() else "None"
-    print(f"\033[26;63H🍹 {bold}{xlorange}Combat ability:{reset}")
-    print(f"\033[27;64H› {xf}{ability}")
-    print(f"\033[31;63H📜{xlorange} {item.description}\033[0m")
+        print(f"\033[16;63H{ityped} {bold}{underline}{itemcolour}{item.name}{reset}{x7} ({type_label}){reset}")
+    if game.sel == "Weapons":
+        print(f"\033[24;66H❇️ {xa}{bold}{item.atk}{unbold} ATK")
+        # if item.atkcrit can also be an int (0 after decimal point), convert to int
+        try:
+            atkcrit = int(float(item.atkcrit))
+        except ValueError:
+            atkcrit = item.atkcrit
+        print(f"\033[24;80H✴️ {xlyellow}{bold}{atkcrit}{unbold}% Crit")
+        
+        print(f"\033[24;94H📶 {xb}Lv {bold}{item.level}{unbold}{x3}/{player.level}")
+        
+        ability = item.ability if item.ability and item.ability.strip() else "None"
+        print(f"\033[26;63H🍹 {bold}{xlorange}Combat ability:{reset}")
+        print(f"\033[27;64H› {xf}{ability}")
+        print(f"\033[31;63H📜{xlorange} {item.description}\033[0m")
+    else:
+        print(f"\033[24;66H🛡️ {xb}{bold}{getattr(item, 'defense', 0)}{unbold}% DEF")
+        print(f"\033[24;94H📶 {xb}Lv {bold}{item.level}{unbold}{x3}/{player.level}")
+        ability = item.ability if item.ability and item.ability.strip() else "None"
+        description = item.description if item.description and item.description.strip() else "None"
+        print(f"\033[26;63H🍹 {bold}{xlorange}Combat ability:{reset}")
+        print(f"\033[27;64H› {xf}{ability}")
+        print(f"\033[31;63H📜{xlorange} {description}\033[0m")
 
 
 
