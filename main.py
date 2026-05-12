@@ -26,7 +26,7 @@ from pathlib import Path  # noqa: E402
 from typing import Literal  # noqa: E402
 
 version=1
-subversion=0
+subversion=2
 
 RGB="[38;2;"
 TITLE = f"Battles of Bench - a{version}.{subversion}"
