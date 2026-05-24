@@ -363,6 +363,13 @@ class PlayerData:
             "tryd": 0
         }
 
+        player_name_path = os.path.join(os.getcwd(), "General", "playername.txt")
+        if os.path.exists(player_name_path):
+            with open(player_name_path, "r", encoding="utf-8") as f:
+                self.name = f.read().strip() or "Player"
+        else:
+            self.name = "Player"
+
         self.load()
 
     # ───────────── LOAD ─────────────
@@ -403,7 +410,10 @@ class PlayerData:
 
 player = PlayerData()
 class EnemyData:
-    pass
+    def __init__(self, **stats):
+        for name, value in stats.items():
+            setattr(self, name, value)
+
 enemy = EnemyData()
 
 
@@ -556,6 +566,7 @@ class KeyBinds:
             json.dump(self._persistent_fields, f, indent=4)
 bind = KeyBinds()
 
+d.frombattle = False
 # Oh yeah, here comes the RGB COLOR MESS!! Let's go!!
 bind.load()
 player.load()
@@ -1149,6 +1160,177 @@ def draw_box(
         style += "\x1b[1m"
 
     draw_text(text_x, y1, style + padded_text)
+
+def textbox(text: str, y1: int, x1: int, y2: int, x2: int):
+    """Print text inside the rectangle (y1,x1) - (y2,x2), preserving ANSI
+    formatting while wrapping by visible length. Returns the list of raw
+    printed lines (including ANSI codes). If text doesn't fit, the last
+    visible line is truncated with '...'.
+    """
+
+    width = x2 - x1 + 1
+    height = y2 - y1 + 1
+
+    if width <= 0 or height <= 0:
+        return []
+
+    # split into tokens of whitespace and non-whitespace so we can wrap by words
+    tokens = re.split(r'(\s+)', text)
+
+    def split_token_chunks(tok, maxw):
+        # split a token (which may contain ANSI sequences) into raw chunks
+        # each with at most maxw visible characters
+        chunks = []
+        cur_raw = ''
+        cur_vis = 0
+        i = 0
+        L = len(tok)
+        while i < L:
+            m = ANSI_PATTERN.match(tok, i)
+            if m:
+                seq = m.group()
+                cur_raw += seq
+                i = m.end()
+                continue
+            # normal char
+            cur_raw += tok[i]
+            i += 1
+            cur_vis += 1
+            if cur_vis >= maxw:
+                chunks.append(cur_raw)
+                cur_raw = ''
+                cur_vis = 0
+        if cur_raw != '':
+            chunks.append(cur_raw)
+        return chunks
+
+    lines = []
+    cur_raw = ''
+    cur_vis = 0
+
+    def flush():
+        nonlocal cur_raw, cur_vis
+        lines.append(cur_raw)
+        cur_raw = ''
+        cur_vis = 0
+
+    for tok in tokens:
+        if tok == '':
+            continue
+        tok_vis = visible_len(tok)
+
+        # treat whitespace tokens as a single space when wrapping, but preserve surrounding ANSI
+        if tok.isspace():
+            space_raw = tok
+            # collapse to one visible space
+            space_vis = 1
+            if cur_vis == 0:
+                # skip leading space at line start
+                continue
+            if cur_vis + space_vis <= width:
+                cur_raw += space_raw
+                cur_vis += space_vis
+            else:
+                flush()
+            if len(lines) >= height:
+                break
+            continue
+
+        # non-space token (a word)
+        if tok_vis <= (width - cur_vis):
+            cur_raw += tok
+            cur_vis += tok_vis
+        else:
+            # doesn't fit as-is
+            if tok_vis > width:
+                # token itself must be split
+                first_chunk_space = width - cur_vis
+                if first_chunk_space > 0:
+                    chunks = split_token_chunks(tok, first_chunk_space)
+                    # append first chunk to current line
+                    cur_raw += chunks[0]
+                    flush()
+                    # append remaining chunks as full lines
+                    for c in chunks[1:]:
+                        if len(lines) >= height:
+                            break
+                        lines.append(c)
+                    cur_raw = ''
+                    cur_vis = 0
+                else:
+                    # start fresh lines with token chunks
+                    chunks = split_token_chunks(tok, width)
+                    for c in chunks:
+                        if len(lines) >= height:
+                            break
+                        lines.append(c)
+                    cur_raw = ''
+                    cur_vis = 0
+            else:
+                # move word to next line
+                flush()
+                if len(lines) >= height:
+                    break
+                cur_raw += tok
+                cur_vis += tok_vis
+
+        if len(lines) >= height:
+            break
+
+    if len(lines) < height and cur_raw != '':
+        lines.append(cur_raw)
+
+    overflow = False
+    # Check if original text (visible) fits into produced lines
+    visible_total = visible_len(ANSI_PATTERN.sub('', text))
+    produced_vis = sum(visible_len(l) for l in lines)
+    if produced_vis < visible_total or len(lines) > height:
+        overflow = True
+
+    # Truncate/pad to height
+    if len(lines) > height:
+        lines = lines[:height]
+        overflow = True
+
+    if overflow and height > 0:
+        last_idx = height - 1
+        last = lines[last_idx]
+        # compute allowed visible space for ellipsis
+        if width <= 3:
+            ell = '.' * width
+            lines[last_idx] = ell
+        else:
+            allowed = width - 3
+            # strip ANSI for measuring, but keep raw prefixes/suffixes
+            # build a truncated raw string up to allowed visible chars
+            raw = last
+            cur = ''
+            cur_vis = 0
+            i = 0
+            L = len(raw)
+            while i < L and cur_vis < allowed:
+                m = ANSI_PATTERN.match(raw, i)
+                if m:
+                    seq = m.group()
+                    cur += seq
+                    i = m.end()
+                    continue
+                cur += raw[i]
+                i += 1
+                cur_vis += 1
+            cur = cur.rstrip()
+            lines[last_idx] = cur + ''
+
+    # pad with empty lines if necessary
+    while len(lines) < height:
+        lines.append('')
+
+    # print lines at given coordinates (do not start at column 1)
+    for idx, raw_line in enumerate(lines):
+        row = y1 + idx
+        draw_text(x1, row, raw_line)
+
+    return lines
 
 def center(text, row):
     cols = os.get_terminal_size().columns
@@ -2028,13 +2210,218 @@ Type an attribute name to override.
         cursor(False)
 
 def battle():
+    d.frombattle = True
+    d.latest_action = ""
     cls()
-    print("battle")
-    while True:
+    game.goto = character # load stuff then immediately jump to battle2() from there
+    return
+
+def battle2():
+    d.frombattle = False
+    player.load()
+    global enemy
+
+    # test for now, nothing special:
+    player.hp = player.total_hp
+    cls()
+    print("Entering battle...")
+
+    # enemy data for testing:
+    enemy = EnemyData(
+        name="Goblin",
+        hp=3000,
+        attack=1,
+        defense=0,
+        xp_reward=20,
+        gold_reward=10,
+        speed=100,
+    )
+    # prepare action values
+    player.av = player.speed
+    enemy.av = enemy.speed
+    d.av_difference = player.av - enemy.av
+    
+    # simulate battle
+    game.goto = battle_loop
+    return
+
+def show_data():
+    cls()
+    
+    # show enemy data
+    print(f"Enemy: {enemy.name}")
+    print(f"HP: {enemy.hp}")
+    print(f"Attack: {enemy.attack}")
+    print(f"Defense: {enemy.defense}")
+    print(f"XP Reward: {enemy.xp_reward}")
+    print(f"Gold Reward: {enemy.gold_reward}")
+    print(f"Speed: {enemy.speed}")
+    print("-" * 20)
+    # action value
+    print(f"Enemy AV: {enemy.av} | Player AV: {player.av} | AV Difference: {d.av_difference}")
+    # separator
+    print("-" * 20)
+    # show yourself
+    print(f"Player: {player.name}")
+    print(f"HP: {player.hp}/{player.total_hp}")
+    print(f"ATK: {player.total_dmg}")
+    print(f"DEF: {player.total_def}")
+    print(f"SPD: {player.speed}")
+    # separator
+    print("-" * 20)
+    # show options
+    print(f"Options:")
+    print(f"  {bind.attack.upper()}: Attack")
+    print(f"  {bind.skill.upper()}: Use skill")
+    print(f"  {bind.ult.upper()}: Use ultimate")
+    print(f"  {bind.heal.upper()}: Heal")
+    print(f"  {bind.forfeit.upper()}: Forfeit battle")
+    # separator
+    print("-" * 20)
+    # show latest actions (simple variable)
+    if hasattr(d, "latest_action"):
+        print(f"Latest action:\n→ {d.latest_action}")
+
+def enemy_attack():
+    sound("shield")
+    dmgdealt = max(0, round(enemy.attack * (100 - player.total_def) / 100))
+    player.hp -= dmgdealt
+    d.latest_action += f"→ ⚔️ The {enemy.name} attacks you for {dmgdealt} damage."
+    
+    # then, heal according to your regen (regen is float = % of your total HP healed after each attack):
+    if player.regen > 0:
+        heal_amount = round(player.total_hp * (player.regen / 100))
+        player.hp = min(player.total_hp, player.hp + heal_amount)
+        d.latest_action += f"\n→ 💧 You regenerate {heal_amount} HP."
+    
+    # if player hp is above max, set it to max
+    if player.hp >= player.total_hp:
+        player.hp = player.total_hp
+        d.latest_action += f"\n→ 💖 Your HP is now full at {player.total_hp} HP!"
+    
+    # add separator to latest action
+    d.latest_action += f"\n{'-'*20}\n"
+    
+    # add action value to player based on his speed
+    player.av += player.speed
+    enemy.av -= 100
+    d.av_difference = player.av - enemy.av
+    show_data()
+    game.goto = battle_loop
+    return
+
+# functions for actions
+def battle_attack():
+    
+    # add action value to enemy based on his speed
+    enemy.av += enemy.speed
+    player.av -= 100
+    d.av_difference = player.av - enemy.av
+    
+    # normal hits (enemy.defense is a % reduction to damage, so 5 defense means 5% damage reduction):
+    dmgdealt = round(max(0, int(player.total_dmg * (100 - enemy.defense) / 100)))
+    d.latest_action += f"❇️ You attack the {enemy.name} for {dmgdealt} damage."
+    
+    # if critical (chance triggers: random int 0-100, if it's less than player's crit chance, it's a crit):
+    if random.randint(0, 100) < player.crit_rate:
+        dmgdealt = round(dmgdealt * (1 + (getattr(item, "atkcrit", 0) / 100)))
+        d.latest_action = f"✴️ Critical hit! You attack the {enemy.name} for {dmgdealt} damage."
+    
+    enemy.hp -= dmgdealt
+    sound("sword2")
+    
+    # then, life steal (steal is float = % of damage dealt that is returned to you as HP):
+    if player.life_steal > 0:
+        steal_amount = round(dmgdealt * (player.life_steal / 100))
+        player.hp = min(player.total_hp, player.hp + steal_amount)
+        d.latest_action += f"\n→ 🩸 You also steal {steal_amount} HP from the enemy."
+        
+    # if player hp is above max, set it to max
+    if player.hp >= player.total_hp:
+        player.hp = player.total_hp
+        d.latest_action += f"\n→ 💖 Your HP is now full at {player.total_hp} HP!"
+    
+    # add separator to latest action
+    d.latest_action += f"\n{'-'*20}\n"
+    show_data()
+    game.goto = battle_loop
+    return
+
+def battle_skill():
+    game.goto = battle_loop
+    return
+
+def battle_ult():
+    game.goto = battle_loop
+    return
+
+def battle_heal():
+    game.goto = battle_loop
+    return
+
+def battle_forfeit():
+    game.goto = battle_loop
+    return
+
+# battle loop incoming:
+def battle_loop():
+    if enemy.hp > 0 and player.hp > 0:
+        # if enemy's turn, enemy attack (based on action value: if enemy has higher AV, their turn!)
+        if enemy.av > player.av or player.av <= 0:
+            time.sleep(0.4)
+            game.goto = enemy_attack
+            return
+        # if AV diffence is >100, you get a free turn (enemy is too slow)
+        if d.av_difference >= 100:
+            d.latest_action += f"→ 🕒 You get a free turn next round because the {enemy.name} is too slow!"
+            enemy.av -= 100
+            sound("potion")
+        # if AV diffence is <-100, enemy gets a free turn (enemy is too fast)
+        elif d.av_difference < -100:
+            d.latest_action += f"→ 🕒 The {enemy.name} gets a free turn because it's too fast!"
+            game.goto = enemy_attack
+            return
+        
+        show_data()
+        
+        d.latest_action = ""
+        # player always attacks first 
         k = key()
-        if k.lower() == "b":
+        if k.lower() == bind.attack:
+            game.goto = battle_attack
+            return
+        elif k.lower() == bind.skill:
+            game.goto = battle_skill
+            return
+        elif k.lower() == bind.ult:
+            game.goto = battle_ult
+            return
+        elif k.lower() == bind.heal:
+            game.goto = battle_heal
+            return
+        elif k.lower() == bind.forfeit:
             game.goto = mainmenu
             return
+    # if you die:
+    elif player.hp <= 0:
+        # separator
+        print("-" * 20)
+        print("You were defeated...")
+        input("Press Enter to return to the main menu.")
+        game.goto = mainmenu
+        return
+    # if enemy dies:
+    elif enemy.hp <= 0:
+        # sep
+        print("-" * 20)
+        print(f"You defeated the {enemy.name}!")
+        print(f"You gained {enemy.xp_reward} XP and {enemy.gold_reward} gold.")
+        player.xp += enemy.xp_reward
+        player.money += enemy.gold_reward
+        player.save()
+        input("Press Enter to return to the main menu.")
+        game.goto = mainmenu
+        return
     
 
 def house():
@@ -2452,6 +2839,11 @@ def character():
     player.total_dmg = totaldmg
     player.total_def = totaldef
     player.total_hp = totalhp
+    
+    # if "from battle" is defined, jump straight to battle (easier loading; no need to write a separate battle loading function)
+    if d.frombattle == True:
+        game.goto = battle2
+        return
     
     print(f"""
 [1;{number}H{reset}
@@ -3273,6 +3665,40 @@ def maininv():
     
     gdi_pager()
 
+
+
+
+# item ability specials (line two)
+def item_ability_specials(name):
+    # weapons:
+    # if d.ability_line1, d.ability_line2, d.notice, or d.notice_text are defined, delete them
+    d.ability_line1 = None
+    d.ability_line2 = None
+    d.notice = None
+    d.notice_text = None
+    blank(1,80,8,126)
+    if name == "Befriend a Shark in 30 Days":
+        d.ability_line1 = f"A cute shark will attack after you do!"
+        d.ability_line2 = f"He's considered a {rainbow(text="phantom", bold=True, offset=d.offset)} during a battle."
+        d.notice = "Phantom"
+        d.notice_text = f"Phantom beings can't be killed. They appear {shine(text="invisible", bold=True, offset=d.offset)} to all enemies."
+    elif name == "Krita User Manual":
+        d.ability_line1 = f"Hitting an enemy makes it panic about"
+        d.ability_line2 = f"color theory → it gets {xlbrown}dizzy{reset} permanently."
+        d.notice = "Dizzy"
+        d.notice_text = f"Every stack makes the target move 1% slower and take 1% more damage from attacks."
+    
+    
+    # if d.ability_line1 is defined:
+    if d.ability_line1:
+        print(f"\033[27;64H› {xf}{d.ability_line1}")
+    if d.ability_line2:
+        print(f"\033[28;64H  {xf}{d.ability_line2}")
+    if d.notice:
+        draw_box(2,90,8,126,text=f"{d.notice}",text_color=xlyellow,border_color=xlorange,bold=True,align="right")
+    if d.notice_text:
+        textbox(text=d.notice_text,y1=4,x1=93,y2=6,x2=123)
+
 def itemsel_waitkey():
     # only reset offset if preservation was off
     if not game.preserve_offset:
@@ -3811,20 +4237,22 @@ def displaynewsel():
             atkcrit = item.atkcrit
         print(f"\033[24;80H✴️ {xlyellow}{bold}{atkcrit}{unbold}% Crit")
         
-        print(f"\033[24;94H📶 {xb}Lv {bold}{item.level}{unbold}{x3}/{player.level}")
+        print(f"\033[24;94H📶 {xf}Lv {bold}{item.level}{unbold}{x7}/{player.level}")
         
         ability = item.ability if item.ability and item.ability.strip() else "None"
-        print(f"\033[26;63H🍹 {bold}{xlorange}Combat ability:{reset}")
+        print(f"\033[26;63H🍹 {bold}{xf}Combat ability:{reset}")
         print(f"\033[27;64H› {xf}{ability}")
         print(f"\033[31;63H📜{xlorange} {item.description}\033[0m")
     else:
         print(f"\033[24;66H🛡️ {xb}{bold}{getattr(item, 'defense', 0)}{unbold}% DEF")
-        print(f"\033[24;94H📶 {xb}Lv {bold}{item.level}{unbold}{x3}/{player.level}")
+        print(f"\033[24;94H📶 {xf}Lv {bold}{item.level}{unbold}{x7}/{player.level}")
         ability = item.ability if item.ability and item.ability.strip() else "None"
         description = item.description if item.description and item.description.strip() else "None"
-        print(f"\033[26;63H🍹 {bold}{xlorange}Combat ability:{reset}")
+        print(f"\033[26;63H🍹 {bold}{xf}Combat ability:{reset}")
         print(f"\033[27;64H› {xf}{ability}")
         print(f"\033[31;63H📜{xlorange} {description}\033[0m")
+    # finally, call function to display item ability specials, if applicable
+    item_ability_specials(item.name)
 
 
 
