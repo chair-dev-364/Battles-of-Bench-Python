@@ -923,25 +923,32 @@ def load_item(item_id, category="Weapons"):
     elif category == "Fragments":
         _clear_object(fragment)
 
-        fragment.name = parts[0]
-        fragment.level = int(parts[1])
+        fragment.name = parts[0] if len(parts) > 0 else None
+        fragment.level = int(parts[1]) if len(parts) > 1 and parts[1] else 0
 
         stats = parts[2:]
-        # process fragments details
-        return fragment
 
         for i in range(0, len(stats), 2):
-            stat_name = stats[i]
+            stat_name = stats[i] if stats[i] != "" else None
             stat_value = stats[i + 1] if i + 1 < len(stats) else None
 
-            if stat_value is not None:
+            if stat_value is not None and stat_value != "":
                 try:
-                    stat_value = float(stat_value)
-                except ValueError:
+                    if "." in stat_value:
+                        val = float(stat_value)
+                        if val.is_integer():
+                            val = int(val)
+                        stat_value = val
+                    else:
+                        stat_value = int(stat_value)
+                except Exception:
                     pass
 
-            setattr(fragment, f"stat{i//2 + 1}", stat_name)
-            setattr(fragment, f"stat{i//2 + 1}_value", stat_value)
+            idx = i // 2 + 1
+            setattr(fragment, f"stat{idx}", stat_name)
+            setattr(fragment, f"stat{idx}_value", stat_value)
+
+        return fragment
 
     else:
         raise ValueError(f"Unknown category: {category}")
@@ -2771,7 +2778,7 @@ def character():
     del base_dodge, armor_dodge, weapon_dodge, head_dodge
     
     # now, let's do effect res
-    # for example, either reduce duration of negative effects by x%, or reduce their potency by x%
+    # effect res has a x% chance to negate enemy debuffs (if negation FAILS, its POTENCY is reduced by x% instead)
     # for every 1 player level => 0.2% effect res
     base_effect_res = player.level * 0.2
     # armor gives 1% effect res per 20 levels
@@ -2791,11 +2798,11 @@ def character():
     weapon_life_steal = (getattr(item, "level", 0) // 10) * 0.05
     # weapon life steal multiplier based on rarity of weapon
     rarity_multiplier = {
-        "08": 1.0,
-        "02": 2.0,
-        "03": 3.0,
-        "0d": 4.0,
-        "0e": 5.0,
+        "08": 1.0, # common
+        "02": 1.5, # uncommon
+        "03": 2.0, # rare
+        "0d": 2.5, # epic
+        "0e": 3.0, # legendary
     }
     weapon_life_steal *= rarity_multiplier.get(getattr(item, "rarity", "08"), 1.0)
     # round it to at most one decimal place
@@ -2807,8 +2814,8 @@ def character():
     bonus_life_steal = 0
     player.life_steal = base_life_steal + weapon_life_steal + bonus_life_steal
     
-    # regeneration (get more hp from potions)
-    # base potion gives 20% back
+    # regeneration is the percentage of your max HP you heal back after each battle round 
+    # base is 0.2% max HP regen after each battle round
     base_regen = 0.2
     # if weapon substat is regen, add the same
     weapon_regen = 0
@@ -2828,8 +2835,28 @@ def character():
         weapon_speed = item.substat_value
     # for every 10 levels of player, +5 speed
     level_speed = (player.level // 10) * 5
-    # any bonuses:
+    
+    # at breakpoints of 20, 40, 60, 80, 100, +1 speed each (stacking)
+    if player.level >= 20:
+        level_speed += 1
+    if player.level >= 40:
+        level_speed += 1
+    if player.level >= 60:
+        level_speed += 1
+    if player.level >= 80:
+        level_speed += 1
+    if player.level >= 100:
+        level_speed += 1
+    
     bonus_speed = 0
+    # if fragment's stat is speed, add it
+    if getattr(fragment, "stat1", None) == "Speed":
+        bonus_speed += getattr(fragment, "stat1_value", 0)
+    if getattr(fragment, "stat2", None) == "Speed":
+        bonus_speed += getattr(fragment, "stat2_value", 0)
+    if getattr(fragment, "stat3", None) == "Speed":
+        bonus_speed += getattr(fragment, "stat3_value", 0)
+    
     player.speed = base_speed + weapon_speed + level_speed + bonus_speed
     del base_speed, weapon_speed, level_speed, bonus_speed
     

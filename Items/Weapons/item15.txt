@@ -1,0 +1,1 @@
+bow;;0e;;The En Passanter;;80;;24308;;277.5;;Defence;;9;;The chess player's ultimate trick.;;3;;+30 percent skill DMG.;;1;;1

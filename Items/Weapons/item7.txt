@@ -1,1 +1,1 @@
-axe;;0d;;Test Axe;;90;;58151;;248;;Defence;;5;;3;;6;;No ability.;;0;;0
+bow;;0d;;Soul Stealer;;71;;7247;;226.5;;Health;;32;;Stealing the energy, let's go!;;1;;No ability.;;0;;0

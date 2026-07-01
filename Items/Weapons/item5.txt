@@ -1,1 +1,1 @@
-wand;;03;;Magic Wand Pro Max;;1;;15;;50;;Strength;;5;;a;;1;;No ability.;;0;;0
+book;;0d;;Krita User Manual;;50;;650;;160.0;;Regeneration;;25;;The mental health destroyer.;;3;;add later...;;0;;0

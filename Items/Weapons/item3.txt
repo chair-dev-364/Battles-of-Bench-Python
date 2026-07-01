@@ -1,1 +1,1 @@
-knife;;02;;Knife something idk;;25;;1016;;38.0;;Defence;;5;;Knife yay;;2;;0;;0;;0
+book;;0d;;Diary of Inner Thoughts;;100;;8000;;188.0;;Strength;;3;;Is it safe to write in there?;;4;;Your Skill reduces enemy ATK twice as much.;;0;;2

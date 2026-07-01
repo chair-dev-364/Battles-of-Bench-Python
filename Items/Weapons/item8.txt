@@ -1,1 +1,1 @@
-bow;;0d;;The Melter;;100;;23091;;401;;Health;;25;;The bow of mass destruction. Not joking.;;3;;No ability.;;0;;4
+axe;;0d;;Test Axe;;90;;58151;;248;;Defence;;5;;3;;6;;No ability.;;0;;0
