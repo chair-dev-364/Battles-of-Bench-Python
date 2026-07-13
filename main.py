@@ -24,12 +24,17 @@
 import msvcrt, os, time, sys, ctypes, ast, math, operator as op, subprocess, json, re, random, shutil, socket, tempfile, stat, urllib.request  # noqa: E401, E402
 from pathlib import Path  # noqa: E402
 from typing import Literal  # noqa: E402
+RGB="[38;2;"
 
 version=1
 subversion=2
+subberversion=1
 
-RGB="[38;2;"
-TITLE = f"Battles of Bench - a{version}.{subversion}"
+
+if subberversion != 0:
+    TITLE = f"Battles of Bench - a{version}.{subversion}.{subberversion}"
+else:
+    TITLE = f"Battles of Bench - a{version}.{subversion}"
 
 os.system(f"title {TITLE}")
 sys.stdout.reconfigure(encoding="utf-8") # actually make it display shit
@@ -768,7 +773,7 @@ def load_item(item_id, category="Weapons"):
                     "substat": None,
                     "substat_value": 0,
                     "description": None,
-                    "level_power": 0,
+                    "level_power": 0.0,
                     "ability": None,
                     "locked": 0,
                     "refine": 0,
@@ -867,7 +872,7 @@ def load_item(item_id, category="Weapons"):
         item.atk = int(item.atk)
         item.atkcrit = float(item.atkcrit)
         item.substat_value = int(item.substat_value)
-        item.level_power = int(item.level_power)
+        item.level_power = float(item.level_power)
         item.locked = int(item.locked)
         item.refine = int(item.refine)
 
@@ -973,7 +978,7 @@ def save_item(item_id, category="Weapons"):
             str(getattr(item, "substat", "") or ""),
             str(getattr(item, "substat_value", 0)),
             str(getattr(item, "description", "") or ""),
-            str(getattr(item, "level_power", 0)),
+            str(getattr(item, "level_power", 0.0)),
             str(getattr(item, "ability", "") or ""),
             str(getattr(item, "locked", 0)),
             str(getattr(item, "refine", 0))
@@ -1167,6 +1172,21 @@ def draw_box(
         style += "\x1b[1m"
 
     draw_text(text_x, y1, style + padded_text)
+    
+def calculate_weapon_atk(item_obj=None):
+    """
+    Calculates the weapon's ATK from its base ATK, level and growth.
+    item.atk = Base ATK (stored in file)
+    item.level = Weapon level
+    item.level_power = Growth (e.g. 0.008 = 0.8% per level)
+    """
+
+    target = item_obj if item_obj is not None else item
+    base = float(getattr(target, "atk", 0))
+    level = int(getattr(target, "level", 0))
+    growth = float(getattr(target, "level_power", 0))
+
+    return round(base * ((1 + growth) ** level))
 
 def textbox(text: str, y1: int, x1: int, y2: int, x2: int):
     """Print text inside the rectangle (y1,x1) - (y2,x2), preserving ANSI
@@ -2218,10 +2238,125 @@ Type an attribute name to override.
 
 def battle():
     d.frombattle = True
+    d.first_turn = True
     d.latest_action = ""
     cls()
     game.goto = character # load stuff then immediately jump to battle2() from there
     return
+
+def whose_turn():
+    if player.av >= 100 and player.av >= enemy.av:
+        return "player" # player
+    if enemy.av >= 100 and enemy.av > player.av:
+        return "enemy" # enemy
+    return "none" # regen
+
+def player_turn():
+    d.latest_action += f"\n  {xf}→ Your turn, waiting for key..."
+    show_data()
+    k = key()
+    if k.lower() == bind.attack:
+        game.goto = battle_attack
+        return
+    elif k.lower() == bind.skill:
+        game.goto = battle_skill
+        return
+    elif k.lower() == bind.ult:
+        game.goto = battle_ult
+        return
+    elif k.lower() == bind.heal:
+        game.goto = battle_heal
+        return
+    elif k.lower() == bind.forfeit:
+        game.goto = mainmenu
+        return
+
+def enemy_turn():
+    d.latest_action += f"\n  {xf}→ Enemy's turn, attacking..."
+    game.goto = enemy_attack
+    return
+
+def new_turn():
+    d.latest_action += f"\n  {xf}→ New turn started!"
+    if not d.first_turn:
+         if player.regen > 0:
+             heal_amount = round(player.total_hp * (player.regen / 100))
+             player.hp = min(player.total_hp, player.hp + heal_amount)
+             d.latest_action += f"\n  {xb}💧  Regenerated {heal_amount} HP{reset}"
+    d.first_turn = False
+    
+    # if player hp is above max, set it to max
+    if player.hp >= player.total_hp:
+        player.hp = player.total_hp
+        
+    # regen action values
+    player.av += player.speed
+    enemy.av += enemy.speed
+
+    d.av_difference = player.av - enemy.av
+
+    # check for whose turn it is
+    turn = whose_turn()
+    if turn == "player":
+        game.goto = player_turn
+        return
+    elif turn == "enemy":
+        game.goto = enemy_turn
+        return
+    else:
+        game.goto = new_turn # keep regenerating until someone can act
+        return
+    
+def battle_lose():
+    cls()
+    print(f"{xb}{bold}=== YOU LOSE ==={reset}")
+    print(f"{xf}You have been defeated by the {enemy.name}.")
+    print(f"{x8}Press any key to return to the main menu.{reset}")
+    key()
+    game.goto = mainmenu
+    return
+
+def battle_win():
+    cls()
+    print(f"{xb}{bold}=== YOU WIN ==={reset}")
+    print(f"{xf}You have defeated the {enemy.name}.")
+    print(f"{x2}+{enemy.xp_reward} XP{reset}")
+    print(f"{x2}+{enemy.gold_reward} Gold{reset}")
+    player.xp += enemy.xp_reward
+    player.money += enemy.gold_reward
+    player.save()
+    print(f"{x8}Press any key to return to the main menu.{reset}")
+    key()
+    game.goto = mainmenu
+    return
+
+def after_attack():
+    # if dead:
+    if player.hp <= 0:
+        game.goto = battle_lose
+        return
+    elif enemy.hp <= 0:
+        game.goto = battle_win
+        return
+    show_data()
+    time.sleep(0.5)
+    if player.av >= 100 or enemy.av >= 100:
+        # someone can still act
+        turn = whose_turn()
+        if turn == "player":
+            show_data()
+            game.goto = player_turn
+            return
+        elif turn == "enemy":
+            show_data()
+            game.goto = enemy_turn
+            return
+    else:
+        game.goto = new_turn
+        return
+
+
+    
 
 def battle2():
     d.frombattle = False
@@ -2234,105 +2369,156 @@ def battle2():
     print("Entering battle...")
 
     # enemy data for testing:
-    enemy = EnemyData(
-        name="Goblin",
-        hp=3000,
-        attack=1,
-        defense=0,
-        xp_reward=20,
-        gold_reward=10,
-        speed=100,
-    )
-    # prepare action values
-    player.av = player.speed
-    enemy.av = enemy.speed
-    d.av_difference = player.av - enemy.av
     
+    #
+    enemies_list = [
+        EnemyData(name="Goblin", hp=7000, attack=1000, defense=10, xp_reward=20, gold_reward=10, speed=110),
+        EnemyData(name="Orc", hp=5000, attack=2, defense=1, xp_reward=50, gold_reward=25, speed=80),
+        EnemyData(name="Troll", hp=8000, attack=3, defense=2, xp_reward=100, gold_reward=50, speed=60),
+        EnemyData(name="Dragon", hp=15000, attack=5, defense=3, xp_reward=200, gold_reward=100, speed=40),
+        EnemyData(name="Dark Knight", hp=12000, attack=4, defense=4, xp_reward=150, gold_reward=75, speed=50),
+        EnemyData(name="Necromancer", hp=10000, attack=3, defense=2, xp_reward=120, gold_reward=60, speed=70),
+    ]    
+    # give the player the option to choose an enemy to fight
+    cls()
+    print(f"{xb}{bold}=== CHOOSE AN ENEMY ==={reset}")
+    for idx, enemy_data in enumerate(enemies_list, start=1):
+        print(f"{xa}[{idx}]{xf} {enemy_data.name} (HP: {enemy_data.hp}, ATK: {enemy_data.attack}, DEF: {enemy_data.defense}, SPD: {enemy_data.speed})")
+    print(f"{xc}[B]{xf} Back to main menu")
+    while True:
+        k = key()
+        if k.lower() == "b":
+            game.goto = mainmenu
+            return
+        try:
+            choice = int(k)
+            if 1 <= choice <= len(enemies_list):
+                enemy = enemies_list[choice - 1]
+                break
+        except ValueError:
+            pass
+        
+    # and load!
+    enemy.max_hp = enemy.hp
+    # prepare action values
+    player.av = 0
+    enemy.av = 0
+    d.av_difference = player.av - enemy.av
+    av_required = 100
+    d.av_required = av_required
     # simulate battle
     game.goto = battle_loop
     return
 
 def show_data():
     cls()
+
+    def hp_bar(current, maximum, width=20):
+        if maximum <= 0:
+            pct = 0.0
+        else:
+            pct = max(0.0, min(1.0, current / maximum))
+        fill = int(width * pct)
+        empty = width - fill
+        return f"{xa}{'█' * fill}{x8}{'░' * empty}{reset}"
+
+    enemy_max_hp = max(getattr(enemy, "max_hp", getattr(enemy, "hp", 1)), 1)
+    player_max_hp = max(getattr(player, "total_hp", getattr(player, "hp", 1)), 1)
+
+    # status indicator of turns
+    # get console width
+    console_width = os.get_terminal_size().columns//2
+    if player.av >= enemy.av:
+        # your turn
+        turn_indicator = f"{xf}{xbb}{bold}→ Your turn! →"
+        d.temp_player_turn_indicator = turn_indicator
+        fill = f"{xbb} "
+    else:
+        turn_indicator = f"{xf}{xbc}{bold}← Enemy's turn! ←"
+        d.temp_enemy_turn_indicator = turn_indicator
+        fill = f"{xbc} "
+    length = visible_len(turn_indicator)
+    side = max(0, (console_width - length) // 2)
+    extra = max(0, console_width - length - side)
+    turn_text = fill * side + turn_indicator + fill * extra
+    print(f"[1;1H#3{turn_text}")
+    print(f"[2;1H#4{turn_text}")
     
-    # show enemy data
-    print(f"Enemy: {enemy.name}")
-    print(f"HP: {enemy.hp}")
-    print(f"Attack: {enemy.attack}")
-    print(f"Defense: {enemy.defense}")
-    print(f"XP Reward: {enemy.xp_reward}")
-    print(f"Gold Reward: {enemy.gold_reward}")
-    print(f"Speed: {enemy.speed}")
-    print("-" * 20)
-    # action value
-    print(f"Enemy AV: {enemy.av} | Player AV: {player.av} | AV Difference: {d.av_difference}")
-    # separator
-    print("-" * 20)
-    # show yourself
-    print(f"Player: {player.name}")
-    print(f"HP: {player.hp}/{player.total_hp}")
-    print(f"ATK: {player.total_dmg}")
-    print(f"DEF: {player.total_def}")
-    print(f"SPD: {player.speed}")
-    # separator
-    print("-" * 20)
-    # show options
-    print(f"Options:")
-    print(f"  {bind.attack.upper()}: Attack")
-    print(f"  {bind.skill.upper()}: Use skill")
-    print(f"  {bind.ult.upper()}: Use ultimate")
-    print(f"  {bind.heal.upper()}: Heal")
-    print(f"  {bind.forfeit.upper()}: Forfeit battle")
-    # separator
-    print("-" * 20)
-    # show latest actions (simple variable)
-    if hasattr(d, "latest_action"):
-        print(f"Latest action:\n→ {d.latest_action}")
+    print()
+    print()
+    print(f"{reset}{bold}{xf}  → Battle ←{reset}")
+    print()
+
+    print(f"{bold}{xlred}{enemy.name}{reset}")
+    print(f"  {xb4}⚔️ Enemy 1 of 1{reset}")
+    print(f"  {x7}HP{reset}  {hp_bar(enemy.hp, enemy_max_hp)}  {xf}{enemy.hp}/{enemy_max_hp}{reset}")
+    print(f"  {x7}ATK{reset} {xf}{enemy.attack}{reset}  |  {x7}DEF{reset} {xf}{enemy.defense}{reset}  |  {x7}SPD{reset} {xf}{enemy.speed}{reset}")
+    print(f"  {x7}Action Value{reset}  {xb}{enemy.av}{reset}  ({xf}{d.av_difference:+d}{reset})")
+    print(f"  {x7}Reward:{reset} {xa}{enemy.xp_reward} XP{reset} and {xe}{enemy.gold_reward} gold coins{reset}")
+    print()
+
+    print(f"{bold}{xa}▸ {player.name}{reset}")
+    print(f"  {x7}HP{reset}  {hp_bar(player.hp, player_max_hp)}  {xf}{player.hp}/{player_max_hp}{reset}")
+    print(f"  {x7}Action Value{reset}  {xb}{player.av}{reset}")
+    print(f"  {x7}ATK{reset} {xf}{player.total_dmg}{reset}  |  {x7}DEF{reset} {xf}{player.total_def}{reset}  |  {x7}SPD{reset} {xf}{player.speed}{reset}")
+    print(f"  {x7}Regen{reset} {xf}{player.regen}%{reset}  |  {x7}Lifesteal{reset} {xf}{player.life_steal}%{reset}  |  {x7}Crit{reset} {xf}{player.crit_rate}%{reset}")
+    print()
+
+    print(f"{bold}{xb}⚙️ Keybinds you can use:{reset}")
+    print(f"  {xf}{bind.attack.upper()}{reset} {x7}Attack{reset}  •  {xf}{bind.skill.upper()}{reset} {x7}Skill{reset}  •  {xf}{bind.ult.upper()}{reset} {x7}Ultimate{reset}  •  {xf}{bind.heal.upper()}{reset} {x7}Heal{reset}  •  {xf}{bind.forfeit.upper()}{reset} {x7}Forfeit{reset}")
+    print()
+    # if it's your turn or not,
+    if player.av > enemy.av:
+        turn_indicator = f"{xa} Your turn!{reset}"
+    else:
+        turn_indicator = f"{xlred} Enemy's turn!{reset}"
+    print(f"{bold}{x7}● Last action:{reset}{turn_indicator}")
+    if hasattr(d, "latest_action") and d.latest_action.strip():
+        lines = [line.strip() for line in d.latest_action.splitlines() if line.strip()]
+        for line in lines[:4]:
+            print(f"  {line[:95]}")
+    else:
+        print(f"  {x7}Still nothing! Maybe try pressing some of the keys above, hmm?{reset}")
 
 def enemy_attack():
     sound("shield")
     dmgdealt = max(0, round(enemy.attack * (100 - player.total_def) / 100))
     player.hp -= dmgdealt
-    d.latest_action += f"→ ⚔️ The {enemy.name} attacks you for {dmgdealt} damage."
-    
-    # then, heal according to your regen (regen is float = % of your total HP healed after each attack):
-    if player.regen > 0:
-        heal_amount = round(player.total_hp * (player.regen / 100))
-        player.hp = min(player.total_hp, player.hp + heal_amount)
-        d.latest_action += f"\n→ 💧 You regenerate {heal_amount} HP."
+    if dmgdealt > 0:
+        d.latest_action += f"{xlred}⚔  {dmgdealt}{xa} DMG RCV{reset}"
+    else:
+        d.latest_action += f"{x7}⚔  Blocked{reset}"
     
     # if player hp is above max, set it to max
     if player.hp >= player.total_hp:
         player.hp = player.total_hp
-        d.latest_action += f"\n→ 💖 Your HP is now full at {player.total_hp} HP!"
     
     # add separator to latest action
-    d.latest_action += f"\n{'-'*20}\n"
-    
-    # add action value to player based on his speed
-    player.av += player.speed
+    d.latest_action += f"\n{x7}{'─' * 60}{reset}\n"
+    # action value decrease
     enemy.av -= 100
     d.av_difference = player.av - enemy.av
     show_data()
-    game.goto = battle_loop
+    game.goto = after_attack
     return
 
 # functions for actions
 def battle_attack():
     
     # add action value to enemy based on his speed
-    enemy.av += enemy.speed
     player.av -= 100
     d.av_difference = player.av - enemy.av
     
     # normal hits (enemy.defense is a % reduction to damage, so 5 defense means 5% damage reduction):
     dmgdealt = round(max(0, int(player.total_dmg * (100 - enemy.defense) / 100)))
-    d.latest_action += f"❇️ You attack the {enemy.name} for {dmgdealt} damage."
     
     # if critical (chance triggers: random int 0-100, if it's less than player's crit chance, it's a crit):
-    if random.randint(0, 100) < player.crit_rate:
+    is_crit = random.randint(0, 100) < player.crit_rate
+    if is_crit:
         dmgdealt = round(dmgdealt * (1 + (getattr(item, "atkcrit", 0) / 100)))
-        d.latest_action = f"✴️ Critical hit! You attack the {enemy.name} for {dmgdealt} damage."
+        d.latest_action = f"{rgb(255, 215, 0)}✴  CRIT!{reset} {dmgdealt}{xa} DMG{reset}"
+    else:
+        d.latest_action = f"{xf}⚔  {dmgdealt}{xa} DMG{reset}"
     
     enemy.hp -= dmgdealt
     sound("sword2")
@@ -2341,17 +2527,16 @@ def battle_attack():
     if player.life_steal > 0:
         steal_amount = round(dmgdealt * (player.life_steal / 100))
         player.hp = min(player.total_hp, player.hp + steal_amount)
-        d.latest_action += f"\n→ 🩸 You also steal {steal_amount} HP from the enemy."
+        d.latest_action += f"\n{xlred}🩸 Life steal: {steal_amount} HP stolen!{reset}"
         
     # if player hp is above max, set it to max
     if player.hp >= player.total_hp:
         player.hp = player.total_hp
-        d.latest_action += f"\n→ 💖 Your HP is now full at {player.total_hp} HP!"
     
     # add separator to latest action
-    d.latest_action += f"\n{'-'*20}\n"
+    d.latest_action += f"\n{x7}{chr(9472) * 60}{reset}\n"
     show_data()
-    game.goto = battle_loop
+    game.goto = after_attack
     return
 
 def battle_skill():
@@ -2372,63 +2557,8 @@ def battle_forfeit():
 
 # battle loop incoming:
 def battle_loop():
-    if enemy.hp > 0 and player.hp > 0:
-        # if enemy's turn, enemy attack (based on action value: if enemy has higher AV, their turn!)
-        if enemy.av > player.av or player.av <= 0:
-            time.sleep(0.4)
-            game.goto = enemy_attack
-            return
-        # if AV diffence is >100, you get a free turn (enemy is too slow)
-        if d.av_difference >= 100:
-            d.latest_action += f"→ 🕒 You get a free turn next round because the {enemy.name} is too slow!"
-            enemy.av -= 100
-            sound("potion")
-        # if AV diffence is <-100, enemy gets a free turn (enemy is too fast)
-        elif d.av_difference < -100:
-            d.latest_action += f"→ 🕒 The {enemy.name} gets a free turn because it's too fast!"
-            game.goto = enemy_attack
-            return
-        
-        show_data()
-        
-        d.latest_action = ""
-        # player always attacks first 
-        k = key()
-        if k.lower() == bind.attack:
-            game.goto = battle_attack
-            return
-        elif k.lower() == bind.skill:
-            game.goto = battle_skill
-            return
-        elif k.lower() == bind.ult:
-            game.goto = battle_ult
-            return
-        elif k.lower() == bind.heal:
-            game.goto = battle_heal
-            return
-        elif k.lower() == bind.forfeit:
-            game.goto = mainmenu
-            return
-    # if you die:
-    elif player.hp <= 0:
-        # separator
-        print("-" * 20)
-        print("You were defeated...")
-        input("Press Enter to return to the main menu.")
-        game.goto = mainmenu
-        return
-    # if enemy dies:
-    elif enemy.hp <= 0:
-        # sep
-        print("-" * 20)
-        print(f"You defeated the {enemy.name}!")
-        print(f"You gained {enemy.xp_reward} XP and {enemy.gold_reward} gold.")
-        player.xp += enemy.xp_reward
-        player.money += enemy.gold_reward
-        player.save()
-        input("Press Enter to return to the main menu.")
-        game.goto = mainmenu
-        return
+    game.goto = new_turn
+    return
     
 
 def house():
@@ -2706,7 +2836,8 @@ def character():
     abilityatk=0
     abilitydef=0
     abilityhp=0
-    totaldmg=baseatk + abilityatk + item.atk
+    item.actual_atk=calculate_weapon_atk()
+    totaldmg=baseatk + abilityatk + item.actual_atk
     totalcritdmg=round(totaldmg*(1+item.atkcrit/100))
     item.atkcrit = round(item.atkcrit)
     basehp = round(basehp)
@@ -2977,7 +3108,7 @@ def character():
 [11;60H{reset}☺ 
 [11;62H{RGB}255;219;187mBase ATK{x8}------{xlyellow}{bold}{baseatk}{reset}
 [12;60H{reset}† 
-[12;62H{RGB}255;219;187mWeapon{x8}--------{xlyellow}{bold}{item.atk}{reset}
+[12;62H{RGB}255;219;187mWeapon{x8}--------{xlyellow}{bold}{item.actual_atk}{reset}
 [13;60H{reset}✸ 
 [13;62H{RGB}255;219;187mCrit Rate{x8}-----{xlyellow}{bold}{player.crit_rate}%{reset}
 [14;60H{reset}※ 
@@ -3582,7 +3713,9 @@ def inv_compare_label(category):
 
 def inv_compare_value(item_obj, category):
     if category == "Weapons":
-        return float(getattr(item_obj, "atk", 0)) * (1 + float(getattr(item_obj, "atkcrit", 0)/100))
+        final_atk = calculate_weapon_atk(item_obj)
+        crit_bonus = float(getattr(item_obj, "atkcrit", 0)) / 100
+        return float(final_atk) * (1 + crit_bonus)
     return float(getattr(item_obj, "defense", 0))
 
 
@@ -3816,7 +3949,8 @@ def itemsel_waitkey():
             equipped_path = inv_active_path(game.sel)
             if not equipped_path:
                 continue
-            if item.level <= player.level:
+            req_level = item.level * 4 if game.sel == "Weapons" else item.level
+            if req_level <= player.level:
                 current_equipped = str(read(equipped_path, default="none")).strip()
                 if current_equipped == str(d.currsel):
                     sound("pop_1")
@@ -3831,7 +3965,7 @@ def itemsel_waitkey():
             else:
                 blank(31,62, 31,62+48)
                 item_label = inv_item_label(game.sel)
-                print(f"\033[31;63H🚫 {xlred}This {item_label} requires level {bold}{item.level}{reset}{xlorange} (+{item.level-player.level} more){reset}{xlred}!")
+                print(f"\033[31;63H🚫 {xlred}This {item_label} requires level {bold}{req_level}{reset}{xlorange} (+{req_level-player.level} more){reset}{xlred}!")
                 sound("error2")
         # when you press L, lock the item (item.locked = 1)
         elif k.lower() == "l":
@@ -4062,7 +4196,8 @@ def unselect_current():
     if not item: return
     ityped = inv_type_icon(item)
 
-    colour = x7 if int(item.level) <= int(player.level) else xlred
+    req_level = int(item.level) * 4 if game.sel == 'Weapons' else int(item.level)
+    colour = x7 if req_level <= int(player.level) else xlred
     print(f"\033[{d.currselrow};20H\033[38;5;8m{d.currsel} › {ityped} \033[0m{x7}{item.name} \033[{d.currselrow};56H{colour}↑{item.level}")
 
 def itemsel_add():
@@ -4148,7 +4283,8 @@ def gdi():
         print(f"\033[{d.rowdisplay};20H{x8}{" "*40}{xf}",end="")
         
         indicator = "↑"
-        colour = x7 if int(item.level) <= int(player.level) else xlred
+        req_level = int(item.level) * 4 if game.sel == 'Weapons' else int(item.level)
+        colour = x7 if req_level <= int(player.level) else xlred
         if item.rarity == "08":
             itemcolour = xf
         elif item.rarity == "02":
@@ -4192,7 +4328,8 @@ def displaynewsel():
 
     # Write selection in list
     indicator = "↑"
-    colour = x7 if int(item.level) <= int(player.level) else xlred
+    req_level = int(item.level) * 4 if game.sel == 'Weapons' else int(item.level)
+    colour = x7 if req_level <= int(player.level) else xlred
     itemcolour = xf
     itemcolour_rgb = (255, 255, 255)
     if item.rarity == "08":
@@ -4210,7 +4347,8 @@ def displaynewsel():
     elif item.rarity == "0e":
         itemcolour = xe
         itemcolour_rgb = (240, 232, 158)
-    colour = x7 if int(item.level) <= int(player.level) else xlred
+    req_level = int(item.level) * 4 if game.sel == 'Weapons' else int(item.level)
+    colour = x7 if req_level <= int(player.level) else xlred
     if not game.preserve_offset:
         d.offset = 0
     else:
@@ -4223,7 +4361,8 @@ def displaynewsel():
     
     # Create XP bar
     xpbar = ""
-    filled = round((item.level*43)/100)
+    max_lvl = 25 if game.sel == 'Weapons' else 100
+    filled = round((item.level*43)/max_lvl)
     empty = 43-filled
     
     for i in range(filled):
@@ -4245,7 +4384,8 @@ def displaynewsel():
     if str(getattr(item, "locked", 0)) == "1":
         indicators += "🔒"
     # If item.level > player.level, show level requirement indicator
-    if int(item.level) > int(player.level):
+    req_level = int(item.level) * 4 if game.sel == 'Weapons' else int(item.level)
+    if req_level > int(player.level):
         indicators += f"🚫"
     # If item is currently in comparison, show comparison indicator
     if d.currsel in game.comparing:
@@ -4256,7 +4396,8 @@ def displaynewsel():
     if indicators == "":
         print(f"\033[16;63H{ityped} {bold}{underline}{itemcolour}{item.name}{reset}{x7} ({type_label}){reset}")
     if game.sel == "Weapons":
-        print(f"\033[24;66H❇️ {xa}{bold}{item.atk}{unbold} ATK")
+        item.actual_atk = calculate_weapon_atk()
+        print(f"\033[24;66H❇️ {xa}{bold}{item.actual_atk}{unbold} ATK")
         # if item.atkcrit can also be an int (0 after decimal point), convert to int
         try:
             atkcrit = int(float(item.atkcrit))

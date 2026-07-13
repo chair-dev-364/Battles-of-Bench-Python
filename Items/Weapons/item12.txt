@@ -1,1 +1,1 @@
-knife;;02;;Basic Knife;;25;;1016;;38;;Defence;;5;;Knife yay;;2;;ability;;1;;0
+knife;;02;;Basic Knife;;6;;65;;38;;Defence;;5;;Knife yay;;0.030;;ability;;1;;0

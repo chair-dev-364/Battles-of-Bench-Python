@@ -1,1 +1,1 @@
-book;;0d;;Krita User Manual;;50;;650;;160.0;;Regeneration;;25;;The mental health destroyer.;;3;;add later...;;0;;0
+book;;0d;;Krita User Manual;;12;;100;;160.0;;Regeneration;;25;;The mental health destroyer.;;0.045;;add later...;;0;;0
