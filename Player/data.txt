@@ -1,10 +1,10 @@
 {
     "dust": 0,
     "gems": 0,
-    "level": 80,
-    "money": 41061,
+    "level": 100,
+    "money": 4000,
     "skills": 1,
-    "xp": 91,
-    "xpneeded": 227,
+    "xp": 0,
+    "xpneeded": 25,
     "tryd": 0
 }

@@ -292,15 +292,6 @@ def preload_sounds():
     """
     import concurrent.futures
     try:
-        # Signal that preload is running by creating a waiting file
-        waiting_file = os.path.join(BASE_DIR, 'General', 'waiting.txt')
-        try:
-            os.makedirs(os.path.dirname(waiting_file), exist_ok=True)
-            with open(waiting_file, 'w', encoding='utf-8') as wf:
-                wf.write(str(int(time.time())))
-        except Exception as e:
-            print(f"[Preload] Warning: Could not create waiting file: {e}")
-
         extensions = {'.mp3', '.wav'}
         files = []
         # Explicit skip list for all music files in Sounds\Music (case-insensitive)
@@ -344,11 +335,6 @@ def preload_sounds():
         total = len(files)
         if total == 0:
             print("[Preload] No sound files found to cache.")
-            try:
-                if os.path.isfile(waiting_file):
-                    os.remove(waiting_file)
-            except Exception:
-                pass
             return
         print(f"[Preload] Caching {total} sound files in background (threaded)...")
         cached = 0
@@ -367,13 +353,6 @@ def preload_sounds():
                         print(f"[Preload] Error caching {f}: {e}")
         print(f"[Preload] Done. Cached: {cached}/{total}, errors: {errors}.")
 
-        # Remove waiting file now that preload finished
-        try:
-            if os.path.isfile(waiting_file):
-                os.remove(waiting_file)
-        except Exception:
-            pass
-
         # Play a short 'startup completed' sound if available (respect volume/mute)
         try:
             login_mp3 = os.path.join(SOUNDS_DIR, 'login_newss.mp3')
@@ -391,11 +370,6 @@ def preload_sounds():
             print(f"[Preload] Error attempting to play 'login_newss': {e}")
 
     except Exception as e:
-        try:
-            if os.path.isfile(waiting_file):
-                os.remove(waiting_file)
-        except Exception:
-            pass
         print(f"[Preload] Unexpected error during preload: {e}")
 
 

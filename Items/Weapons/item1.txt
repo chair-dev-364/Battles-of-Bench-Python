@@ -1,1 +1,1 @@
-book;;0e;;Befriend a Shark in 30 Days;;19;;178;;275.0;;Regeneration;;19;;Filled with shark facts and... fanfics?!;;120;;A shark will attack after you do!;;0;;0
+book;;0e;;Befriend a Shark in 30 Days;;19;;178;;148.3;;Regeneration;;19;;Filled with shark facts and... fanfics?!;;0.050;;A shark will attack after you do!;;0;;0

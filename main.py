@@ -133,6 +133,12 @@ def safe_eval(expr):
     parsed = ast.parse(expr, mode='eval')
     return _eval(parsed.body)
 
+# woosh, character screen rounding!! DEF is happy with this
+def char_round(value):
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value)
+
 # Simple. "cursor(True)" to show, "cursor(False)" to hide.
 def cursor(x):
     handle = ctypes.windll.kernel32.GetStdHandle(-11)  # STD_OUTPUT_HANDLE
@@ -508,8 +514,7 @@ class HeadwearData:
     pass
 head = HeadwearData()
 class SystemData:
-    def __init__(self):
-        self.updatable = False
+    pass
 
 game = SystemData()
 class KeyBinds:
@@ -1743,16 +1748,10 @@ def mainmenu():
         """)
         with open("Scripts/tips.txt", "r", encoding="utf-8") as f:
             tips = [line.strip() for line in f if line.strip()]
-        if not game.updatable:
-            center(f"{xf}{italic}{random.choice(tips)}{reset}", 8)
-        else:
-            center(f"{xb}{bold}✨ New Battles of Bench update available!{reset} {xf}Press {bold}[Ctrl+U]{reset} to update the game.{reset}", 8)    
+        center(f"{xf}{italic}{random.choice(tips)}{reset}", 8)
     else:
         game.skip_mainmenu_cls = False    
-            
-    # display announcement if new version is available:
-    if game.updatable:
-            center(f"{xb}{bold}✨ New Battles of Bench update available!{reset} {xf}Press {bold}[Ctrl+U]{reset} to update the game.{reset}", 8)    
+
     offset = 0
     
     # check if you can level up
@@ -1781,11 +1780,6 @@ def mainmenu():
         # play sound: ctrl+R
         if k.lower() == "ctrl/r":
             game.goto = testsounds
-            return
-        # update game: ctrl+U
-        if k.lower() == "ctrl/u" and game.updatable:
-            sound("pop_1")
-            game.goto = update_game
             return
         # force levelup: ctrl+L
         if k.lower() == "ctrl/l":
@@ -3017,9 +3011,9 @@ def character():
 [34;3H{x7}╭────────────────────────────────────╮
 
 [35;3H{x7}│ {xf}⇓ Press {xlyellow}{bold}[S] twice {reset}{xe}{xf}-{xe} Skill tree{reset}{x7}     │
-[15;20H{item.type} {xlyellow}Attack{reset}{x8}.....{bold}{xe}{round(totaldmg)}{reset}
-[16;20H🛡️ {x3}Defence{reset}{x8}....{bold}{xb}{round(totaldef,1)}%{reset}
-[17;20H❤️ {xc}Health{reset}{x8}.....{bold}{xlred}{round(totalhp)} {reset}
+[15;20H{item.type} {xlyellow}Attack{reset}{x8}.....{bold}{xe}{char_round(round(totaldmg))}{reset}
+[16;20H🛡️ {x3}Defence{reset}{x8}....{bold}{xb}{char_round(round(totaldef,1))}%{reset}
+[17;20H❤️ {xc}Health{reset}{x8}.....{bold}{xlred}{char_round(round(totalhp))} {reset}
 [08;42H{xf}{bold}{RGB}255;219;187m╭───────────────────────────────────────╮ {RGB}186;243;219m╭─────────────────────────────────────────╮
 [09;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                         │
 [10;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                         │
@@ -3081,15 +3075,15 @@ def character():
 [15;86H{lvsymbol6}
 [16;86H{lvsymbol7}
 [11;60H{reset}☺ 
-[11;62H{RGB}255;219;187mBase ATK{x8}------{xlyellow}{bold}{baseatk}{reset}
+[11;62H{RGB}255;219;187mBase ATK{x8}------{xlyellow}{bold}{char_round(baseatk)}{reset}
 [12;60H{reset}† 
-[12;62H{RGB}255;219;187mWeapon{x8}--------{xlyellow}{bold}{item.actual_atk}{reset}
+[12;62H{RGB}255;219;187mWeapon{x8}--------{xlyellow}{bold}{char_round(item.actual_atk)}{reset}
 [13;60H{reset}✸ 
-[13;62H{RGB}255;219;187mCrit Rate{x8}-----{xlyellow}{bold}{player.crit_rate}%{reset}
+[13;62H{RGB}255;219;187mCrit Rate{x8}-----{xlyellow}{bold}{char_round(player.crit_rate)}%{reset}
 [14;60H{reset}※ 
-[14;62H{RGB}255;219;187mCrit DMG{x8}------{xlyellow}{bold}{item.atkcrit}%{reset}
+[14;62H{RGB}255;219;187mCrit DMG{x8}------{xlyellow}{bold}{char_round(item.atkcrit)}%{reset}
 [15;60H{reset}⟐ 
-[15;62H{RGB}255;219;187mSpeed{x8}---------{xlyellow}{bold}{player.speed}{reset}
+[15;62H{RGB}255;219;187mSpeed{x8}---------{xlyellow}{bold}{char_round(player.speed)}{reset}
 [18;44H{reset}{RGB}255;219;187m⇝{xf} 
 [13;101H{reset}⌬ 
 [13;103H{RGB}186;243;219mSkill Lv.{x8}-----{xa}{bold}{player.skills}{reset}{RGB}186;243;219m/15{reset}
@@ -3102,38 +3096,38 @@ def character():
 [23;86H{reset}{RGB}255;219;187m {xf} 
 [23;88Hthey also unlock skill tree items.{reset}
 [21;44H{reset}{RGB}255;219;187m•{xf} 
-[21;46HDamage every normal hit: {RGB}255;219;187m{bold}{totaldmg}{reset}
+[21;46HDamage every normal hit: {RGB}255;219;187m{bold}{char_round(totaldmg)}{reset}
 
 [29;60H{reset}◇ 
-[29;62H{RGB}173;216;225mBase DEF{x8}------{xb}{bold}{basedef}%{reset}
+[29;62H{RGB}173;216;225mBase DEF{x8}------{xb}{bold}{char_round(basedef)}%{reset}
 [30;60H{reset}∆ 
-[30;62H{RGB}173;216;225mArmour DEF{x8}----{xb}{bold}{getattr(armor, "defense", 0)}%{reset}
+[30;62H{RGB}173;216;225mArmour DEF{x8}----{xb}{bold}{char_round(getattr(armor, "defense", 0))}%{reset}
 [31;60H{reset}⦿ 
-[31;62H{RGB}173;216;225mHelmet DEF{x8}----{xb}{bold}{getattr(head, "defense", 0)}%{reset}
+[31;62H{RGB}173;216;225mHelmet DEF{x8}----{xb}{bold}{char_round(getattr(head, "defense", 0))}%{reset}
 [32;60H{reset}★ 
-[32;62H{RGB}173;216;225mBonus DEF{x8}-----{xb}{bold}{abilitydef}%{reset}
+[32;62H{RGB}173;216;225mBonus DEF{x8}-----{xb}{bold}{char_round(abilitydef)}%{reset}
 [33;60H{reset}⊗ 
-[33;62H{RGB}173;216;225mDodge Rate{x8}----{xb}{bold}{player.dodge}%{reset}
+[33;62H{RGB}173;216;225mDodge Rate{x8}----{xb}{bold}{char_round(player.dodge)}%{reset}
 [29;101H{reset}♥ 
-[29;103H{RGB}255;203;204mBase HP{x8}---------{xlred}{bold}{basehp}{reset}
+[29;103H{RGB}255;203;204mBase HP{x8}---------{xlred}{bold}{char_round(basehp)}{reset}
 [30;101H{reset}♡ 
-[30;103H{RGB}255;203;204mBonus HP{x8}--------{xlred}{bold}{abilityhp}{reset}
+[30;103H{RGB}255;203;204mBonus HP{x8}--------{xlred}{bold}{char_round(abilityhp)}{reset}
 [31;101H{reset}⬣ 
-[31;103H{RGB}255;203;204mEffect RES{x8}------{xlred}{bold}{round(player.effect_res)}%{reset}
+[31;103H{RGB}255;203;204mEffect RES{x8}------{xlred}{bold}{char_round(round(player.effect_res))}%{reset}
 [32;101H{reset}↺ 
-[32;103H{RGB}255;203;204mRegeneration{x8}----{xlred}{bold}{round(player.regen,1)}%{reset}
+[32;103H{RGB}255;203;204mRegeneration{x8}----{xlred}{bold}{char_round(round(player.regen,1))}%{reset}
 [33;101H{reset}⸕ 
-[33;103H{RGB}255;203;204mLife Steal{x8}------{xlred}{bold}{round(player.life_steal,1)}%{reset}
+[33;103H{RGB}255;203;204mLife Steal{x8}------{xlred}{bold}{char_round(round(player.life_steal,1))}%{reset}
 [36;42H{RGB}173;216;225m╰───────────────────────────────────────╯ {RGB}255;203;204m╰─────────────────────────────────────────╯
 [36;3H{x7}╰────────────────────────────────────╯{reset}
 """.strip().replace("\n", ""),end="",flush=True)
     if item.type_raw is not None: print(f"""
-[18;46HYour {item.type_raw} {bold}crits {RGB}255;219;187m{player.crit_rate}%{reset} of the time,{reset}
-[19;46H{reset}in which case you deal {RGB}255;219;187m{bold}+{item.atkcrit}%{reset} DMG:
+[18;46HYour {item.type_raw} {bold}crits {RGB}255;219;187m{char_round(player.crit_rate)}%{reset} of the time,{reset}
+[19;46H{reset}in which case you deal {RGB}255;219;187m{bold}+{char_round(item.atkcrit)}%{reset} DMG:
 [22;44H{reset}{RGB}255;219;187m•{xf} 
-[22;46HDamage every critical hit: {RGB}255;219;187m{bold}{totalcritdmg}{reset}
+[22;46HDamage every critical hit: {RGB}255;219;187m{bold}{char_round(totalcritdmg)}{reset}
 [23;44H{reset}{RGB}255;219;187m•{xf} 
-[23;46HExpected average damage: {RGB}255;219;187m{bold}{expected}{reset}
+[23;46HExpected average damage: {RGB}255;219;187m{bold}{char_round(expected)}{reset}
 """.strip().replace("\n",""),end="",flush=True)  # noqa: E701
     if item.type_raw is None or item.type_raw == "None": print(f"""
 [18;46HYour fists are {xlred}too weak{reset} to crit,{reset}
@@ -3141,78 +3135,31 @@ def character():
 """.strip().replace("\n",""),end="",flush=True)  # noqa: E701
         # ===== RESULT =====
     print(f"[12;101H{reset}✧ [12;103H{RGB}186;243;219mLevel{x8}---------{xa}{bold}{player.level}{reset}{RGB}186;243;219m/100{reset}")
-    EXP = 0
-    fragments=50
-    for i in range(fragments):
-        EXP += round(player.xp/fragments)
-        
-        EXP_NEEDED = player.xpneeded
-
-        # ===== CONFIG =====
-        BAR_LENGTH = 30
-        FILLED_SEG = f"{xa}█"
-        EMPTY_SEG = f"{x0}█"
-
-        # ===== CALCULATE FILLED SEGMENTS =====
-        if EXP_NEEDED > 0:
-            FILLED = (EXP * BAR_LENGTH) // EXP_NEEDED
-        else:
-            FILLED = 0
-
-        if FILLED > BAR_LENGTH:
-            FILLED = BAR_LENGTH
-        if FILLED < 0:
-            FILLED = 0
-
-        # ===== BUILD BAR =====
-        EXP_BAR = ""
-
-        for i in range(1, BAR_LENGTH + 1):
-            if i <= FILLED:
-                EXP_BAR += FILLED_SEG
-            else:
-                EXP_BAR += EMPTY_SEG
-        print(f"\033[18;86H{reset}{rgb(255,219,187)}{rgb(186,243,219)}✚{xf}\033[18;88H{bold}EXP: {EXP_BAR}{reset}", end="")
-        if round(player.xp/player.xpneeded*100) < 10:
-            print(f"{xf}{bold}{rgback(0,0,1)}\033[18;94H{round(EXP/player.xpneeded*100)}%")
-        else:
-            print(f"{xba}{xf}{bold}\033[18;94H{round(EXP/player.xpneeded*100)}%")
-        print(f"\033[19;93H{reset}{x7}{rgb(186,243,219)}↑ {bold}{EXP}/{EXP_NEEDED} {reset}XP to get level {player.level+1}{reset}")
     EXP = player.xp
-    # ===== CONFIG =====
+    EXP_NEEDED = player.xpneeded
+
     BAR_LENGTH = 30
     FILLED_SEG = f"{xa}█"
     EMPTY_SEG = f"{x0}█"
 
-    # ===== CALCULATE FILLED SEGMENTS =====
     if EXP_NEEDED > 0:
-        FILLED = (EXP * BAR_LENGTH) // EXP_NEEDED
+        percent = min(100, max(0, round((EXP / EXP_NEEDED) * 100)))
+        FILLED = min(BAR_LENGTH, max(0, (EXP * BAR_LENGTH) // EXP_NEEDED))
     else:
+        percent = 0
         FILLED = 0
 
-    if FILLED > BAR_LENGTH:
-        FILLED = BAR_LENGTH
-    if FILLED < 0:
-        FILLED = 0
-
-    # ===== BUILD BAR =====
-    EXP_BAR = ""
-
-    for i in range(1, BAR_LENGTH + 1):
-        if i <= FILLED:
-            EXP_BAR += FILLED_SEG
-        else:
-            EXP_BAR += EMPTY_SEG
-    print(f"\033[18;86H{reset}{rgb(255,219,187)}{rgb(186,243,219)}✚{xf}\033[18;88H{bold}EXP: {EXP_BAR}{reset}", end="")
-    if round(player.xp/player.xpneeded*100) < 10:
-            print(f"{xf}{bold}{rgback(0,0,1)}\033[18;94H{round(player.xp/player.xpneeded*100)}%")
+    EXP_BAR = (FILLED_SEG * FILLED) + (EMPTY_SEG * (BAR_LENGTH - FILLED))
+    print(f"\033[18;86H{reset}{rgb(255,219,187)}{rgb(186,243,219)}✚{xf}\033[18;88H{bold}EXP: {EXP_BAR}{reset} ", end="")
+    if percent < 10:
+        print(f"{xf}{bold}{rgback(0,0,1)}\033[18;94H{percent}%")
     else:
-            print(f"{xba}{xf}{bold}\033[18;94H{round(player.xp/player.xpneeded*100)}%")
-    print(f"\033[19;93H{reset}{x7}{rgb(186,243,219)}↑ {bold}{player.xp}/{player.xpneeded} {reset}XP to get level {player.level+1}{reset}")
+        print(f"{xba}{xf}{bold}\033[18;94H{percent}%")
+    print(f"\033[19;93H{reset}{x7}{rgb(186,243,219)}↑ {bold}{EXP}/{EXP_NEEDED} {reset}XP to get level {player.level+1}{reset} ")
     print(f"""
-[15;20H{item.type} {xlyellow}Attack{reset}{x8}.....{bold}{xe}{round(totaldmg)}{reset}
-[16;20H🛡️ {x3}Defence{reset}{x8}....{bold}{xb}{round(totaldef,1)}%{reset}
-[17;20H❤️ {xc}Health{reset}{x8}.....{bold}{xlred}{round(totalhp)} {reset}
+[15;20H{item.type} {xlyellow}Attack{reset}{x8}.....{bold}{xe}{char_round(round(totaldmg))}{reset}
+[16;20H🛡️ {x3}Defence{reset}{x8}....{bold}{xb}{char_round(round(totaldef,1))}%{reset}
+[17;20H❤️ {xc}Health{reset}{x8}.....{bold}{xlred}{char_round(round(totalhp))} {reset}
 """.strip().replace("\n",""),end="",flush=True)
     del hpsymbol1,hpsymbol2,hpsymbol3,hpsymbol4,hpsymbol5,hpsymbol6,hpsymbol7, atksymbol1,atksymbol2,atksymbol3,atksymbol4,atksymbol5,atksymbol6,atksymbol7,defsymbol1,defsymbol2,defsymbol3,defsymbol4,defsymbol5,defsymbol6,defsymbol7,lvsymbol1,lvsymbol2,lvsymbol3,lvsymbol4,lvsymbol5,lvsymbol6,lvsymbol7
     while True:
@@ -3411,12 +3358,12 @@ def first_time_setup():
 {xe}                                                 ==).      \\__________\\
 {xe}                                                (__)       ()__________)
 
- #3{xlyellow}                ╭─────────────────────────╮
- #4{xlyellow}                ╭─────────────────────────╮
- #3{xlyellow}                │ {bold}{xf}   What's your name?   {reset}{xlyellow} │
- #4{xlyellow}                │ {bold}{xf}   What's your name?   {reset}{xlyellow} │
- #3{xlyellow}                ╰─────────────────────────╯
- #4{xlyellow}                ╰─────────────────────────╯
+ #3{xlyellow}                ╭─────────────────────────╮
+ #4{xlyellow}                ╭─────────────────────────╮
+ #3{xlyellow}                │ {bold}{xf}   What's your name?   {reset}{xlyellow} │
+ #4{xlyellow}                │ {bold}{xf}   What's your name?   {reset}{xlyellow} │
+ #3{xlyellow}                ╰─────────────────────────╯
+ #4{xlyellow}                ╰─────────────────────────╯
 
                   {xlorange}Change the course of history! Enter what you'd want to be called, then hit {bold}Enter {reset}{xlorange}to confirm.
                  {xlorange}⚠️ Your new name must be between {bold}{xlred}2 and 15 {reset}{xlorange}characters. Try not to become the next Picasso here!
@@ -3432,9 +3379,9 @@ def first_time_setup():
     # setup confirmed! write into setup
     with open("general/setup.txt", "w") as f:
         f.write("okay")
-    sound("level_ascend")
+    sound("payment_success")
     # wipe screen with animation (using wipe.py)
-    subprocess.run(["py", "wipe.py", "normal", "15"])
+    subprocess.run(["py", "wipe.py", "normal", "20"])
     game.goto = startup
     return
 
@@ -3510,153 +3457,7 @@ def noitems():
             game.goto = inventory
             return
 
-def update_game():
-    cursor(True)
-    cls()
-
-    base_dir = os.getcwd()
-    backup_dir = os.path.join(base_dir, "Backup")
-    os.makedirs(backup_dir, exist_ok=True)
-
-    n = 1
-    while os.path.exists(os.path.join(backup_dir, f"Backup{n}")):
-        n += 1
-    target_backup = os.path.join(backup_dir, f"Backup{n}")
-
-    def ignore_sounds(src_dir, contents):
-        ignored = []
-        if os.path.basename(src_dir) == "Sounds":
-            return contents
-        if "Sounds" in contents:
-            ignored.append("Sounds")
-        if "Backup" in contents and src_dir == base_dir:
-            ignored.append("Backup")
-        if ".git" in contents and src_dir == base_dir:
-            ignored.append(".git")
-        return ignored
-
-    print(f"{x7}\n[1] Backup creation in progress...{reset}", flush=True)
-    shutil.copytree(base_dir, target_backup, ignore=ignore_sounds)
-    print(f"{xa}Backup created!{reset} {target_backup}", flush=True)
-
-    updater_script = f'''import os
-import shutil
-import sys
-import urllib.request
-import zipfile
-import stat
-
-base_dir = r"{base_dir}"
-backup_dir = r"{backup_dir}"
-remote_sha = {getattr(game, "remote_sha", None)!r}
-zip_url = "https://github.com/chair-dev-364/Battles-of-Bench-Python/archive/refs/heads/main.zip"
-zip_path = os.path.join(backup_dir, "update.zip")
-extract_dir = os.path.join(backup_dir, "Battles-of-Bench-Python-main")
-
-def log(message):
-    print(message, flush=True)
-
-log("Downloading the latest version...")
-req = urllib.request.Request(zip_url, headers={{'User-Agent': 'Mozilla/5.0'}})
-with urllib.request.urlopen(req) as response, open(zip_path, "wb") as out_file:
-    while True:
-        chunk = response.read(1024 * 64)
-        if not chunk:
-            break
-        out_file.write(chunk)
-
-log("Download completed!")
-log("Extracting files...")
-with zipfile.ZipFile(zip_path, "r") as zip_ref:
-    zip_ref.extractall(backup_dir)
-
-log("Copying updated files into place...")
-def make_writable(path):
-    try:
-        os.chmod(path, stat.S_IWRITE)
-    except OSError:
-        pass
-
-def replace_path(source, destination):
-    if os.path.isdir(source):
-        if os.path.isfile(destination) or os.path.islink(destination):
-            make_writable(destination)
-            try:
-                os.remove(destination)
-            except OSError:
-                pass
-        os.makedirs(destination, exist_ok=True)
-        for name in os.listdir(source):
-            replace_path(os.path.join(source, name), os.path.join(destination, name))
-        return
-
-    if os.path.isdir(destination):
-        shutil.rmtree(destination, ignore_errors=True)
-    elif os.path.exists(destination):
-        make_writable(destination)
-        try:
-            os.remove(destination)
-        except OSError:
-            pass
-
-    os.makedirs(os.path.dirname(destination), exist_ok=True)
-    shutil.copy2(source, destination)
-
-for item in os.listdir(extract_dir):
-    source = os.path.join(extract_dir, item)
-    destination = os.path.join(base_dir, item)
-    replace_path(source, destination)
-
-if remote_sha:
-    version_file = os.path.join(base_dir, "General", "version.txt")
-    with open(version_file, "w", encoding="utf-8") as f:
-        f.write(remote_sha)
-
-try:
-    os.remove(zip_path)
-except OSError:
-    pass
-
-try:
-    shutil.rmtree(extract_dir)
-except OSError:
-    pass
-
-log("Update applied. Please restart the game manually!")
-'''
-
-    fd, script_path = tempfile.mkstemp(prefix="bob_updater_", suffix=".py")
-    with os.fdopen(fd, "w", encoding="utf-8") as script_file:
-        script_file.write(updater_script)
-
-    print(f"{x2}Running update command...{reset}", flush=True)
-    subprocess.run([sys.executable, "-u", script_path], cwd=base_dir)
-
-    try:
-        os.remove(script_path)
-    except OSError:
-        pass
-
-    sys.exit(0)
-
 def startup():
-    #update_check() temp disabled for now
-    waiting_file = os.path.join(os.getcwd(), "General", "waiting.txt")
-    # Race guard: sound server may create waiting.txt shortly after startup() begins.
-    saw_waiting_marker = os.path.exists(waiting_file)
-    marker_wait_deadline = time.time() + 3.0
-    while not saw_waiting_marker and time.time() < marker_wait_deadline:
-        if sound_process.poll() is not None:
-            break
-        saw_waiting_marker = os.path.exists(waiting_file)
-        if not saw_waiting_marker:
-            time.sleep(0.05)
-
-    if saw_waiting_marker:
-        while os.path.exists(waiting_file):
-            if sound_process.poll() is not None:
-                break
-            time.sleep(0.1)
     # check if <cd>/general/screensetup.txt exists
     if not os.path.exists("general/screensetup.txt"):
         game.goto = screensetup

@@ -1,1 +1,1 @@
-bow;;0d;;The Melter;;25;;127;;401;;Health;;25;;The bow of mass destruction. Not joking.;;85;;No ability.;;0;;4
+bow;;0d;;The Melter;;25;;127;;100;;Health;;25;;The bow of mass destruction. Not joking.;;0.045;;No ability.;;0;;4
