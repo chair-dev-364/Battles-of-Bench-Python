@@ -26,9 +26,9 @@ from pathlib import Path  # noqa: E402
 from typing import Literal  # noqa: E402
 RGB="[38;2;"
 
-version=1
-subversion=2
-subberversion=1
+version=2
+subversion=0
+subberversion="0-pre1"
 
 CHARACTER_MAX_LEVEL = 100
 WEAPON_MAX_LEVEL = 25
@@ -37,9 +37,9 @@ HEADWEAR_MAX_LEVEL = 20
 
 
 if subberversion != 0:
-    TITLE = f"Battles of Bench - a{version}.{subversion}.{subberversion}"
+    TITLE = f"Battles of Bench - beta {version}.{subversion}.{subberversion}"
 else:
-    TITLE = f"Battles of Bench - a{version}.{subversion}"
+    TITLE = f"Battles of Bench - beta {version}.{subversion}"
 
 os.system(f"title {TITLE}")
 sys.stdout.reconfigure(encoding="utf-8") # actually make it display shit
