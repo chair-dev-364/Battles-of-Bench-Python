@@ -1,1 +1,1 @@
-bow;;0d;;The Melter;;25;;127;;100;;Health;;25;;The bow of mass destruction. Not joking.;;0.045;;No ability.;;0;;4
+wand;;0e;;Wand of Galanb III.;;23;;130;;75;;Health;;149;;Government drones... ACTION!;;0.050;;3 pigeons will aid you in battle!;;0;;0

@@ -3367,7 +3367,7 @@ def inventory():
 def character2():
     boxwidth = 25
     playername=read("General/playername")
-    playernamd = f"{playername} › Equipment"
+    playernamd = f"{playername} › Equipment "
     length = visible_len(playernamd)
     pad = (boxwidth - length) // 2 + 1
     spaces = " " * max(pad, 0)

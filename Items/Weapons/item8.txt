@@ -1,1 +1,1 @@
-axe;;0d;;Test Axe;;22;;170;;68.3;;Defence;;5;;3;;0.045;;No ability.;;0;;0
+bow;;0d;;The Melter;;25;;127;;100;;Health;;25;;The bow of mass destruction. Not joking.;;0.045;;No ability.;;0;;4

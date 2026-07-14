@@ -1,1 +1,1 @@
-bow;;0d;;Soul Stealer;;18;;108;;63.8;;Health;;32;;Stealing the energy, let's go!;;0.045;;No ability.;;0;;0
+axe;;0d;;Test Axe;;22;;170;;68.3;;Defence;;5;;3;;0.045;;No ability.;;0;;0

@@ -1,1 +1,1 @@
-book;;0e;;Befriend a Shark in 30 Days;;19;;178;;148.3;;Regeneration;;19;;Filled with shark facts and... fanfics?!;;0.05;;A shark will attack after you do! (30% DMG);;0;;1
+bow;;0e;;The En Passanter;;20;;220;;150.0;;Defence;;9;;The chess player's ultimate trick.;;0.05;;+30 percent skill DMG.;;0;;1

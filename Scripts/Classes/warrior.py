@@ -1,4 +1,5 @@
 """-------------------------------------------------------------------------
+WARRIOR CLASS - edit internal values here!
 DAMAGE - how often do you go to the gym? (from level 1 to 10)
 -------------------------------------------------------------------------"""
 
@@ -18,7 +19,7 @@ ult_damage = [
 ]
 
 """-------------------------------------------------------------------------
-SKILL UNLOCKS - can I even use this? Let's find out! (unlocked at level 3, 6, and 8)
+SKILL UNLOCKS - can I even use this?
 -------------------------------------------------------------------------"""
 
 double_tap = [
