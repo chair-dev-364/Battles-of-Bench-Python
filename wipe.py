@@ -8,11 +8,11 @@ import ctypes
 import argparse
 import winsound  # For optional beep sound
 
-# ===== Windows Console API Setup =====
+# ===== Windows console setup =====
 STD_OUTPUT_HANDLE = -11
 handle = ctypes.windll.kernel32.GetStdHandle(STD_OUTPUT_HANDLE)
 
-# Define the COORD structure for console cursor positions.
+# little struct for cursor pos
 class COORD(ctypes.Structure):
     _fields_ = [("X", ctypes.c_short), ("Y", ctypes.c_short)]
 
@@ -37,8 +37,8 @@ def get_terminal_size():
     size = shutil.get_terminal_size()
     return size.columns, size.lines
 
-# ===== Color Handling =====
-# A simple mapping of color names to ANSI escape codes.
+# ===== color stuff =====
+# simple color map
 COLORS = {
     "RED": "\033[31m",
     "GREEN": "\033[32m",
@@ -53,12 +53,12 @@ RESET_COLOR = "\033[0m"
 def apply_color(text, color_enabled):
     """Wrap the text with a random color if enabled."""
     if color_enabled:
-        # Pick a random color from our list.
+        # pick a random color
         color = random.choice(list(COLORS.values()))
         return color + text + RESET_COLOR
     return text
 
-# ===== Basic Line Clearing (Windows API) =====
+# ===== clear a line =====
 def clear_line_at(row, filler=" ", color_enabled=False):
     """Clear a given row (1-indexed) by writing filler characters across the full width."""
     cols, _ = get_terminal_size()
@@ -90,7 +90,7 @@ def wipe_center(delay, filler, accel, color_enabled):
     """Inside-out wipe: clear from the center toward the edges."""
     _, rows = get_terminal_size()
     d = delay
-    # Determine center: if odd, center is a single row; if even, two center rows.
+    # center row logic
     center = rows // 2
     top = center if rows % 2 == 1 else center
     bottom = center + 1
@@ -124,10 +124,10 @@ def wipe_wave(delay, filler, accel, color_enabled):
     cols, rows = get_terminal_size()
     d = delay
     for row in range(1, rows + 1):
-        # Calculate an offset based on a sine wave.
+        # make a little wave offset
         offset = int((math.sin((row / rows) * math.pi * 2) + 1) / 2 * (cols // 2))
         move_cursor(0, row - 1)
-        # Construct a line with offset spaces and then filler.
+        # build the line
         line = (" " * offset) + (filler * (cols - offset))
         line = apply_color(line, color_enabled)
         write_text(line)
@@ -142,7 +142,7 @@ def wipe_glitch(delay, filler, accel, color_enabled, noise):
     for _ in range(iterations):
         row = random.randint(1, rows)
         if noise:
-            # Generate a line of random noise: choose filler or random punctuation.
+            # make some random noise
             noise_line = ''.join(random.choice([filler, "!", "@", "#", "$", "%", "&", "*", " "]) for _ in range(cols))
             line = apply_color(noise_line, color_enabled)
         else:
@@ -157,14 +157,14 @@ def wipe_multi(delay, filler, accel, color_enabled, noise):
     effects = [wipe_center, wipe_diagonal, wipe_glitch, wipe_classic]
     for effect in effects:
         effect(delay, filler, accel, color_enabled)
-        # A short pause between effects
+        # short pause between effects
         sleep_ms(100)
 
 def wipe_diagonal(delay, filler, accel, color_enabled):
     """Diagonal wipe: clear diagonally across the screen."""
     cols, rows = get_terminal_size()
     d = delay
-    # We iterate over the sum of row and col indices.
+    # go through diagonal steps
     for diag in range(rows + cols - 1):
         for row in range(1, rows + 1):
             col = diag - (row - 1)
@@ -187,9 +187,9 @@ MODES = {
     "multi": wipe_multi,
 }
 
-# ===== Optional Sound Effect =====
+# ===== optional sound =====
 def play_sound_effect():
-    # Play a simple beep using winsound.
+    # simple beep
     winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
 
 # ===== Argument Parsing & Main Runner =====
@@ -204,7 +204,7 @@ def main():
     parser.add_argument("--noise", action="store_true", help="Enable noise (for glitch mode)")
     parser.add_argument("--cycles", type=int, default=1, help="Number of cycles to run the effect (default: 1)")
     parser.add_argument("--sound", action="store_true", help="Play a sound effect at the end of each cycle")
-    # --reverse flag inverts the wipe direction for modes that support it.
+    # --reverse flips the wipe direction when it can
     parser.add_argument("--reverse", action="store_true", help="Invert the wipe direction")
     
     args = parser.parse_args()
@@ -217,7 +217,7 @@ def main():
     reverse_flag = args.reverse
     sound_flag = args.sound
 
-    # Determine the wipe effect function.
+    # pick the wipe effect
     if mode_name not in MODES:
         print("Unknown mode. Available modes:")
         for m in MODES:
@@ -226,23 +226,21 @@ def main():
     
     effect_func = MODES[mode_name]
 
-    # Run the chosen effect for the specified number of cycles.
+    # run the chosen effect for the requested cycles
     for i in range(cycles):
         effect_func(delay, " ", False if reverse_flag else False or color_enabled, color_enabled)  # call normally
-        # If --reverse flag is specified and the mode supports direction inversion,
-        # we run the reversed variant if available.
+        # if reverse flag is on, use the reverse version if it exists
         if reverse_flag:
-            # For classic and center types, we swap to their reverse counterparts if defined.
+            # classic/center swap to their reverse versions
             if mode_name == "classic":
                 wipe_reverse_classic(delay, " ", False, color_enabled)
             elif mode_name == "center":
                 wipe_outside_in(delay, " ", False, color_enabled)
-            # For other modes, we could simply re-run them in reverse order if we had defined that,
-            # but for now, we keep them as is.
+            # other modes just keep going as-is for now
         if sound_flag:
             play_sound_effect()
 
-    # After the effect cycles, move cursor to bottom and finish.
+    # move cursor to bottom and finish
     cols, rows = get_terminal_size()
     move_cursor(0, rows - 1)
     print(RESET_COLOR)

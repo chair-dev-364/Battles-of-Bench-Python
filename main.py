@@ -50,10 +50,10 @@ current_script = os.path.abspath(__file__)
 
 kernel32 = ctypes.windll.kernel32
 
-# Create a Job Object
+# make job object
 job = kernel32.CreateJobObjectW(None, None)
 
-# Set the job to kill all child processes when this process dies
+# kill child processes when this one dies
 class JOBOBJECT_EXTENDED_LIMIT_INFORMATION(ctypes.Structure):
     _fields_ = [
         ("BasicLimitInformation", ctypes.c_byte * 40),
@@ -163,7 +163,7 @@ def flash_prompt(row, col, prompt):
     
 ANSI_PATTERN = re.compile(r'\x1b\[[0-9;?]*[A-Za-z]') # what this does, I have no clue.
 
-# Returns the length of the text without ANSI codes. Used to properly calculate cursor positions in getx().
+# get visible length without ansi codes
 def visible_len(text):
     return len(ANSI_PATTERN.sub('', text))
 
@@ -685,11 +685,6 @@ def sound(cmd):
 
 
 def stopsound(target=None):
-    """Stop sounds via UDP.
-    - stopsound() -> stops all sounds and music.
-    - stopsound("music") -> stops only streaming music.
-    - stopsound("specific sound") -> stops that specific sound.
-    """
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             if target is None:
@@ -704,11 +699,6 @@ def stopsound(target=None):
 
 
 def update(path, value):
-    """
-    Overwrites a .txt file relative to current directory.
-    update("settings/music", 3)
-    → writes to ./settings/music.txt
-    """
     # Normalize path
     full_path = os.path.join(os.getcwd(), path + ".txt")
     # Ensure directory exists
@@ -718,10 +708,6 @@ def update(path, value):
         f.write(str(value))
         
 def read(path, default=None):
-    """
-    Reads ./path.txt and auto-detects type.
-    Returns int, float, or string.
-    """
     full_path = os.path.join(os.getcwd(), path + ".txt")
     if not os.path.exists(full_path):
         return default
@@ -1045,7 +1031,7 @@ def load_bind(name):
     value = read(BASE / f"{name}.txt").strip()
     return value
     
-def setbinds():
+def load_binds():
     bind.load()
 
     actions = [
@@ -1074,7 +1060,7 @@ def setbinds():
 
         display = display_map.get(raw.lower(), raw.upper())
         setattr(bind, f"{action}_display", display)
-setbinds()
+load_binds()
 
 def draw_text(x, y, text):
     print(f"\x1b[{y};{x}H{text}\x1b[0m", end="",flush=True)
@@ -1090,7 +1076,7 @@ def blank(y1, x1, y2, x2):
         # Reset style BEFORE drawing spaces
         print(f"\x1b[0m\x1b[{y};{x1}H{spaces}", end="", flush=True)
         
-def draw_box(
+def draw_box_border(
     y1: int,
     x1: int,
     y2: int,
@@ -1173,13 +1159,7 @@ def draw_box(
 
     draw_text(text_x, y1, style + padded_text)
     
-def calculate_weapon_atk(item_obj=None):
-    """
-    Calculates the weapon's ATK from its base ATK, level and growth.
-    item.atk = Base ATK (stored in file)
-    item.level = Weapon level
-    item.level_power = Growth (e.g. 0.008 = 0.8% per level)
-    """
+def get_actual_atk(item_obj=None):
 
     target = item_obj if item_obj is not None else item
     base = float(getattr(target, "atk", 0))
@@ -1188,12 +1168,7 @@ def calculate_weapon_atk(item_obj=None):
 
     return round(base * ((1 + growth) ** level))
 
-def textbox(text: str, y1: int, x1: int, y2: int, x2: int):
-    """Print text inside the rectangle (y1,x1) - (y2,x2), preserving ANSI
-    formatting while wrapping by visible length. Returns the list of raw
-    printed lines (including ANSI codes). If text doesn't fit, the last
-    visible line is truncated with '...'.
-    """
+def draw_box_text(text: str, y1: int, x1: int, y2: int, x2: int):
 
     width = x2 - x1 + 1
     height = y2 - y1 + 1
@@ -1439,7 +1414,7 @@ def shine(text, offset=0, color=(255, 255, 0), bold=False):
     return result + "\033[0m"
 
 # big numbers for easier access!
-def get_digit_art(digit):
+def bignumber_db(digit):
     art = {
         '0': [
             "  ████  ",
@@ -1518,7 +1493,7 @@ def bignumber(number_str, display=False):
     if not number_str.isdigit() or len(number_str) < 1 or len(number_str) > 3:
         return None
 
-    digit_arts = [get_digit_art(digit) for digit in number_str]
+    digit_arts = [bignumber_db(digit) for digit in number_str]
     
     result_lines = []
     for line_idx in range(5):
@@ -1800,17 +1775,17 @@ def mainmenu():
             return
         # cheats interface (terminal) => Ctrl+T
         if k.lower() == "ctrl/t":
-            game.goto = modify
+            game.goto = internal_modify
             return
         time.sleep(0.01)
         # play sound: ctrl+R
         if k.lower() == "ctrl/r":
-            game.goto = sounds_test
+            game.goto = testsounds
             return
         # update game: ctrl+U
         if k.lower() == "ctrl/u" and game.updatable:
             sound("pop_1")
-            game.goto = updater
+            game.goto = update_game
             return
         # force levelup: ctrl+L
         if k.lower() == "ctrl/l":
@@ -1819,7 +1794,7 @@ def mainmenu():
             game.goto = mainmenu
             return
 
-def sounds_test():
+def testsounds():
     while True:
         # enter sound
         cls()
@@ -1838,7 +1813,7 @@ def sounds_test():
         sound(f"{name} {pitch}")
 
 
-def modify():
+def internal_modify():
     def parse_override_value(raw):
         text = raw.strip()
         lowered = text.lower()
@@ -1904,7 +1879,7 @@ def modify():
     player.load()
     setting.load()
     bind.load()
-    setbinds()
+    load_binds()
     load_item(0)
 
     targets = {
@@ -2041,7 +2016,7 @@ def modify():
                     try:
                         target_obj.reset()
                         if target_obj is bind:
-                            setbinds()
+                            load_binds()
                         if target_obj is setting:
                             setting.load()
                         if target_obj is player:
@@ -2163,7 +2138,7 @@ def modify():
 
                     setattr(bind, field, raw_value.lower())
                     bind.save()
-                    setbinds()
+                    load_binds()
                     input(f"{x2}Saved{xf} keybind {field} = {raw_value.lower()!r}. Press Enter to continue...")
                 continue
 
@@ -2253,7 +2228,7 @@ def whose_turn():
 
 def player_turn():
     d.latest_action += f"\n  {xf}→ Your turn, waiting for key..."
-    show_data()
+    battle_show_data()
     k = key()
     if k.lower() == bind.attack:
         game.goto = battle_attack
@@ -2338,17 +2313,17 @@ def after_attack():
     elif enemy.hp <= 0:
         game.goto = battle_win
         return
-    show_data()
+    battle_show_data()
     time.sleep(0.5)
     if player.av >= 100 or enemy.av >= 100:
         # someone can still act
         turn = whose_turn()
         if turn == "player":
-            show_data()
+            battle_show_data()
             game.goto = player_turn
             return
         elif turn == "enemy":
-            show_data()
+            battle_show_data()
             game.goto = enemy_turn
             return
     else:
@@ -2358,7 +2333,7 @@ def after_attack():
 
     
 
-def battle2():
+def battle_preparation():
     d.frombattle = False
     player.load()
     global enemy
@@ -2410,7 +2385,7 @@ def battle2():
     game.goto = battle_loop
     return
 
-def show_data():
+def battle_show_data():
     cls()
 
     def hp_bar(current, maximum, width=20):
@@ -2498,7 +2473,7 @@ def enemy_attack():
     # action value decrease
     enemy.av -= 100
     d.av_difference = player.av - enemy.av
-    show_data()
+    battle_show_data()
     game.goto = after_attack
     return
 
@@ -2535,7 +2510,7 @@ def battle_attack():
     
     # add separator to latest action
     d.latest_action += f"\n{x7}{chr(9472) * 60}{reset}\n"
-    show_data()
+    battle_show_data()
     game.goto = after_attack
     return
 
@@ -2717,7 +2692,7 @@ def house():
                 
         # this is the pitch testing code!
         if k.lower() == "o":
-            draw_box(32,20,34,60,text="Enter an int 1 to 50:",bold=True,text_color=xlyellow)
+            draw_box_border(32,20,34,60,text="Enter an int 1 to 50:",bold=True,text_color=xlyellow)
             a = getx(33,22,prompt="› ",expect="int",max_len=25,min_val=1,max_val=50,highlight_prefix=f"{xlorange}{bold}",highlight_suffix=reset)
             blank(32,20,34,60)
             pitch = 1
@@ -2741,7 +2716,7 @@ def house():
 # (i'm sorry)
 def character():
     player.load()
-    setbinds()
+    load_binds()
     load_item(0)
     cls()
     thresholds = [
@@ -2836,7 +2811,7 @@ def character():
     abilityatk=0
     abilitydef=0
     abilityhp=0
-    item.actual_atk=calculate_weapon_atk()
+    item.actual_atk=get_actual_atk()
     totaldmg=baseatk + abilityatk + item.actual_atk
     totalcritdmg=round(totaldmg*(1+item.atkcrit/100))
     item.atkcrit = round(item.atkcrit)
@@ -3000,7 +2975,7 @@ def character():
     
     # if "from battle" is defined, jump straight to battle (easier loading; no need to write a separate battle loading function)
     if d.frombattle == True:
-        game.goto = battle2
+        game.goto = battle_preparation
         return
     
     print(f"""
@@ -3119,7 +3094,7 @@ def character():
 [13;101H{reset}⌬ 
 [13;103H{RGB}186;243;219mSkill Lv.{x8}-----{xa}{bold}{player.skills}{reset}{RGB}186;243;219m/15{reset}
 [14;101H{reset}⇋ 
-[14;103H{RGB}186;243;219mWeapon Lv.{x8}----{xa}{bold}{getattr(item, "level", 0)}{reset}{RGB}186;243;219m/{player.level}{reset}
+[14;103H{RGB}186;243;219mWeapon Lv.{x8}----{xa}{bold}{item_level_display(item, "Weapons")}{reset}{RGB}186;243;219m{reset}
 [21;86H{reset}{RGB}186;243;219m⇝{xf} 
 [21;88HHigher levels provide upgrades to {reset}
 [22;86H{reset}{RGB}255;219;187m {xf} 
@@ -3333,15 +3308,15 @@ def inventory():
             return
         if k.lower() == "1":
             game.sel = "Weapons"
-            game.goto = maininv
+            game.goto = inventory_prep
             return
         if k.lower() == "2":
             game.sel = "Bodywear"
-            game.goto = maininv
+            game.goto = inventory_prep
             return
         if k.lower() == "3":
             game.sel = "Helmets"
-            game.goto = maininv
+            game.goto = inventory_prep
             return
 
 def screensetup():
@@ -3395,7 +3370,7 @@ def screensetup():
             game.goto = screensetup
             return
 
-def setup():
+def first_time_setup():
     cls()
     print(f"""
 [10;1H
@@ -3436,12 +3411,12 @@ def setup():
 {xe}                                                 ==).      \\__________\\
 {xe}                                                (__)       ()__________)
 
-#3{xlyellow}                ╭─────────────────────────╮
-#4{xlyellow}                ╭─────────────────────────╮
-#3{xlyellow}                │ {bold}{xf}   What's your name?   {reset}{xlyellow} │
-#4{xlyellow}                │ {bold}{xf}   What's your name?   {reset}{xlyellow} │
-#3{xlyellow}                ╰─────────────────────────╯
-#4{xlyellow}                ╰─────────────────────────╯
+ #3{xlyellow}                ╭─────────────────────────╮
+ #4{xlyellow}                ╭─────────────────────────╮
+ #3{xlyellow}                │ {bold}{xf}   What's your name?   {reset}{xlyellow} │
+ #4{xlyellow}                │ {bold}{xf}   What's your name?   {reset}{xlyellow} │
+ #3{xlyellow}                ╰─────────────────────────╯
+ #4{xlyellow}                ╰─────────────────────────╯
 
                   {xlorange}Change the course of history! Enter what you'd want to be called, then hit {bold}Enter {reset}{xlorange}to confirm.
                  {xlorange}⚠️ Your new name must be between {bold}{xlred}2 and 15 {reset}{xlorange}characters. Try not to become the next Picasso here!
@@ -3463,37 +3438,79 @@ def setup():
     game.goto = startup
     return
 
+def noitems():
+    cls()
+    cursor(False)
+    print()
 
-def check_update():
-    try:
-        req = urllib.request.Request(
-            'https://api.github.com/repos/chair-dev-364/Battles-of-Bench-Python/commits/main',
-            headers={'User-Agent': 'Mozilla/5.0'}
-        )
-        with urllib.request.urlopen(req, timeout=3) as response:
-            data = json.loads(response.read().decode())
-            remote_sha = data.get('sha')
-        
-        local_sha = None
-        version_file = os.path.join(os.getcwd(), "General", "version.txt")
-        if os.path.exists(version_file):
-            with open(version_file, "r") as f:
-                local_sha = f.read().strip()
-        else:
-            try:
-                local_sha = subprocess.check_output(['git', 'log', '-1', '--format=%H'], stderr=subprocess.DEVNULL).decode().strip()
-            except Exception:
-                pass
-                
-        if remote_sha and local_sha != remote_sha:
-            game.updatable = True
-            game.remote_sha = remote_sha
-        else:
-            game.updatable = False
-    except Exception:
-        game.updatable = False
+    category_title = inv_category_title(game.sel)
 
-def updater():
+    # top symbols for stuff
+    if game.sel in ("Bodywear", "Helmets"):
+        print("                                                      \033[38;5;4m██████████████        ")
+        print("                                                      \033[38;5;4m██\033[38;5;6m██████████\033[38;5;4m██")
+        print("                                                      \033[38;5;4m██\033[38;5;6m██████████\033[38;5;4m██")
+        print("                                                      \033[38;5;4m ██\033[38;5;6m████████\033[38;5;4m██ ")
+        print("                                                       \033[38;5;4m ██\033[38;5;6m██████\033[38;5;4m██  ")
+        print("                                                         \033[38;5;4m ██\033[38;5;6m██\033[38;5;4m██    ")
+        print("                                                            \033[38;5;4m██              ")
+    elif game.sel == "Weapons":
+        atksymbol1=f"{x6}██████{xlyellow}"
+        atksymbol2=f"{x6}██{xlyellow}██{xe}██{xlyellow}██{x6}██{xlyellow}"
+        atksymbol3=f"{x6}██{xlyellow}██████{xe}██{xlyellow}██{x6}██{xlyellow}"
+        atksymbol4=f"{x6}██{xlyellow}{xe}██████████{xlyellow}{x6}██{xlyellow}"
+        atksymbol5=f"{x6}██{xlyellow}██████{xe}██{xlyellow}██{x6}██{xlyellow}"
+        atksymbol6=f"{x6}██{xlyellow}██{xe}██{xlyellow}██{x6}██{xlyellow}"
+        atksymbol7=f"{x6}██████{xlyellow}"
+        print(f"                                                          \033[38;2;2;74;48m{atksymbol1}")
+        print(f"                                                        \033[38;2;2;74;48m{atksymbol2}")
+        print(f"                                                      \033[38;2;2;74;48m{atksymbol3}")
+        print(f"                                                      \033[38;2;2;74;48m{atksymbol4}")
+        print(f"                                                      \033[38;2;2;74;48m{atksymbol5}")
+        print(f"                                                        \033[38;2;2;74;48m{atksymbol6}")
+        print(f"                                                          \033[38;2;2;74;48m{atksymbol7}")
+    else:
+        for _ in range(7):
+            print()
+
+    print(f"\033#3{reset}                  {xlorange}╭───────────────────────{xlorange}╮")
+    print(f"\033#4                  {xlorange}╭───────────────────────{xlorange}╮")
+    print(f"\033#3                  {xlorange}│        {bold}{xlyellow}{category_title}        {xlorange}│")
+    print(f"\033#4                  {xlorange}│        {bold}{xlyellow}{category_title}        {xlorange}│")
+    print(f"\033#3                  {xlorange}╰───────────────────────{xlorange}╯")
+    print(f"\033#4                  {xlorange}╰───────────────────────{xlorange}╯")
+
+    print(f"{x8}",end="")
+    print(f"{player.color}               {x8} ╭───────────────────────────────────────────┬─────────────────────────────────────────────────╮")
+    print(f"{player.color}               {x8} │                                           │                                                 │")
+    print(f"{player.color}      ██████   {x8} ├───────────────────────────────────────────┼─────────────────────────────────────────────────┤")
+    print(f"{player.color}    ██      ██ {x8} │                                           │                                                 │")
+    print(f"{player.color}    ██ •  • ██ {x8} │                                           │                                                 │")
+    print(f"{player.color}    ██      ██ {x8} │                                           │                                                 │")
+    print(f"{player.color}      ██████   {x8} │                                           │                                                 │")
+    print(f"{player.color}        ██  ██ {x8} │                                           │                                                 │")
+    print(f"{player.color}  ██    ██   ██{x8} │                                           │                                                 │")
+    print(f"{player.color}    ██  ██  ██ {x8} │                                           │                                                 │")
+    print(f"{player.color}      ██████   {x8} │                                           │                                                 │")
+    print(f"{player.color}        ██     {x8} │                                           │                                                 │")
+    print(f"{player.color}        ██     {x8} │                                           │                                                 │")
+    print(f"{player.color}        ██     {x8} │                                           │                                                 │")
+    print(f"{player.color}      ██  ██   {x8} │                                           │                                                 │")
+    print(f"{player.color}    ██      ██ {x8} ├───────────────────────────────────────────┼─────────────────────────────────────────────────┤")
+    print(f"{player.color}               {x8} │                                           │                                                 │")
+    print(f"{player.color}               {x8} ╰───────────────────────────────────────────┴─────────────────────────────────────────────────╯\033[0m")
+
+    print(f"{reset}\033[16;19H🔱 {bold}{xlorange}{category_title} {xlyellow}{unbold}→ {xlorange}{bold}Empty {x7}(items: {xf}{bold}0{x7}{unbold}){reset}")
+    print(f"\033[23;26H{x8}{x7}— {xlyellow}No items in this category. {x7}—{reset}")
+    print(f"\033[31;19H{xlorange}Go back → {xlyellow}{bold}{bind.back_display.upper()} {reset}{xlorange}or {xlyellow}{bold}ESC{reset}")
+
+    while True:
+        k = key()
+        if k.lower() == bind.back or k.lower() == "esc":
+            game.goto = inventory
+            return
+
+def update_game():
     cursor(True)
     cls()
 
@@ -3623,7 +3640,7 @@ log("Update applied. Please restart the game manually!")
     sys.exit(0)
 
 def startup():
-    check_update()
+    #update_check() temp disabled for now
     waiting_file = os.path.join(os.getcwd(), "General", "waiting.txt")
     # Race guard: sound server may create waiting.txt shortly after startup() begins.
     saw_waiting_marker = os.path.exists(waiting_file)
@@ -3646,7 +3663,7 @@ def startup():
         return
     # check if <cd>/general/setup.txt exists
     if not os.path.exists("general/setup.txt"):
-        game.goto = setup
+        game.goto = first_time_setup
         return
     sound(random.choice(["music_default"]))
     game.goto = startup_animation
@@ -3713,12 +3730,17 @@ def inv_compare_label(category):
 
 def inv_compare_value(item_obj, category):
     if category == "Weapons":
-        final_atk = calculate_weapon_atk(item_obj)
+        final_atk = get_actual_atk(item_obj)
         crit_bonus = float(getattr(item_obj, "atkcrit", 0)) / 100
         return float(final_atk) * (1 + crit_bonus)
     return float(getattr(item_obj, "defense", 0))
 
 
+def item_level_display(item_obj, category):
+    level = getattr(item_obj, "level", 0)
+    if category == "Weapons":
+        return f"{level}/25"
+    return str(level)
 
 
 def maininv_md():
@@ -3730,18 +3752,18 @@ def maininv_md():
     d.current = d.begin - 1
 
     if d.length == d.page * 10:
-        itemsel_page_prev()
+        inv_prevpage()
         return
-    gdi_pager()
+    item_pager()
 
-def maininv():
+def inventory_prep():
     d.massdelete = 0
     d.current = 0
     d.hold_item = 0
     d.length = len(list(Path(f"Items/{game.sel}").glob("item*.txt")))
 
     if d.length == 0:
-        # noitems_new() -> just placeholder for now
+        game.goto = noitems
         return
 
     cls()
@@ -3823,13 +3845,13 @@ def maininv():
     game.is_comparing = False
     
     
-    gdi_pager()
+    item_pager()
 
 
 
 
 # item ability specials (line two)
-def item_ability_specials(name):
+def get_specials(name):
     # weapons:
     # if d.ability_line1, d.ability_line2, d.notice, or d.notice_text are defined, delete them
     d.ability_line1 = None
@@ -3855,11 +3877,11 @@ def item_ability_specials(name):
     if d.ability_line2:
         print(f"\033[28;64H  {xf}{d.ability_line2}")
     if d.notice:
-        draw_box(2,90,8,126,text=f"{d.notice}",text_color=xlyellow,border_color=xlorange,bold=True,align="right")
+        draw_box_border(2,90,8,126,text=f"{d.notice}",text_color=xlyellow,border_color=xlorange,bold=True,align="right")
     if d.notice_text:
-        textbox(text=d.notice_text,y1=4,x1=93,y2=6,x2=123)
+        draw_box_text(text=d.notice_text,y1=4,x1=93,y2=6,x2=123)
 
-def itemsel_waitkey():
+def inventory_waitkey():
     # only reset offset if preservation was off
     if not game.preserve_offset:
         d.offset = 0
@@ -3911,13 +3933,13 @@ def itemsel_waitkey():
         print(f"\033[{d.currselrow};20H{bold}{itemcolour}{d.currsel} {unbold}› {ityped} {shine(text=item.name,bold=True,offset=d.offset,color=itemcolour_rgb)}",end="",flush=True)
         k = key(timeout=0)  # wait a very very short time for key input to allow shine effect to update at the same time
         if k == "w" or k == "up":
-            itemsel_rem()
+            itemsel_up()
         elif k == "s" or k == "down":
-            itemsel_add()
+            itemsel_down()
         elif k == "a" or k == "left":
-            itemsel_page_prev()
+            inv_prevpage()
         elif k == "d" or k == "right":
-            itemsel_page_next()
+            inv_nextpage()
         elif k == bind.back:
             game.goto = inventory
             return
@@ -3998,7 +4020,7 @@ def itemsel_waitkey():
             d.length += 1
             sound("pop_2")
             game.preserve_offset = True
-            game.goto = gdi_refresh
+            game.goto = reload_items
             d.preserved_item_id = d.currsel
             return
             
@@ -4017,7 +4039,7 @@ def itemsel_waitkey():
             if d.length > 0:
                 d.length -= 1
             sound("pop_1")
-            game.goto = gdi_refresh
+            game.goto = reload_items
             d.preserved_item_id = max(1, min(d.currsel, d.length))
             return
         
@@ -4200,7 +4222,7 @@ def unselect_current():
     colour = x7 if req_level <= int(player.level) else xlred
     print(f"\033[{d.currselrow};20H\033[38;5;8m{d.currsel} › {ityped} \033[0m{x7}{item.name} \033[{d.currselrow};56H{colour}↑{item.level}")
 
-def itemsel_add():
+def itemsel_down():
     unselect_current()
     d.currsel += 1
     if d.currsel > d.length:
@@ -4211,7 +4233,7 @@ def itemsel_add():
         d.currselrow += 1
     displaynewsel()
 
-def itemsel_rem():
+def itemsel_up():
     unselect_current()
     d.currsel -= 1
     if d.currsel < d.begin:
@@ -4222,7 +4244,7 @@ def itemsel_rem():
         d.currselrow -= 1
     displaynewsel()
 
-def gdi_refresh():
+def reload_items():
     if d.moving_progress not in (1, 2):
         if getattr(d, 'preserved_item_id', None) is not None:
             d.currsel = d.preserved_item_id
@@ -4237,36 +4259,36 @@ def gdi_refresh():
     if d.moving_progress not in (1, 2):
         for r in range(19, 29):
             print(f"\033[{r};20H                                        ")
-    gdi_pager()
+    item_pager()
 
-def itemsel_page_next():
+def inv_nextpage():
     if d.length > 10 + (d.page * 10):
         d.page += 1
         d.begin += 10
         d.end += 10
         d.currsel = (d.page * 10) + 1
         d.current = d.begin - 1
-        gdi_refresh()
+        reload_items()
 
-def itemsel_page_prev():
+def inv_prevpage():
     if d.page >= 1:
         d.page -= 1
         d.begin -= 10
         d.end -= 10
         d.currsel = (d.page * 10) + 1
         d.current = d.begin - 1
-        gdi_refresh()
+        reload_items()
 
-def gdi_pager():
+def item_pager():
     d.rowdisplay = 18
     d.currselrow = 19
 
     for a in range(d.begin, d.end + 1):
-        gdi()
+        render_items()
     displaynewsel()
-    game.goto = itemsel_waitkey
+    game.goto = inventory_waitkey
 
-def gdi():
+def render_items():
     while True:
         if d.length == d.current:
             break
@@ -4396,7 +4418,7 @@ def displaynewsel():
     if indicators == "":
         print(f"\033[16;63H{ityped} {bold}{underline}{itemcolour}{item.name}{reset}{x7} ({type_label}){reset}")
     if game.sel == "Weapons":
-        item.actual_atk = calculate_weapon_atk()
+        item.actual_atk = get_actual_atk()
         print(f"\033[24;66H❇️ {xa}{bold}{item.actual_atk}{unbold} ATK")
         # if item.atkcrit can also be an int (0 after decimal point), convert to int
         try:
@@ -4405,7 +4427,7 @@ def displaynewsel():
             atkcrit = item.atkcrit
         print(f"\033[24;80H✴️ {xlyellow}{bold}{atkcrit}{unbold}% Crit")
         
-        print(f"\033[24;94H📶 {xf}Lv {bold}{item.level}{unbold}{x7}/{player.level}")
+        print(f"\033[24;94H📶 {xf}Lv {bold}{item_level_display(item, game.sel)}{unbold}{x7}")
         
         ability = item.ability if item.ability and item.ability.strip() else "None"
         print(f"\033[26;63H🍹 {bold}{xf}Combat ability:{reset}")
@@ -4413,14 +4435,14 @@ def displaynewsel():
         print(f"\033[31;63H📜{xlorange} {item.description}\033[0m")
     else:
         print(f"\033[24;66H🛡️ {xb}{bold}{getattr(item, 'defense', 0)}{unbold}% DEF")
-        print(f"\033[24;94H📶 {xf}Lv {bold}{item.level}{unbold}{x7}/{player.level}")
+        print(f"\033[24;94H📶 {xf}Lv {bold}{item_level_display(item, game.sel)}{unbold}{x7}")
         ability = item.ability if item.ability and item.ability.strip() else "None"
         description = item.description if item.description and item.description.strip() else "None"
         print(f"\033[26;63H🍹 {bold}{xf}Combat ability:{reset}")
         print(f"\033[27;64H› {xf}{ability}")
         print(f"\033[31;63H📜{xlorange} {description}\033[0m")
     # finally, call function to display item ability specials, if applicable
-    item_ability_specials(item.name)
+    get_specials(item.name)
 
 
 
