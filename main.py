@@ -30,6 +30,11 @@ version=1
 subversion=2
 subberversion=1
 
+CHARACTER_MAX_LEVEL = 100
+WEAPON_MAX_LEVEL = 25
+ARMOR_MAX_LEVEL = 20
+HEADWEAR_MAX_LEVEL = 20
+
 
 if subberversion != 0:
     TITLE = f"Battles of Bench - a{version}.{subversion}.{subberversion}"
@@ -103,6 +108,37 @@ _ALLOWED_OPS = {
     ast.Pow: op.pow,
     ast.USub: op.neg
 }
+
+# well, just see the name. Obvious, right?
+def get_item_max_level(category):
+    return {
+        "Weapons": WEAPON_MAX_LEVEL,
+        "Bodywear": ARMOR_MAX_LEVEL,
+        "Helmets": HEADWEAR_MAX_LEVEL,
+    }.get(category)
+
+
+def clamp_item_level(level, category):
+    try:
+        parsed = int(level)
+    except Exception:
+        parsed = 0
+
+    max_level = get_item_max_level(category)
+    if max_level is None:
+        return max(0, parsed)
+    return max(0, min(parsed, max_level))
+
+
+def required_player_level_for_item(item_level, category):
+    level = clamp_item_level(item_level, category)
+    if level <= 1:
+        return 0
+    if category == "Weapons":
+        return level * 4
+    if category in ("Bodywear", "Helmets"):
+        return level * 5
+    return level
 
 # SAFE EVAL -> Used for getx() later. You'll see why. It handles safer calculation.
 def safe_eval(expr):
@@ -368,7 +404,10 @@ class PlayerData:
             "gems": 0,
             "level": 1,
             "money": 0,
-            "skills": 1,
+            "skill_main": 1,
+            "skill_skill": 1,
+            "skill_ult": 1,
+            "skill_talent": 1,
             "xp": 0,
             "xpneeded": 25,
             "tryd": 0
@@ -577,6 +616,7 @@ class KeyBinds:
 bind = KeyBinds()
 
 d.frombattle = False
+d.character_view = 1
 # Oh yeah, here comes the RGB COLOR MESS!! Let's go!!
 bind.load()
 player.load()
@@ -859,7 +899,7 @@ def load_item(item_id, category="Weapons"):
             setattr(item, field, parts[i] if i < len(parts) else None)
 
         # Type conversions
-        item.level = int(item.level)
+        item.level = clamp_item_level(item.level, "Weapons")
         item.atk = int(item.atk)
         item.atkcrit = float(item.atkcrit)
         item.substat_value = int(item.substat_value)
@@ -894,7 +934,8 @@ def load_item(item_id, category="Weapons"):
         head.type_raw = parts[0] if len(parts) > 0 else None
         head.rarity = parts[1] if len(parts) > 1 else None
         head.name = parts[2] if len(parts) > 2 else None
-        head.level = int(parts[3]) if len(parts) > 3 and parts[3] else 0
+        raw_level = int(parts[3]) if len(parts) > 3 and parts[3] else 0
+        head.level = clamp_item_level(raw_level, "Helmets")
         head.defense = int(parts[4]) if len(parts) > 4 and parts[4] else 0
         head.description = parts[5] if len(parts) > 5 else ""
         head.ability = parts[6] if len(parts) > 6 else ""
@@ -908,7 +949,8 @@ def load_item(item_id, category="Weapons"):
         armor.type_raw = parts[0] if len(parts) > 0 else None
         armor.rarity = parts[1] if len(parts) > 1 else None
         armor.name = parts[2] if len(parts) > 2 else None
-        armor.level = int(parts[3]) if len(parts) > 3 and parts[3] else 0
+        raw_level = int(parts[3]) if len(parts) > 3 and parts[3] else 0
+        armor.level = clamp_item_level(raw_level, "Bodywear")
         armor.defense = int(parts[4]) if len(parts) > 4 and parts[4] else 0
         armor.description = parts[5] if len(parts) > 5 else ""
         armor.ability = parts[6] if len(parts) > 6 else ""
@@ -959,6 +1001,7 @@ def save_item(item_id, category="Weapons"):
 
     # ───────────── WEAPONS ─────────────
     if category == "Weapons":
+        item.level = clamp_item_level(getattr(item, "level", 0), "Weapons")
         parts = [
             str(getattr(item, "type_raw", "") or ""),
             str(getattr(item, "rarity", "") or ""),
@@ -977,6 +1020,7 @@ def save_item(item_id, category="Weapons"):
 
     # ───────────── HELMETS ─────────────
     elif category == "Helmets":
+        head.level = clamp_item_level(getattr(head, "level", 0), "Helmets")
         parts = [
             str(getattr(head, "type_raw", "") or ""),
             str(getattr(head, "rarity", "") or ""),
@@ -990,6 +1034,7 @@ def save_item(item_id, category="Weapons"):
 
     # ───────────── BODYWEAR ─────────────
     elif category == "Bodywear":
+        armor.level = clamp_item_level(getattr(armor, "level", 0), "Bodywear")
         parts = [
             str(getattr(armor, "type_raw", "") or ""),
             str(getattr(armor, "rarity", "") or ""),
@@ -2707,6 +2752,41 @@ def house():
             # file: General / Temp / sound_cmd_queue.txt
             sound(f"big_level {pitch}")
 
+
+def effective_def(totaldef):
+    if totaldef <= 40:
+        return totaldef
+
+    totaldef -= 40
+    eff = 40
+
+    # 41-50% (2 DEF each)
+    gain = min(totaldef, 20)
+    eff += gain // 2
+    totaldef -= gain
+
+    # 51-60% (4 DEF each)
+    gain = min(totaldef, 40)
+    eff += gain // 4
+    totaldef -= gain
+
+    # 61-65% (6 DEF each)
+    gain = min(totaldef, 30)
+    eff += gain // 6
+    totaldef -= gain
+
+    # 66-70% (10 DEF each)
+    gain = min(totaldef, 50)
+    eff += gain // 10
+    totaldef -= gain
+
+    # 71-75% (15 DEF each)
+    gain = min(totaldef, 75)
+    eff += gain // 15
+
+    return min(eff, 75)
+
+
 # (i'm sorry)
 def character():
     player.load()
@@ -2720,30 +2800,35 @@ def character():
     for req_level, color in thresholds:
         if player.level >= req_level:
             player.color = color
-    scales = [None]
     
-    scales.extend([
-        {"mdmg": 80,  "sdmg": 175, "ulthp": 5,  "erch": 100},
-        {"mdmg": 84,  "sdmg": 185, "ulthp": 6,  "erch": 100},
-        {"mdmg": 88,  "sdmg": 195, "ulthp": 7,  "erch": 100},
-        {"mdmg": 95,  "sdmg": 210, "ulthp": 8,  "erch": 100},
-        {"mdmg": 100, "sdmg": 225, "ulthp": 10, "erch": 100},
-        {"mdmg": 104, "sdmg": 235, "ulthp": 11, "erch": 102},
-        {"mdmg": 108, "sdmg": 240, "ulthp": 12, "erch": 104},
-        {"mdmg": 112, "sdmg": 250, "ulthp": 13, "erch": 106},
-        {"mdmg": 116, "sdmg": 260, "ulthp": 14, "erch": 110},
-        {"mdmg": 125, "sdmg": 275, "ulthp": 15, "erch": 115},
-        {"mdmg": 130, "sdmg": 290, "ulthp": 17, "erch": 120},
-        {"mdmg": 136, "sdmg": 305, "ulthp": 18, "erch": 124},
-        {"mdmg": 140, "sdmg": 320, "ulthp": 20, "erch": 126},
-        {"mdmg": 144, "sdmg": 335, "ulthp": 22, "erch": 130},
-        {"mdmg": 180, "sdmg": 390, "ulthp": 33, "erch": 145},
-    ])
-    ref = scales[player.skills]
-    player.dmg_main = ref["mdmg"]
-    player.dmg_skill = ref["sdmg"]
-    player.dmg_ulthp = ref["mdmg"]
-    player.energyrecharge = ref["sdmg"]
+    # get skill levels
+    lvl_main = player.skill_main
+    lvl_skill = player.skill_skill
+    lvl_ult = player.skill_ult
+    player.playerclass = "warrior" # for now, only one, hardcode but hope it works
+    
+    if player.playerclass == "warrior":
+        from Scripts.Classes import warrior as playerclass
+        d.classicon = f"{xlyellow}🪖{reset}"
+        player.dmg_main = playerclass.main_damage[lvl_main - 1]
+        player.dmg_skill = playerclass.skill_damage[lvl_skill - 1]
+        player.dmg_ult = playerclass.ult_damage[lvl_ult - 1]
+
+        player.main_cost = playerclass.main_cost[lvl_main - 1]
+        player.skill_cost = playerclass.skill_cost[lvl_skill - 1]
+        player.ult_cost = playerclass.ult_cost[lvl_ult - 1]
+
+        player.double_tap = playerclass.double_tap[lvl_main - 1]
+        player.stronger_skill = playerclass.stronger_skill[lvl_skill - 1]
+        player.stronger_ult = playerclass.stronger_ult[lvl_ult - 1]
+
+        player.double_tap_cost = playerclass.double_tap_cost[lvl_main - 1]
+        player.mastery = max(1, (lvl_main + lvl_skill + lvl_ult) // 3) # average of all skill levels, rounded down
+
+        player.double_tap_crit = playerclass.double_tap_crit[player.mastery - 1]
+        player.skill_atk_decrease = playerclass.skill_atk_decrease[player.mastery - 1]
+        player.ult_crit_percent = playerclass.ult_crit_percent[player.mastery - 1]
+
     boxwidth = 25
     playername=read("General/playername")
     playernamd = f"{playername} › Attributes"
@@ -2815,17 +2900,18 @@ def character():
     expected = round(totaldmg * (1 + (critrate / 100) * (item.atkcrit / 100)))
     number = 1
     # --- Defence ---
-    totaldef = basedef
+    raw_def = basedef
 
     if getattr(item, "substat", None) == "Defence":
-        totaldef += item.substat_value
+        raw_def += item.substat_value
 
     if getattr(armor, "name", None):
-        totaldef += armor.defense
+        raw_def += armor.defense
 
     if getattr(head, "name", None):
-        totaldef += head.defense
+        raw_def += head.defense
 
+    totaldef = effective_def(raw_def)
 
     # --- Health ---
     totalhp = basehp
@@ -2972,6 +3058,15 @@ def character():
         game.goto = battle_preparation
         return
     
+    # now comes the insane part: page switching!
+    if d.character_view == 1:
+        pass # attributes
+    elif d.character_view == 2:
+        game.goto = character2
+        return # equipment
+    elif d.character_view == 3:
+        pass # skill tree
+    
     print(f"""
 [1;{number}H{reset}
 [2;17H#3{x7}╭───────────────────────────╮
@@ -3000,17 +3095,16 @@ def character():
 [23;3H{xf}{bold}│ {player.color} ██      ██                      {xf}  │{reset}
 [24;3H{xf}{bold}│                                    │{reset}
 [25;3H{xf}{bold}╰────────────────────────────────────╯{reset}
-[26;3H{x6}{bold}╭────────────────────────────────────╮
-[27;3H{x6}{bold}│                                    │
-[28;3H{x6}{bold}│ {reset}{xf}{bold}→      {xlyellow}Viewing {reset}{xf}-{xe} Attributes      {xf}{bold}←{x6}{bold} │
-[29;3H{x6}{bold}│                                    │
-[30;3H{x6}{bold}╰────────────────────────────────────╯{reset}
-[31;3H{x7}╭────────────────────────────────────╮
-[32;3H{x7}│ {xf}↓ Press {xlyellow}{bold}[S] once{reset}{xe} {xf}-{xe} Equipment       {x7}│
-[33;3H{x7}╰────────────────────────────────────╯
-[34;3H{x7}╭────────────────────────────────────╮
-
-[35;3H{x7}│ {xf}⇓ Press {xlyellow}{bold}[S] twice {reset}{xe}{xf}-{xe} Skill tree{reset}{x7}     │
+[26;3H{x7}{bold}╭────────────────────────────────────╮
+[27;3H{x7}{bold}│ {reset}{xf}✅ {rgb(197, 229, 200)}{bold}[1] {reset}{xf}-{xa} Attributes               {xf}{x7}{bold} │
+[28;3H{x7}{bold}│                                    │
+[29;3H{x7}{bold}│ {reset}{xf}{item.type} {xlyellow}{bold}[2]{reset}{xe} {xf}-{xe} Equipment & fragments     {x7}{bold}│
+[30;3H{x7}{bold}│                                    │{reset}
+[31;3H{x7}{bold}│ {reset}{xf}{d.classicon} {xlyellow}{bold}[3]{reset}{xe} {xf}-{xe} Classes & skill tree      {x7}{bold}│
+[32;3H{x7}{bold}│                                    │
+[33;3H{x7}{bold}│ {reset}{xf}🎨 {xlyellow}{bold}[4]{reset}{xe} {xf}-{xe} Character personalization {x7}{bold}│
+[34;3H{x7}{bold}│                                    │
+[35;3H{x7}{bold}│ {reset}{xf}🔢 {xlyellow}{bold}[5] {reset}{xe}{xf}-{xe} Lifetime stats{reset}{x7}{bold}            │
 [15;20H{item.type} {xlyellow}Attack{reset}{x8}.....{bold}{xe}{char_round(round(totaldmg))}{reset}
 [16;20H🛡️ {x3}Defence{reset}{x8}....{bold}{xb}{char_round(round(totaldef,1))}%{reset}
 [17;20H❤️ {xc}Health{reset}{x8}.....{bold}{xlred}{char_round(round(totalhp))} {reset}
@@ -3086,7 +3180,7 @@ def character():
 [15;62H{RGB}255;219;187mSpeed{x8}---------{xlyellow}{bold}{char_round(player.speed)}{reset}
 [18;44H{reset}{RGB}255;219;187m⇝{xf} 
 [13;101H{reset}⌬ 
-[13;103H{RGB}186;243;219mSkill Lv.{x8}-----{xa}{bold}{player.skills}{reset}{RGB}186;243;219m/15{reset}
+[13;103H{RGB}186;243;219mSkill Lv.{x8}-----{xa}{bold}soon!{reset}{RGB}186;243;219m/15{reset}
 [14;101H{reset}⇋ 
 [14;103H{RGB}186;243;219mWeapon Lv.{x8}----{xa}{bold}{item_level_display(item, "Weapons")}{reset}{RGB}186;243;219m{reset}
 [21;86H{reset}{RGB}186;243;219m⇝{xf} 
@@ -3165,8 +3259,12 @@ def character():
     while True:
         k = key()
         if k.lower() == bind.back or k.lower() == "esc":
-            
             game.goto = house
+            return
+        if k.lower() == bind.back or k.lower() == "2":
+            d.character_view = 2
+            sound("map_switch2")
+            game.goto = character
             return
 
 def settings():
@@ -3264,6 +3362,101 @@ def inventory():
         if k.lower() == "3":
             game.sel = "Helmets"
             game.goto = inventory_prep
+            return
+
+def character2():
+    boxwidth = 25
+    playername=read("General/playername")
+    playernamd = f"{playername} › Equipment"
+    length = visible_len(playernamd)
+    pad = (boxwidth - length) // 2 + 1
+    spaces = " " * max(pad, 0)
+    centered = spaces + playernamd
+    number = 1
+    print(f"""
+[1;{number}H{reset}
+[2;17H#3{x7}╭───────────────────────────╮
+[3;17H#4{x7}╭───────────────────────────╮
+[4;17H#3{x7}│ {xf}{bold}{centered}       {reset}
+[5;17H#4{x7}│ {xf}{bold}{centered}       {reset}
+[6;17H#3{x7}╰───────────────────────────╯
+[7;17H#4{x7}╰───────────────────────────╯
+[4;45H#3{x7}│ {reset}{x7}{bold}{reset}
+[5;45H#4{x7}│ {reset}{x7}{bold}{reset}
+[08;3H{xf}{bold}╭────────────────────────────────────╮{reset}
+[09;3H{xf}{bold}│                                    │{reset}
+[10;3H{xf}{bold}│ {player.color}   ██████                        {xf}  │{reset}
+[11;3H{xf}{bold}│ {player.color} ██      ██                      {xf}  │{reset}
+[12;3H{xf}{bold}│ {player.color} ██ •  • ██                      {xf}  │{reset}
+[13;3H{xf}{bold}│ {player.color} ██      ██                      {xf}  │{reset}
+[14;3H{xf}{bold}│ {player.color}   ██████                        {xf}  │{reset}
+[15;3H{xf}{bold}│ {player.color}     ██                          {xf}  │{reset}
+[16;3H{xf}{bold}│ {player.color}     ██    ██                    {xf}  │{reset}
+[17;3H{xf}{bold}│ {player.color}     ██  ██                      {xf}  │{reset}
+[18;3H{xf}{bold}│ {player.color}  ███████                        {xf}  │{reset}
+[19;3H{xf}{bold}│ {player.color}██   ██                          {xf}  │{reset}
+[20;3H{xf}{bold}│ {player.color}     ██                          {xf}  │{reset}
+[21;3H{xf}{bold}│ {player.color}     ██                          {xf}  │{reset}
+[22;3H{xf}{bold}│ {player.color}   ██  ██                        {xf}  │{reset}
+[23;3H{xf}{bold}│ {player.color} ██      ██                      {xf}  │{reset}
+[24;3H{xf}{bold}│                                    │{reset}
+[25;3H{xf}{bold}╰────────────────────────────────────╯{reset}
+[26;3H{x7}{bold}╭────────────────────────────────────╮
+[27;3H{x7}{bold}│ {reset}{xf}📊 {xlyellow}{bold}[1] {reset}{xf}-{xe} Attributes               {xf}{x7}{bold} │
+[28;3H{x7}{bold}│                                    │
+[29;3H{x7}{bold}│ {reset}{xf}✅ {rgb(197, 229, 200)}{bold}[2]{reset}{xe} {xf}-{xa} Equipment & fragments     {x7}{bold}│
+[30;3H{x7}{bold}│                                    │{reset}
+[31;3H{x7}{bold}│ {reset}{xf}{d.classicon} {xlyellow}{bold}[3]{reset}{xe} {xf}-{xe} Classes & skill tree      {x7}{bold}│
+[32;3H{x7}{bold}│                                    │
+[33;3H{x7}{bold}│ {reset}{xf}🎨 {xlyellow}{bold}[4]{reset}{xe} {xf}-{xe} Character personalization {x7}{bold}│
+[34;3H{x7}{bold}│                                    │
+[35;3H{x7}{bold}│ {reset}{xf}🔢 {xlyellow}{bold}[5] {reset}{xe}{xf}-{xe} Lifetime stats{reset}{x7}{bold}            │
+
+[08;42H{xf}{bold}{RGB}255;219;187m╭───────────────────────────────────────╮ {RGB}186;243;219m╭─────────────────────────────────────────╮
+[09;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                         │
+[10;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                         │
+[11;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                         │
+[12;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                         │
+[13;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                         │
+[14;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                         │
+[15;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                         │
+[16;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                         │
+[17;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                         │
+[18;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                         │
+[19;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                         │
+[20;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                         │
+[21;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                         │
+[22;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                         │
+[23;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                         │
+[24;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                         │
+[25;42H{xf}{bold}{RGB}255;219;187m╰───────────────────────────────────────╯ {RGB}186;243;219m╰─────────────────────────────────────────╯
+[08;43H{RGB}255;219;187m{bold}┤ {item.name if item.name is not None else "Weapon"} ├
+[08;85H{RGB}186;243;219m{bold}┤ {fragment.name if fragment.name is not None else "Fragments"} ├
+[26;42H{RGB}173;216;225m╭───────────────────────────────────────╮ {RGB}255;203;204m╭─────────────────────────────────────────╮
+[27;42H{RGB}173;216;225m│                                       │ {RGB}255;203;204m│                                         │
+[28;42H{RGB}173;216;225m│                                       │ {RGB}255;203;204m│                                         │
+[29;42H{RGB}173;216;225m│                                       │ {RGB}255;203;204m│                                         │
+[30;42H{RGB}173;216;225m│                                       │ {RGB}255;203;204m│                                         │
+[31;42H{RGB}173;216;225m│                                       │ {RGB}255;203;204m│                                         │
+[32;42H{RGB}173;216;225m│                                       │ {RGB}255;203;204m│                                         │
+[33;42H{RGB}173;216;225m│                                       │ {RGB}255;203;204m│                                         │
+[34;42H{RGB}173;216;225m│                                       │ {RGB}255;203;204m│                                         │
+[35;42H{RGB}173;216;225m│                                       │ {RGB}255;203;204m│                                         │
+[26;43H{RGB}173;216;225m{bold}┤ {head.name if head.name is not None else "Head"} ├
+[26;85H{RGB}255;203;204m{bold}┤ {armor.name if armor.name is not None else "Armor"} ├
+[36;42H{RGB}173;216;225m╰───────────────────────────────────────╯ {RGB}255;203;204m╰─────────────────────────────────────────╯
+[36;3H{x7}╰────────────────────────────────────╯{reset}
+""".strip().replace("\n",""),end="",flush=True)
+    while True:
+        k = key()
+        if k.lower() == bind.back or k.lower() == "esc":
+            sound("map_switch1")
+            game.goto = house
+            return
+        if k.lower() == bind.back or k.lower() == "1":
+            d.character_view = 1
+            sound("map_switch1")
+            game.goto = character
             return
 
 def screensetup():
@@ -3538,10 +3731,11 @@ def inv_compare_value(item_obj, category):
 
 
 def item_level_display(item_obj, category):
-    level = getattr(item_obj, "level", 0)
-    if category == "Weapons":
-        return f"{level}/25"
-    return str(level)
+    level = clamp_item_level(getattr(item_obj, "level", 0), category)
+    max_level = get_item_max_level(category)
+    if max_level is None:
+        return str(level)
+    return f"{level}/{max_level}"
 
 
 def maininv_md():
@@ -3772,7 +3966,7 @@ def inventory_waitkey():
             equipped_path = inv_active_path(game.sel)
             if not equipped_path:
                 continue
-            req_level = item.level * 4 if game.sel == "Weapons" else item.level
+            req_level = required_player_level_for_item(item.level, game.sel)
             if req_level <= player.level:
                 current_equipped = str(read(equipped_path, default="none")).strip()
                 if current_equipped == str(d.currsel):
@@ -4019,7 +4213,7 @@ def unselect_current():
     if not item: return
     ityped = inv_type_icon(item)
 
-    req_level = int(item.level) * 4 if game.sel == 'Weapons' else int(item.level)
+    req_level = required_player_level_for_item(item.level, game.sel)
     colour = x7 if req_level <= int(player.level) else xlred
     print(f"\033[{d.currselrow};20H\033[38;5;8m{d.currsel} › {ityped} \033[0m{x7}{item.name} \033[{d.currselrow};56H{colour}↑{item.level}")
 
@@ -4106,7 +4300,7 @@ def render_items():
         print(f"\033[{d.rowdisplay};20H{x8}{" "*40}{xf}",end="")
         
         indicator = "↑"
-        req_level = int(item.level) * 4 if game.sel == 'Weapons' else int(item.level)
+        req_level = required_player_level_for_item(item.level, game.sel)
         colour = x7 if req_level <= int(player.level) else xlred
         if item.rarity == "08":
             itemcolour = xf
@@ -4151,7 +4345,7 @@ def displaynewsel():
 
     # Write selection in list
     indicator = "↑"
-    req_level = int(item.level) * 4 if game.sel == 'Weapons' else int(item.level)
+    req_level = required_player_level_for_item(item.level, game.sel)
     colour = x7 if req_level <= int(player.level) else xlred
     itemcolour = xf
     itemcolour_rgb = (255, 255, 255)
@@ -4170,7 +4364,7 @@ def displaynewsel():
     elif item.rarity == "0e":
         itemcolour = xe
         itemcolour_rgb = (240, 232, 158)
-    req_level = int(item.level) * 4 if game.sel == 'Weapons' else int(item.level)
+    req_level = required_player_level_for_item(item.level, game.sel)
     colour = x7 if req_level <= int(player.level) else xlred
     if not game.preserve_offset:
         d.offset = 0
@@ -4184,7 +4378,7 @@ def displaynewsel():
     
     # Create XP bar
     xpbar = ""
-    max_lvl = 25 if game.sel == 'Weapons' else 100
+    max_lvl = get_item_max_level(game.sel) or 1
     filled = round((item.level*43)/max_lvl)
     empty = 43-filled
     
@@ -4206,8 +4400,8 @@ def displaynewsel():
     # If locked (item.locked = 1), show locked indicator
     if str(getattr(item, "locked", 0)) == "1":
         indicators += "🔒"
-    # If item.level > player.level, show level requirement indicator
-    req_level = int(item.level) * 4 if game.sel == 'Weapons' else int(item.level)
+    # If the player's level is below this item's requirement, show lock indicator.
+    req_level = required_player_level_for_item(item.level, game.sel)
     if req_level > int(player.level):
         indicators += f"🚫"
     # If item is currently in comparison, show comparison indicator

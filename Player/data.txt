@@ -2,9 +2,12 @@
     "dust": 0,
     "gems": 0,
     "level": 100,
-    "money": 4000,
-    "skills": 1,
-    "xp": 0,
+    "money": 4980,
+    "skill_main": 1,
+    "skill_skill": 1,
+    "skill_ult": 1,
+    "skill_talent": 1,
+    "xp": 1,
     "xpneeded": 25,
     "tryd": 0
 }

@@ -1,2 +1,2 @@
-helmet;;0b;;Average Helmet;;50;;24;;None;;None;;0
+helmet;;0b;;Average Helmet;;20;;24;;None;;None;;0
 
