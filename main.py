@@ -483,13 +483,14 @@ class SettingsData:
             "datatype": 1,
             "sorting": 0,
             "levelup_mode": 0,
-            "music": 3,
+            "music": 0,
             "pronouns": "they/them/their",
-            "sfx": 10,
-            "skipboot": 0,
-            "skiplevelanim": 0,
+            "sfx": 5,
+            "skipboot": False,
+            "skiplevelanim": False,
             "sound": 10,
-            "spatial": 0
+            "spatial": False,
+            "soon": False
         }
 
         self.load()
@@ -2810,9 +2811,13 @@ def character():
     if player.playerclass == "warrior":
         from Scripts.Classes import warrior as playerclass
         d.classicon = f"{xlyellow}🪖{reset}"
-        player.dmg_main = playerclass.main_damage[lvl_main - 1]
-        player.dmg_skill = playerclass.skill_damage[lvl_skill - 1]
-        player.dmg_ult = playerclass.ult_damage[lvl_ult - 1]
+        player.main_dmg = playerclass.main_damage[lvl_main - 1]
+        player.skill_dmg = playerclass.skill_damage[lvl_skill - 1]
+        player.ult_dmg = playerclass.ult_damage[lvl_ult - 1]
+        
+        player.main_name = playerclass.main_name
+        player.skill_name = playerclass.skill_name
+        player.ult_name = playerclass.ult_name
 
         player.main_cost = playerclass.main_cost[lvl_main - 1]
         player.skill_cost = playerclass.skill_cost[lvl_skill - 1]
@@ -3065,7 +3070,8 @@ def character():
         game.goto = character2
         return # equipment
     elif d.character_view == 3:
-        pass # skill tree
+        game.goto = character3
+        return # skills & classes
     
     print(f"""
 [1;{number}H{reset}
@@ -3266,8 +3272,338 @@ def character():
             sound("map_switch2")
             game.goto = character
             return
-
+        if k.lower() == bind.back or k.lower() == "3":
+            d.character_view = 3
+            sound("map_switch2")
+            game.goto = character
+            return
+        
+        
+        
+        
+        
+        
+        
+        
+        
 def settings():
+    d.settings_selection = "category"
+    d.settings_cursor = 1
+    d.settings_category = 1
+    d.setting_focused = False
+    cls()
+    move(1,1)
+    print(f"""
+#3{x1}                  ╭────────────────────────╮
+#4{x1}                  ╭────────────────────────╮
+#3{x1}                  │   {reset}{xb}⚙ {bold} Options & info {reset}{x1}   │
+#4{x1}                  │   {reset}{xb}⚙ {bold} Options & info {reset}{x1}   │
+#3{x1}                  ╰────────────────────────╯
+#4{x1}                  ╰────────────────────────╯{x7}
+╭───────────────────┬────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│                   │                                                                                                        │
+│                   │                                                                                                        │
+│                   │                                                                                                        │
+│                   │                                                                                                        │
+│                   │                                                                                                        │
+│                   │                                                                                                        │
+│                   │                                                                                                        │
+│                   │                                                                                                        │
+│                   │                                                                                                        │
+│                   │                                                                                                        │
+│                   │                                                                                                        │
+│                   │                                                                                                        │
+│                   │                                                                                                        │
+│                   │                                                                                                        │
+│                   │                                                                                                        │
+│                   │                                                                                                        │
+│                   │                                                                                                        │
+│                   │                                                                                                        │
+│                   │                                                                                                        │
+│                   │                                                                                                        │
+│                   │                                                                                                        │
+│                   │                                                                                                        │
+│                   │                                                                                                        │
+│                   ├──────────────────────────────────────────────────────────────────────────┬─────────────────────────────┤
+{xlred}│                   {x7}│                                                                          │                             │
+{xlred}│  {xc}{bold} Back to house  {unbold} {xlred}{x7}│{x7}                                                                          │                             │
+{xlred}│  {xc}[press {bold}{bind.back.upper()}{unbold} | {bold}ESC{unbold}]  {xlred}{x7}│{x7}                                                                          │                             │
+{xlred}│                   {x7}│{x7}                                                                          │                             │
+{xlred}╰───────────────────{x7}┴{x7}──────────────────────────────────────────────────────────────────────────┴─────────────────────────────╯
+""".strip(),end="",flush=True)
+    
+    game.goto = settings2
+    return
+
+def settings2():
+
+    # build category selection
+    # category 1: gameplay
+
+    move(7,1)
+    if d.settings_selection == "category":
+        print(f"{RGB}186;243;219m{bold}╭───────────────────┬{reset}" if d.settings_selection == "category" and d.settings_category == 1 else f"{x7}╭───────────────────┬")
+        print(f"{RGB}186;243;219m{bold}│                   │{reset}" if d.settings_selection == "category" and d.settings_category == 1 else f"{x7}│                   │")
+        print(f"{RGB}186;243;219m{bold}│     ◆ Battles     │{reset}" if d.settings_selection == "category" and d.settings_category == 1 else f"{x7}│     ◆ Battles     │")
+        print(f"{RGB}186;243;219m{bold}│                   │{reset}" if d.settings_selection == "category" and d.settings_category == 1 else f"{x7}│                   │")
+        print(f"{RGB}186;243;219m{bold}├───────────────────┤{reset}" if d.settings_selection == "category" and d.settings_category in [1,2] else f"{x7}├───────────────────┤")
+        print(f"{RGB}186;243;219m{bold}│                   │{reset}" if d.settings_selection == "category" and d.settings_category == 2 else f"{x7}│                   │")
+        print(f"{RGB}186;243;219m{bold}│   ◐ Look & feel   │{reset}" if d.settings_selection == "category" and d.settings_category == 2 else f"{x7}│   ◐ Look & feel   │")
+        print(f"{RGB}186;243;219m{bold}│                   │{reset}" if d.settings_selection == "category" and d.settings_category == 2 else f"{x7}│                   │")
+        print(f"{RGB}186;243;219m{bold}├───────────────────┤{reset}" if d.settings_selection == "category" and d.settings_category in [2,3] else f"{x7}├───────────────────┤")
+        print(f"{RGB}186;243;219m{bold}│                   │{reset}" if d.settings_selection == "category" and d.settings_category == 3 else f"{x7}│                   │")
+        print(f"{RGB}186;243;219m{bold}│  ◇ Sound & music  │{reset}" if d.settings_selection == "category" and d.settings_category == 3 else f"{x7}│  ◇ Sound & music  │")
+        print(f"{RGB}186;243;219m{bold}│                   │{reset}" if d.settings_selection == "category" and d.settings_category == 3 else f"{x7}│                   │")
+        print(f"{RGB}186;243;219m{bold}├───────────────────┤{reset}" if d.settings_selection == "category" and d.settings_category in [3,4] else f"{x7}├───────────────────┤")    
+        print(f"{RGB}186;243;219m{bold}│                   │{reset}" if d.settings_selection == "category" and d.settings_category == 4 else f"{x7}│                   │")
+        print(f"{RGB}186;243;219m{bold}│    ⬙ Key binds    │{reset}" if d.settings_selection == "category" and d.settings_category == 4 else f"{x7}│    ⬙ Key binds    │")
+        print(f"{RGB}186;243;219m{bold}│                   │{reset}" if d.settings_selection == "category" and d.settings_category == 4 else f"{x7}│                   │")
+        print(f"{RGB}186;243;219m{bold}├───────────────────┤{reset}" if d.settings_selection == "category" and d.settings_category in [4,5] else f"{x7}├───────────────────┤")      
+        print(f"{RGB}186;243;219m{bold}│                   │{reset}" if d.settings_selection == "category" and d.settings_category == 5 else f"{x7}│                   │")
+        print(f"{RGB}186;243;219m{bold}│  ∴ Accessibility  │{reset}" if d.settings_selection == "category" and d.settings_category == 5 else f"{x7}│  ∴ Accessibility  │")
+        print(f"{RGB}186;243;219m{bold}│                   │{reset}" if d.settings_selection == "category" and d.settings_category == 5 else f"{x7}│                   │")
+        print(f"{RGB}186;243;219m{bold}├───────────────────┤{reset}" if d.settings_selection == "category" and d.settings_category in [5,6] else f"{x7}├───────────────────┤")          
+        print(f"{RGB}186;243;219m{bold}│                   │{reset}" if d.settings_selection == "category" and d.settings_category == 6 else f"{x7}│                   │")
+        print(f"{RGB}186;243;219m{bold}│    ۵ Developer    │{reset}" if d.settings_selection == "category" and d.settings_category == 6 else f"{x7}│    ۵ Developer    │")
+        print(f"{RGB}186;243;219m{bold}│                   │{reset}" if d.settings_selection == "category" and d.settings_category == 6 else f"{x7}│                   │")
+        print(f"{RGB}186;243;219m{bold}├───────────────────┼{reset}" if d.settings_selection == "category" and d.settings_category in [6] else f"{x7}├───────────────────┼")         
+
+    if d.settings_selection == "setting":
+        print(f"{x3}{bold}╭───────────────────┬{reset}" if d.settings_selection == "setting" and d.settings_category == 1 else f"{x7}╭───────────────────┬")
+        print(f"{x3}{bold}│                   │{reset}" if d.settings_selection == "setting" and d.settings_category == 1 else f"{x7}│                   │")
+        print(f"{x3}{bold}│     ◆ Battles     │{reset}" if d.settings_selection == "setting" and d.settings_category == 1 else f"{x7}│     ◆ Battles     │")
+        print(f"{x3}{bold}│                   │{reset}" if d.settings_selection == "setting" and d.settings_category == 1 else f"{x7}│                   │")
+        print(f"{x3}{bold}├───────────────────┤{reset}" if d.settings_selection == "setting" and d.settings_category in [1,2] else f"{x7}├───────────────────┤")
+        print(f"{x3}{bold}│                   │{reset}" if d.settings_selection == "setting" and d.settings_category == 2 else f"{x7}│                   │")
+        print(f"{x3}{bold}│   ◐ Look & feel   │{reset}" if d.settings_selection == "setting" and d.settings_category == 2 else f"{x7}│   ◐ Look & feel   │")
+        print(f"{x3}{bold}│                   │{reset}" if d.settings_selection == "setting" and d.settings_category == 2 else f"{x7}│                   │")
+        print(f"{x3}{bold}├───────────────────┤{reset}" if d.settings_selection == "setting" and d.settings_category in [2,3] else f"{x7}├───────────────────┤")
+        print(f"{x3}{bold}│                   │{reset}" if d.settings_selection == "setting" and d.settings_category == 3 else f"{x7}│                   │")
+        print(f"{x3}{bold}│  ◇ Sound & music  │{reset}" if d.settings_selection == "setting" and d.settings_category == 3 else f"{x7}│  ◇ Sound & music  │")
+        print(f"{x3}{bold}│                   │{reset}" if d.settings_selection == "setting" and d.settings_category == 3 else f"{x7}│                   │")
+        print(f"{x3}{bold}├───────────────────┤{reset}" if d.settings_selection == "setting" and d.settings_category in [3,4] else f"{x7}├───────────────────┤")    
+        print(f"{x3}{bold}│                   │{reset}" if d.settings_selection == "setting" and d.settings_category == 4 else f"{x7}│                   │")
+        print(f"{x3}{bold}│    ⬙ Key binds    │{reset}" if d.settings_selection == "setting" and d.settings_category == 4 else f"{x7}│    ⬙ Key binds    │")
+        print(f"{x3}{bold}│                   │{reset}" if d.settings_selection == "setting" and d.settings_category == 4 else f"{x7}│                   │")
+        print(f"{x3}{bold}├───────────────────┤{reset}" if d.settings_selection == "setting" and d.settings_category in [4,5] else f"{x7}├───────────────────┤")      
+        print(f"{x3}{bold}│                   │{reset}" if d.settings_selection == "setting" and d.settings_category == 5 else f"{x7}│                   │")
+        print(f"{x3}{bold}│  ∴ Accessibility  │{reset}" if d.settings_selection == "setting" and d.settings_category == 5 else f"{x7}│  ∴ Accessibility  │")
+        print(f"{x3}{bold}│                   │{reset}" if d.settings_selection == "setting" and d.settings_category == 5 else f"{x7}│                   │")
+        print(f"{x3}{bold}├───────────────────┤{reset}" if d.settings_selection == "setting" and d.settings_category in [5,6] else f"{x7}├───────────────────┤")          
+        print(f"{x3}{bold}│                   │{reset}" if d.settings_selection == "setting" and d.settings_category == 6 else f"{x7}│                   │")
+        print(f"{x3}{bold}│    ۵ Developer    │{reset}" if d.settings_selection == "setting" and d.settings_category == 6 else f"{x7}│    ۵ Developer    │")
+        print(f"{x3}{bold}│                   │{reset}" if d.settings_selection == "setting" and d.settings_category == 6 else f"{x7}│                   │")
+        print(f"{x3}{bold}├───────────────────┼{reset}" if d.settings_selection == "setting" and d.settings_category in [6] else f"{x7}├───────────────────┼")      
+    # page = SOUND_SETTINGS, APPEARANCE_SETTINGS, etc.
+    from Settings.battles import SETTINGS as BATTLE_SETTINGS
+    from Settings.appearance import SETTINGS as APPEARANCE_SETTINGS
+    from Settings.sound import SETTINGS as SOUND_SETTINGS
+    from Settings.keybinds import SETTINGS as KEYBIND_SETTINGS
+    from Settings.accessibility import SETTINGS as ACCESSIBILITY_SETTINGS
+    from Settings.developer import SETTINGS as DEVELOPER_SETTINGS
+    page_list = [
+    BATTLE_SETTINGS,
+    APPEARANCE_SETTINGS,
+    SOUND_SETTINGS,
+    KEYBIND_SETTINGS,
+    ACCESSIBILITY_SETTINGS,
+    DEVELOPER_SETTINGS,
+    ]
+    max_settings = [len(p) for p in page_list] # max settings per category
+
+    
+
+    page = page_list[d.settings_category - 1]
+
+    SETTINGS_COL = 23
+    SETTINGS_ROW = 8
+    BOX_WIDTH = 100
+    BOX_HEIGHT = 3
+
+    # blanks from top left to bottom right (row, col style)
+    blank(SETTINGS_ROW, SETTINGS_COL,  30, SETTINGS_COL + BOX_WIDTH + 2)
+    
+    for i, item in enumerate(page):
+
+        try:
+            value = getattr(setting, item["attr"])
+        except Exception as e:
+            move(10, 40)
+            print(f"ERROR: {e}", end="")
+            return
+
+        if item["type"] == "bool":
+            value = "On" if value else "Off"
+
+        row = SETTINGS_ROW + i * BOX_HEIGHT
+
+        # Top
+        print(reset)
+        move(row, SETTINGS_COL)
+        if i == d.settings_cursor - 1 and d.settings_selection == "setting":
+            print(f"{RGB}186;243;219m╭" + "─" * BOX_WIDTH + "╮", end="")
+        else:
+            print("╭" + "─" * BOX_WIDTH + "╮", end="")
+
+        # Middle
+        move(row + 1, SETTINGS_COL)
+        if i == d.settings_cursor - 1 and d.settings_selection == "setting":
+            print(f"{RGB}186;243;219m│", end="")
+        else:
+            print("│", end="")
+
+        move(row + 1, SETTINGS_COL + 2)
+
+        if i == d.settings_cursor - 1 and d.settings_selection == "setting":
+            print(f"{xf}→ {xa}{bold}{item['name']}{reset}", end="")
+        else:
+            print(item["name"], end="")
+
+        value = str(value)
+
+        move(row + 1, SETTINGS_COL + BOX_WIDTH - len(value))
+        print(value, end="")
+
+        move(row + 1, SETTINGS_COL + BOX_WIDTH + 1)
+        if i == d.settings_cursor - 1 and d.settings_selection == "setting":
+            print(f"{RGB}186;243;219m│", end="")
+        else:
+            print("│", end="")
+
+        # Bottom
+        move(row + 2, SETTINGS_COL)
+        if i == d.settings_cursor - 1 and d.settings_selection == "setting":
+            print(f"{RGB}186;243;219m╰" + "─" * BOX_WIDTH + "╯", end="")
+        else:
+            print("╰" + "─" * BOX_WIDTH + "╯", end="")
+        current = page[d.settings_cursor - 1]
+        # Description
+        print(reset)
+        # blank description window
+        blank(32,22, 35,95)
+        if d.settings_selection == "setting":
+            move(32,23)
+            print(f"{xlorange}🔎 {underline}{bold}Currently selected: {current["name"]}{reset}")
+            if d.setting_focused:
+                move(33, 23)
+                print(f"🖊️ {xf}Currently editing. Press Enter/ESC when done.{reset}")
+            else:
+                move(33, 23)
+                print(f"✏️ {xf}Press Enter to edit.{reset}")
+            move(34, 23)
+            print(f"📜 {xf}{current["description"]}", end="")
+
+            move(35, 23)
+            print(f"{xa}{reset}{xf}✅ {bold}Accepted values: {xa}{unbold}{current['accepted']}", end="")
+        else:
+            move(32,23)
+            settings_category = ["Battles", "Look & feel", "Sound & music", "Key binds", "Accessibility", "Developer"]
+            settings_category_descriptions = [
+                "⚔️ Change battles' fates with these settings!",
+                "🎨 Configure how animations and text effects appear!",
+                "🥁 How loud do you want your audio? Here you go!",
+                "⌨️ Wanna control your game differently? Set them here!",
+                "♿ Have trouble with understanding some game parts? Check here.",
+                "🛠️ Just don't. Please don't."]
+
+            print(f"{xlorange}🔍 {underline}{bold}Currently selected: {settings_category[d.settings_category - 1]}{reset}")
+            move(33, 23)
+            print(f"✏️ {xb}Press → or Enter to edit this category's settings.{reset}")            
+            move(35,23)
+            print(settings_category_descriptions[d.settings_category - 1], end="")
+
+    
+
+    if d.settings_selection == "setting":
+        move(32,108-12)
+        print(f"{x7}│ {xlyellow}↑↓ {bold}up/down {reset}- switch setting {x7}│")
+    else:
+        move(32,108-12)
+        print(f"{x7}│ {xlyellow}↑↓ {bold}up/down {reset}- switch category{x7}│")
+        move(33,108-12)
+        print(f"{x7}│ {xlyellow}→ {bold}right{reset} - enter category{x7}    │")
+        move(34,108-12)
+        print(f"{x7}│ {xlyellow}⏎ {bold}enter {reset}- enter category    {x7}│")        
+
+    if d.setting_focused:
+        move(33,108-12)
+        print(f"{x7}│ {xlyellow}←→ {bold}left/right{reset} - set setting{x7} │")
+        move(34,108-12)
+        print(f"{x7}│ {xlyellow}⏎ {bold}enter {reset}- save what you set {x7}│")
+        move(35,108-12)
+        print(f"{x7}│ {xlyellow}⯯{bold} escape {reset}- discard changes  {x7}│")
+    elif not d.setting_focused and d.settings_selection == "setting":
+        move(33,108-12)
+        print(f"{x7}│ {xlyellow}← {bold}left{reset} - change category   {x7} │")
+        move(34,108-12)
+        print(f"{x7}│ {xlyellow}⏎ {bold}enter {reset}- modify setting    {x7}│")
+        move(35,108-12)
+        print(f"{x7}│ {xlyellow}⯯{bold} escape {reset}- exit settings {x7}   │")
+    else:
+        move(33,108-12)
+        print(f"{x7}│ {xlyellow}→ {bold}right{reset} - enter category{x7}    │")
+        move(35,108-12)
+        print(f"{x7}│ {xlyellow}⯯ {bold}escape {reset}- exit settings    {x7}│")
+
+    
+    print("", end="", flush=True)
+    while True:
+            k = key()
+            if k.lower() == "s" or k.lower() == "down":
+                if d.settings_selection == "category":
+                    d.settings_category += 1
+                    if d.settings_category > 6:
+                        d.settings_category = 6
+                        sound("map_switch2_end")
+                    else:
+                        sounds_list = ["setting_battles", "settings_graphics", "settings_music", "setting_keybinds", "setting_accessibility", "switch"]
+                        sound("map_switch2")
+                        sound(sounds_list[d.settings_category - 1])
+                elif d.settings_selection == "setting":
+                    d.settings_cursor += 1
+                    if d.settings_cursor > max_settings[d.settings_category - 1]:
+                        d.settings_cursor = max_settings[d.settings_category - 1]
+                        sound("map_switch2_end")
+                    else:
+                        sound("map_switch2")
+                game.goto = settings2
+                return
+            if k.lower() == "w" or k.lower() == "up":
+                if d.settings_selection == "category":
+                    d.settings_category -= 1
+                    if d.settings_category <= 1:
+                        d.settings_category = 1
+                        sound("map_switch1_end")
+                    else:
+                        sounds_list = ["setting_battles", "settings_graphics", "settings_music", "setting_keybinds", "setting_accessibility", "switch"]
+                        sound("map_switch1")
+                        sound(sounds_list[d.settings_category - 1])
+                elif d.settings_selection == "setting":
+                    d.settings_cursor -= 1
+                    if d.settings_cursor <= 1:
+                        d.settings_cursor = 1
+                        sound("map_switch1_end")
+                    else:
+                        sound("map_switch1")
+                game.goto = settings2
+                return    
+            if d.settings_selection == "category" and k.lower() in ("enter", "right", "d"):
+                d.settings_selection = "setting"
+                d.settings_cursor = 1
+                sound("map_right")
+                game.goto = settings2
+                return
+            if d.settings_selection == "setting" and not d.setting_focused and k.lower() in ("esc", "left", "a"): # go left
+                d.settings_selection = "category"
+                d.settings_cursor = 1
+                sound("map_left")
+                game.goto = settings2
+                return
+            if d.settings_selection == "category" and (k.lower() == bind.back or k.lower() == "esc") and not d.setting_focused:
+                game.goto = house
+                return
+
+def settings_old():
     cls()
     print(f"""
 [3;1H                                            {xb}              ██          
@@ -3364,6 +3700,15 @@ def inventory():
             game.goto = inventory_prep
             return
 
+def get_ability(iname):
+    if iname.lower() == "Krita User Manual".lower():
+        return f"Hitting an enemy makes it panic about color theory → it gets {xlyellow}{bold}dizzy {reset}permanently (stackable)."
+    elif iname.lower() == "Befriend a Shark in 30 Days".lower():
+        return f"A cute shark will attack after you do! He's considered a {xlyellow}{bold}phantom {reset} and so can't be killed."
+    else:
+        return f"{xlyellow}{bold}No ability{reset} is associated with this item yet. Hold tight for more info in a later update!"
+
+
 def character2():
     boxwidth = 25
     playername=read("General/playername")
@@ -3373,6 +3718,17 @@ def character2():
     spaces = " " * max(pad, 0)
     centered = spaces + playernamd
     number = 1
+    if item.rarity == "08":
+        rarity_indicator = f"{reset}{x7}★ {xf}Common"
+    elif item.rarity == "02":
+        rarity_indicator = f"{reset}{xa}★★ {xf}Rare"
+    elif item.rarity == "03":
+        rarity_indicator = f"{reset}{xb}★★★ {xf}Special"
+    elif item.rarity == "0d":
+        rarity_indicator = f"{reset}{xd}★★★★ {xf}Legendary"
+    else:
+        rarity_indicator = f"{reset}{xe}★★★★★ {xf}Divine"
+        
     print(f"""
 [1;{number}H{reset}
 [2;17H#3{x7}╭───────────────────────────╮
@@ -3430,8 +3786,8 @@ def character2():
 [23;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                         │
 [24;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                         │
 [25;42H{xf}{bold}{RGB}255;219;187m╰───────────────────────────────────────╯ {RGB}186;243;219m╰─────────────────────────────────────────╯
-[08;43H{RGB}255;219;187m{bold}┤ {item.name if item.name is not None else "Weapon"} ├
-[08;85H{RGB}186;243;219m{bold}┤ {fragment.name if fragment.name is not None else "Fragments"} ├
+[08;43H{RGB}255;219;187m{bold}┤ {item.type} {item.name if item.name is not None else "Weapon"} ├
+[08;85H{RGB}186;243;219m{bold}┤ 🧩 {fragment.name if fragment.name is not None else "Fragments"} ├
 [26;42H{RGB}173;216;225m╭───────────────────────────────────────╮ {RGB}255;203;204m╭─────────────────────────────────────────╮
 [27;42H{RGB}173;216;225m│                                       │ {RGB}255;203;204m│                                         │
 [28;42H{RGB}173;216;225m│                                       │ {RGB}255;203;204m│                                         │
@@ -3442,11 +3798,48 @@ def character2():
 [33;42H{RGB}173;216;225m│                                       │ {RGB}255;203;204m│                                         │
 [34;42H{RGB}173;216;225m│                                       │ {RGB}255;203;204m│                                         │
 [35;42H{RGB}173;216;225m│                                       │ {RGB}255;203;204m│                                         │
-[26;43H{RGB}173;216;225m{bold}┤ {head.name if head.name is not None else "Head"} ├
-[26;85H{RGB}255;203;204m{bold}┤ {armor.name if armor.name is not None else "Armor"} ├
+[26;43H{RGB}173;216;225m{bold}┤ 🪖 {head.name if head.name is not None else "Head"} ├
+[26;85H{RGB}255;203;204m{bold}┤ 👘 {armor.name if armor.name is not None else "Armor"} ├
 [36;42H{RGB}173;216;225m╰───────────────────────────────────────╯ {RGB}255;203;204m╰─────────────────────────────────────────╯
 [36;3H{x7}╰────────────────────────────────────╯{reset}
+
+
+[10;45H{reset}☆ 
+[10;47H{RGB}255;219;187mRarity: {x8}{xlyellow}{bold}{rarity_indicator}{reset}
+
+[11;45H{reset}⇝ 
+[11;47H{RGB}255;219;187m{italic}"{item.description}"{reset}
+
+[13;45H{reset}⇲ 
+[13;47H{RGB}255;219;187mBase ATK{x8}-------------{xlyellow}{bold}{item.atk}{reset}
+[14;45H{reset}𐫰 
+[14;47H{RGB}255;219;187mCrit DMG{x8}-------------{xlyellow}{bold}{item.atkcrit}%{reset}
+[15;45H{reset}🟃 
+[15;47H{RGB}255;219;187mSubstat{x8}--------------{xlyellow}{bold}{item.substat_value}{"% Regen" if item.substat == "Regeneration" else f" {item.substat}"}{reset}
+
+[17;45H{reset}⌬ 
+[17;47H{RGB}255;219;187mLevel{x8}----------------{xlyellow}{bold}{item.level}{reset}{RGB}255;219;187m/{max(1,player.level//4)}{reset}
+[18;45H{reset}♆ 
+[18;47H{RGB}255;219;187mLevel Power{x8}----------{xlyellow}{bold}{100*item.level_power}×{reset}
+[19;45H{reset}♅ 
+[19;47H{RGB}255;219;187mRefinement{x8}-----------{xlyellow}{bold}Tier {item.refine}{reset}{RGB}255;219;187m/3{reset}
+
+[10;87H{reset}⌬ 
+[10;89H{RGB}186;243;219mSkill Lv.{x8}-----{xa}{bold}woo!{reset}
+
+
+[28;45H{reset}◇ 
+[28;47H{RGB}173;216;225mBase DEF{x8}------{xb}{bold}again{reset}
+
+[28;87H{reset}↺ 
+[28;89H{RGB}255;203;204mRegeneration{x8}----{xlred}{bold}random text{reset}
+
+
+
+
 """.strip().replace("\n",""),end="",flush=True)
+    full_ability = get_ability(item.name)
+    draw_box_text(f"→ {full_ability}", 21,45, 23,79)
     while True:
         k = key()
         if k.lower() == bind.back or k.lower() == "esc":
@@ -3458,6 +3851,126 @@ def character2():
             sound("map_switch1")
             game.goto = character
             return
+        if k.lower() == bind.back or k.lower() == "3":
+            d.character_view = 3
+            sound("map_switch2")
+            game.goto = character
+            return
+
+def character3():
+    boxwidth = 25
+    playername=read("General/playername")
+    playernamd = f"{playername} › Abilities "
+    length = visible_len(playernamd)
+    pad = (boxwidth - length) // 2 + 1
+    spaces = " " * max(pad, 0)
+    centered = spaces + playernamd
+    number = 1
+    print(f"""
+[1;{number}H{reset}
+[2;17H#3{x7}╭───────────────────────────╮
+[3;17H#4{x7}╭───────────────────────────╮
+[4;17H#3{x7}│ {xf}{bold}{centered}       {reset}
+[5;17H#4{x7}│ {xf}{bold}{centered}       {reset}
+[6;17H#3{x7}╰───────────────────────────╯
+[7;17H#4{x7}╰───────────────────────────╯
+[4;45H#3{x7}│ {reset}{x7}{bold}{reset}
+[5;45H#4{x7}│ {reset}{x7}{bold}{reset}
+[08;3H{xf}{bold}╭────────────────────────────────────╮{reset}
+[09;3H{xf}{bold}│                                    │{reset}
+[10;3H{xf}{bold}│ {player.color}   ██████                        {xf}  │{reset}
+[11;3H{xf}{bold}│ {player.color} ██      ██                      {xf}  │{reset}
+[12;3H{xf}{bold}│ {player.color} ██ •  • ██                      {xf}  │{reset}
+[13;3H{xf}{bold}│ {player.color} ██      ██                      {xf}  │{reset}
+[14;3H{xf}{bold}│ {player.color}   ██████                        {xf}  │{reset}
+[15;3H{xf}{bold}│ {player.color}     ██                          {xf}  │{reset}
+[16;3H{xf}{bold}│ {player.color}     ██    ██                    {xf}  │{reset}
+[17;3H{xf}{bold}│ {player.color}     ██  ██                      {xf}  │{reset}
+[18;3H{xf}{bold}│ {player.color}  ███████                        {xf}  │{reset}
+[19;3H{xf}{bold}│ {player.color}██   ██                          {xf}  │{reset}
+[20;3H{xf}{bold}│ {player.color}     ██                          {xf}  │{reset}
+[21;3H{xf}{bold}│ {player.color}     ██                          {xf}  │{reset}
+[22;3H{xf}{bold}│ {player.color}   ██  ██                        {xf}  │{reset}
+[23;3H{xf}{bold}│ {player.color} ██      ██                      {xf}  │{reset}
+[24;3H{xf}{bold}│                                    │{reset}
+[25;3H{xf}{bold}╰────────────────────────────────────╯{reset}
+[26;3H{x7}{bold}╭────────────────────────────────────╮
+[27;3H{x7}{bold}│ {reset}{xf}📊 {xlyellow}{bold}[1] {reset}{xf}-{xe} Attributes               {xf}{x7}{bold} │
+[28;3H{x7}{bold}│                                    │
+[29;3H{x7}{bold}│ {reset}{xf}{item.type} {xlyellow}{bold}[2]{reset}{xe} {xf}-{xe} Equipment & fragments     {x7}{bold}│
+[30;3H{x7}{bold}│                                    │{reset}
+[31;3H{x7}{bold}│ {reset}{xf}✅ {rgb(197, 229, 200)}{bold}[3]{reset}{xe} {xf}-{xa} Classes & skill tree      {x7}{bold}│
+[32;3H{x7}{bold}│                                    │
+[33;3H{x7}{bold}│ {reset}{xf}🎨 {xlyellow}{bold}[4]{reset}{xe} {xf}-{xe} Character personalization {x7}{bold}│
+[34;3H{x7}{bold}│                                    │
+[35;3H{x7}{bold}│ {reset}{xf}🔢 {xlyellow}{bold}[5] {reset}{xe}{xf}-{xe} Lifetime stats{reset}{x7}{bold}            │
+
+[08;42H{xf}{bold}{RGB}255;219;187m╭───────────────────────────────────────╮ {RGB}186;243;219m╭─────────────────────────────────────────╮
+[09;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                         │
+[10;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                         │
+[11;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                         │
+[12;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                         │
+[13;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                         │
+[14;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                         │
+[15;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                         │
+[16;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                         │
+[17;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                         │
+[18;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                         │
+[19;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                         │
+[20;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                         │
+[21;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                         │
+[22;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                         │
+[23;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                         │
+[24;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                         │
+[25;42H{xf}{bold}{RGB}255;219;187m╰───────────────────────────────────────╯ {RGB}186;243;219m╰─────────────────────────────────────────╯
+[08;43H{RGB}255;219;187m{bold}┤ {item.type} Main Attack - {player.main_name if player.main_name is not None else "Unnamed"} ├
+[08;85H{RGB}186;243;219m{bold}┤ ⚒️ Skill Mastery ├
+[26;42H{RGB}173;216;225m╭───────────────────────────────────────╮ {RGB}255;203;204m╭─────────────────────────────────────────╮
+[27;42H{RGB}173;216;225m│                                       │ {RGB}255;203;204m│                                         │
+[28;42H{RGB}173;216;225m│                                       │ {RGB}255;203;204m│                                         │
+[29;42H{RGB}173;216;225m│                                       │ {RGB}255;203;204m│                                         │
+[30;42H{RGB}173;216;225m│                                       │ {RGB}255;203;204m│                                         │
+[31;42H{RGB}173;216;225m│                                       │ {RGB}255;203;204m│                                         │
+[32;42H{RGB}173;216;225m│                                       │ {RGB}255;203;204m│                                         │
+[33;42H{RGB}173;216;225m│                                       │ {RGB}255;203;204m│                                         │
+[34;42H{RGB}173;216;225m│                                       │ {RGB}255;203;204m│                                         │
+[35;42H{RGB}173;216;225m│                                       │ {RGB}255;203;204m│                                         │
+[26;43H{RGB}173;216;225m{bold}┤ 💥 Skill - {player.skill_name if player.skill_name is not None else "Unnamed"} ├
+[26;85H{RGB}255;203;204m{bold}┤ 🔥 Ultimate - {player.ult_name if player.ult_name is not None else "Unnamed"} ├
+[36;42H{RGB}173;216;225m╰───────────────────────────────────────╯ {RGB}255;203;204m╰─────────────────────────────────────────╯
+[36;3H{x7}╰────────────────────────────────────╯{reset}
+""".strip().replace("\n",""),end="",flush=True)
+    
+
+    if player.playerclass.lower() == "warrior":
+        pass
+    
+    
+    while True:
+        k = key()
+        if k.lower() == bind.back or k.lower() == "esc":
+            sound("map_switch1")
+            game.goto = house
+            return
+        if k.lower() == bind.back or k.lower() == "1":
+            d.character_view = 1
+            sound("map_switch1")
+            game.goto = character
+            return
+        if k.lower() == bind.back or k.lower() == "2":
+            d.character_view = 2
+            sound("map_switch1")
+            game.goto = character
+            return
+
+
+
+
+
+
+
+
+
 
 def screensetup():
     cls()

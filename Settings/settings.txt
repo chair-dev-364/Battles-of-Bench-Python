@@ -9,5 +9,5 @@
     "skipboot": 0,
     "skiplevelanim": 0,
     "sound": 10,
-    "spatial": 0
+    "spatial": false
 }
