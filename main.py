@@ -20,11 +20,20 @@
 *   However, don't blame yourself if it doesn't work.                            *
 *                                                                                *                                                                                
 *******************************************************************************"""
-
+from console_input import key
 import msvcrt, os, time, sys, ctypes, ast, math, operator as op, subprocess, json, re, random, shutil, socket, tempfile, stat, urllib.request  # noqa: E401, E402
 from pathlib import Path  # noqa: E402
 from typing import Literal  # noqa: E402
 RGB="[38;2;"
+
+
+import time
+import sys
+from console_input import key
+
+
+
+
 
 version=2
 subversion=0
@@ -692,36 +701,7 @@ def cls():
     os.system("cls")
 
 # Key. As simple as that. Press a key, and... that's the return. With some specials.
-def key(timeout=None):
-    start = time.time()
-    while True:
-        if msvcrt.kbhit():
-            ch = msvcrt.getwch()
-            # Arrow keys & special keys come as '\x00' or '\xe0'
-            if ch in ('\x00', '\xe0'):
-                special = msvcrt.getwch()
-                specials = {
-                    'H': "up",
-                    'P': "down",
-                    'K': "left",
-                    'M': "right",
-                }
-                return specials.get(special, "special")
-            if ch == '\r':
-                return "enter"
-            if ch == '\x1b':
-                return "esc"
-            if ch == '\x08':
-                return "backspace"
-            if ch == ' ':
-                return "space"
-            # CTRL+A to CTRL+Z
-            if 1 <= ord(ch) <= 26:
-                letter = chr(ord(ch) + 96)
-                return f"ctrl/{letter}"
-            return ch  # letters, numbers, symbols cleanly handled
-        if timeout is not None and (time.time() - start) >= timeout:
-            return "TIMEOUT"    
+
 
 # INTERACTIVITY TIME! Sound() plays a sound effect. It does this by writing the command to a text file, which is then read by the sound player.
 def sound(cmd):
@@ -3554,60 +3534,90 @@ def settings2():
     
     print("", end="", flush=True)
     while True:
-            k = key()
-            if k.lower() == "s" or k.lower() == "down":
-                if d.settings_selection == "category":
-                    d.settings_category += 1
-                    if d.settings_category > 6:
-                        d.settings_category = 6
-                        sound("map_switch2_end")
-                    else:
+            k = key(mouse=True)
+
+            if isinstance(k, dict):
+                if k["event"] == "down":
+                    # Settings buttons layout:
+                    # 6 buttons, each 3 rows tall, 20 chars wide
+                    # Starting at row 8, with 1-row gaps between buttons
+                    # Button rows: 8-10, 12-14, 16-18, 20-22, 24-26, 28-30
+                    
+                    btn_col_start = 2  # You need to tell me the starting X column
+                    btn_col_end = btn_col_start + 19  # 20 chars wide (0-indexed)
+                    
+                    # Determine which button row was clicked
+                    button_index = None
+                    for i in range(6):
+                        btn_top = 7 + (i * 4)      # 8, 12, 16, 20, 24, 28
+                        btn_bottom = btn_top + 2    # 3 rows tall
+                        if btn_top <= k["y"] <= btn_bottom and btn_col_start <= k["x"] <= btn_col_end:
+                            button_index = i
+                            break
+                    
+                    if button_index is not None:
+                        d.settings_category = button_index + 1
+                        d.settings_selection = "category"
                         sounds_list = ["setting_battles", "settings_graphics", "settings_music", "setting_keybinds", "setting_accessibility", "switch"]
-                        sound("map_switch2")
+                        sound("map_switch1" if button_index < d.settings_category - 1 else "map_switch2")
                         sound(sounds_list[d.settings_category - 1])
-                elif d.settings_selection == "setting":
-                    d.settings_cursor += 1
-                    if d.settings_cursor > max_settings[d.settings_category - 1]:
-                        d.settings_cursor = max_settings[d.settings_category - 1]
-                        sound("map_switch2_end")
-                    else:
-                        sound("map_switch2")
-                game.goto = settings2
-                return
-            if k.lower() == "w" or k.lower() == "up":
-                if d.settings_selection == "category":
-                    d.settings_category -= 1
-                    if d.settings_category < 1:
-                        d.settings_category = 1
-                        sound("map_switch1_end")
-                    else:
-                        sounds_list = ["setting_battles", "settings_graphics", "settings_music", "setting_keybinds", "setting_accessibility", "switch"]
-                        sound("map_switch1")
-                        sound(sounds_list[d.settings_category - 1])
-                elif d.settings_selection == "setting":
-                    d.settings_cursor -= 1
-                    if d.settings_cursor <= 1:
-                        d.settings_cursor = 1
-                        sound("map_switch1_end")
-                    else:
-                        sound("map_switch1")
-                game.goto = settings2
-                return    
-            if d.settings_selection == "category" and k.lower() in ("enter", "right", "d"):
-                d.settings_selection = "setting"
-                d.settings_cursor = 1
-                sound("map_right")
-                game.goto = settings2
-                return
-            if d.settings_selection == "setting" and not d.setting_focused and k.lower() in ("esc", "left", "a", bind.back.lower()): # go left
-                d.settings_selection = "category"
-                d.settings_cursor = 1
-                sound("map_left")
-                game.goto = settings2
-                return
-            if d.settings_selection == "category" and (k.lower() == bind.back or k.lower() == "esc") and not d.setting_focused:
-                game.goto = house
-                return
+                        game.goto = settings2
+                        return
+                    continue
+            else:
+                if k.lower() == "s" or k.lower() == "down":
+                    if d.settings_selection == "category":
+                        d.settings_category += 1
+                        if d.settings_category > 6:
+                            d.settings_category = 6
+                            sound("map_switch2_end")
+                        else:
+                            sounds_list = ["setting_battles", "settings_graphics", "settings_music", "setting_keybinds", "setting_accessibility", "switch"]
+                            sound("map_switch2")
+                            sound(sounds_list[d.settings_category - 1])
+                    elif d.settings_selection == "setting":
+                        d.settings_cursor += 1
+                        if d.settings_cursor > max_settings[d.settings_category - 1]:
+                            d.settings_cursor = max_settings[d.settings_category - 1]
+                            sound("map_switch2_end")
+                        else:
+                            sound("map_switch2")
+                    game.goto = settings2
+                    return
+                if k.lower() == "w" or k.lower() == "up":
+                    if d.settings_selection == "category":
+                        d.settings_category -= 1
+                        if d.settings_category < 1:
+                            d.settings_category = 1
+                            sound("map_switch1_end")
+                        else:
+                            sounds_list = ["setting_battles", "settings_graphics", "settings_music", "setting_keybinds", "setting_accessibility", "switch"]
+                            sound("map_switch1")
+                            sound(sounds_list[d.settings_category - 1])
+                    elif d.settings_selection == "setting":
+                        d.settings_cursor -= 1
+                        if d.settings_cursor <= 1:
+                            d.settings_cursor = 1
+                            sound("map_switch1_end")
+                        else:
+                            sound("map_switch1")
+                    game.goto = settings2
+                    return    
+                if d.settings_selection == "category" and k.lower() in ("enter", "right", "d"):
+                    d.settings_selection = "setting"
+                    d.settings_cursor = 1
+                    sound("map_right")
+                    game.goto = settings2
+                    return
+                if d.settings_selection == "setting" and not d.setting_focused and k.lower() in ("esc", "left", "a", bind.back.lower()): # go left
+                    d.settings_selection = "category"
+                    d.settings_cursor = 1
+                    sound("map_left")
+                    game.goto = settings2
+                    return
+                if d.settings_selection == "category" and (k.lower() == bind.back or k.lower() == "esc") and not d.setting_focused:
+                    game.goto = house
+                    return
 
 def settings_old():
     cls()
