@@ -3426,7 +3426,12 @@ def settings2():
     for i, item in enumerate(page):
 
         try:
-            value = getattr(setting, item["attr"])
+            if d.settings_category == 4:   # Key binds
+                obj = bind
+            else:
+                obj = setting
+
+            value = getattr(obj, item["attr"])
         except Exception as e:
             move(10, 40)
             print(f"ERROR: {e}", end="")
@@ -3471,11 +3476,12 @@ def settings2():
             print("│", end="")
 
         # Bottom
-        move(row + 2, SETTINGS_COL)
-        if i == d.settings_cursor - 1 and d.settings_selection == "setting":
-            print(f"{RGB}186;243;219m╰" + "─" * BOX_WIDTH + "╯", end="")
-        else:
-            print("╰" + "─" * BOX_WIDTH + "╯", end="")
+        if i != 7:
+            move(row + 2, SETTINGS_COL)
+            if i == d.settings_cursor - 1 and d.settings_selection == "setting":
+                print(f"{RGB}186;243;219m╰" + "─" * BOX_WIDTH + "╯", end="")
+            else:
+                print("╰" + "─" * BOX_WIDTH + "╯", end="")
         current = page[d.settings_cursor - 1]
         # Description
         print(reset)
@@ -3516,10 +3522,10 @@ def settings2():
 
     if d.settings_selection == "setting":
         move(32,108-12)
-        print(f"{x7}│ {xlyellow}↑↓ {bold}up/down {reset}- switch setting {x7}│")
+        print(f"{x7}│ {xlyellow}↕ {bold}up/down {reset}- switch setting {x7} │")
     else:
         move(32,108-12)
-        print(f"{x7}│ {xlyellow}↑↓ {bold}up/down {reset}- switch category{x7}│")
+        print(f"{x7}│ {xlyellow}↕ {bold}up/down {reset}- switch category{x7} │")
         move(33,108-12)
         print(f"{x7}│ {xlyellow}→ {bold}right{reset} - enter category{x7}    │")
         move(34,108-12)
@@ -3527,7 +3533,7 @@ def settings2():
 
     if d.setting_focused:
         move(33,108-12)
-        print(f"{x7}│ {xlyellow}←→ {bold}left/right{reset} - set setting{x7} │")
+        print(f"{x7}│ {xlyellow}↔ {bold}left/right{reset} - set setting{x7}  │")
         move(34,108-12)
         print(f"{x7}│ {xlyellow}⏎ {bold}enter {reset}- save what you set {x7}│")
         move(35,108-12)
@@ -3571,7 +3577,7 @@ def settings2():
             if k.lower() == "w" or k.lower() == "up":
                 if d.settings_selection == "category":
                     d.settings_category -= 1
-                    if d.settings_category <= 1:
+                    if d.settings_category < 1:
                         d.settings_category = 1
                         sound("map_switch1_end")
                     else:
@@ -3593,7 +3599,7 @@ def settings2():
                 sound("map_right")
                 game.goto = settings2
                 return
-            if d.settings_selection == "setting" and not d.setting_focused and k.lower() in ("esc", "left", "a"): # go left
+            if d.settings_selection == "setting" and not d.setting_focused and k.lower() in ("esc", "left", "a", bind.back.lower()): # go left
                 d.settings_selection = "category"
                 d.settings_cursor = 1
                 sound("map_left")
