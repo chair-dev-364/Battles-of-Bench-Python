@@ -21,6 +21,24 @@
 *                                                                                *                                                                                
 *******************************************************************************"""
 from console_input import key
+from Settings.editor import (
+    SettingEditor,
+    back_button_contains,
+    boolean_control_contains,
+    boolean_slider_parts,
+    category_index_at,
+    format_setting_value,
+    setting_is_off,
+    setting_index_at,
+    volume_slider_parts,
+    volume_value_at_mouse,
+)
+from Settings.schema import (
+    KEYBIND_DEFAULTS,
+    PERSISTENT_DEFAULTS,
+    SETTINGS_BY_ATTR,
+    SETTINGS_PAGES,
+)
 import msvcrt, os, time, sys, ctypes, ast, math, operator as op, subprocess, json, re, random, shutil, socket, tempfile, stat, urllib.request  # noqa: E401, E402
 from pathlib import Path  # noqa: E402
 from typing import Literal  # noqa: E402
@@ -479,73 +497,116 @@ enemy = EnemyData()
 # Load settings.
 class SettingsData:
     def __init__(self):
-        # Path setup
         base_dir = os.path.dirname(os.path.abspath(__file__))
         settings_dir = os.path.join(base_dir, "Settings")
         os.makedirs(settings_dir, exist_ok=True)
 
         self._path = os.path.join(settings_dir, "settings.txt")
+        self._legacy_keybind_path = os.path.join(settings_dir, "keybinds.txt")
+        self._settings_by_attr = SETTINGS_BY_ATTR
+        self._keybind_fields = tuple(KEYBIND_DEFAULTS)
 
-        # --- Allowed / persistent fields ---
-        self._persistent = {
+        # Keep older, non-menu values intact while making the declarative
+        # settings files the source of truth for all editable defaults.
+        legacy_defaults = {
             "difficulty": 0,
             "datatype": 1,
             "sorting": 0,
             "levelup_mode": 0,
-            "music": 0,
             "pronouns": "they/them/their",
-            "sfx": 5,
             "skipboot": False,
             "skiplevelanim": False,
-            "sound": 10,
-            "spatial": False,
-            "soon": False
+            "soon": False,
+        }
+        self._persistent_fields = {
+            **legacy_defaults,
+            **PERSISTENT_DEFAULTS,
         }
 
         self.load()
 
-    # ------------------------
-    # LOAD
-    # ------------------------
-    def load(self):
-        if not os.path.exists(self._path):
-            self._create_default_file()
-
+    @staticmethod
+    def _read_json(path):
         try:
-            with open(self._path, "r", encoding="utf-8") as f:
-                data = json.load(f)
+            with open(path, "r", encoding="utf-8") as f:
+                loaded = json.load(f)
         except (json.JSONDecodeError, FileNotFoundError):
-            data = {}
+            return {}
+        return loaded if isinstance(loaded, dict) else {}
 
-        for key, default in self._persistent.items():
-            setattr(self, key, data.get(key, default))
+    def _validated_value(self, key, value, default):
+        item = self._settings_by_attr.get(key)
+        setting_type = item.get("type") if item else None
 
-    # ------------------------
-    # SAVE
-    # ------------------------
+        if setting_type == "bool":
+            return value if isinstance(value, bool) else default
+        if setting_type == "keybind":
+            if not isinstance(value, str) or not value.strip():
+                return default
+            return value.strip().lower()
+        if setting_type == "choice":
+            return value if value in item.get("choices", ()) else default
+        if setting_type == "slider":
+            if not isinstance(value, (int, float)) or isinstance(value, bool):
+                return default
+            value = max(item["min"], min(item["max"], value))
+            if isinstance(default, int):
+                return int(round(value))
+            return float(value)
+
+        # Validation for retained legacy fields.
+        if isinstance(default, bool):
+            return value if isinstance(value, bool) else default
+        if isinstance(default, int):
+            return value if isinstance(value, int) and not isinstance(value, bool) else default
+        if isinstance(default, float):
+            return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else default
+        if isinstance(default, str):
+            return value if isinstance(value, str) else default
+        return value
+
+    def load(self):
+        data = self._read_json(self._path)
+        legacy_keybinds = self._read_json(self._legacy_keybind_path)
+        needs_sync = set(self._persistent_fields) - set(data)
+
+        for key, default in self._persistent_fields.items():
+            if key in data:
+                value = data[key]
+            elif key in self._keybind_fields:
+                value = legacy_keybinds.get(key, default)
+            else:
+                value = default
+            value = self._validated_value(key, value, default)
+            setattr(self, key, value)
+
+        # Migrate legacy keybinds and add newly declared settings immediately.
+        if needs_sync or not os.path.exists(self._path):
+            self.save()
+
     def save(self):
         data = {
-            key: getattr(self, key)
-            for key in self._persistent.keys()
+            key: getattr(self, key, default)
+            for key, default in self._persistent_fields.items()
         }
 
         with open(self._path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=4)
 
-    # ------------------------
-    # RESET (optional)
-    # ------------------------
     def reset(self):
-        for key, default in self._persistent.items():
+        for key, default in self._persistent_fields.items():
             setattr(self, key, default)
         self.save()
 
-    # ------------------------
-    # Create default file
-    # ------------------------
+    def reset_fields(self, fields):
+        for key in fields:
+            if key in self._persistent_fields:
+                setattr(self, key, self._persistent_fields[key])
+        self.save()
+
     def _create_default_file(self):
         with open(self._path, "w", encoding="utf-8") as f:
-            json.dump(self._persistent, f, indent=4)
+            json.dump(self._persistent_fields, f, indent=4)
 
 
 # Create global instance
@@ -566,64 +627,43 @@ class SystemData:
     pass
 
 game = SystemData()
+
+
 class KeyBinds:
-    def __init__(self, filename="keybinds.txt"):
-        # ───────────── PATH SETUP ─────────────
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        settings_dir = os.path.join(base_dir, "Settings")
-        os.makedirs(settings_dir, exist_ok=True)
+    """Compatibility view over keybind values now owned by SettingsData."""
 
-        self._path = os.path.join(settings_dir, filename)
+    def __init__(self, owner):
+        object.__setattr__(self, "_owner", owner)
+        object.__setattr__(self, "_path", owner._path)
+        object.__setattr__(self, "_persistent_fields", dict(KEYBIND_DEFAULTS))
 
-        # ───────────── PERSISTENT BINDS SCHEMA ─────────────
-        self._persistent_fields = {
-            "attack": "space",
-            "heal": "+",
-            "skill": "s",
-            "ult": "w",
-            "back": "b",
-            "confirm": "enter",
-            "deny": "esc",
-            "forfeit": "x"
-        }
+    def __getattr__(self, name):
+        if name in self._persistent_fields:
+            return getattr(self._owner, name)
+        raise AttributeError(name)
 
-        self.load()
+    def __setattr__(self, name, value):
+        fields = self.__dict__.get("_persistent_fields", {})
+        if name in fields:
+            setattr(self._owner, name, value)
+            return
+        object.__setattr__(self, name, value)
 
-    # ───────────── LOAD ─────────────
     def load(self):
-        if not os.path.exists(self._path):
-            self._create_default_file()
+        self._owner.load()
 
-        try:
-            with open(self._path, "r") as f:
-                data = json.load(f)
-        except (json.JSONDecodeError, FileNotFoundError):
-            data = {}
-
-        for key, default in self._persistent_fields.items():
-            setattr(self, key, data.get(key, default))
-
-    # ───────────── SAVE ─────────────
     def save(self):
-        data = {
-            key: getattr(self, key)
-            for key in self._persistent_fields.keys()
-        }
+        self._owner.save()
 
-        with open(self._path, "w") as f:
-            json.dump(data, f, indent=4)
-
-    # ───────────── RESET ─────────────
     def reset(self):
-        for key, default in self._persistent_fields.items():
-            setattr(self, key, default)
-        self.save()
+        self._owner.reset_fields(self._persistent_fields)
 
-    # ───────────── CREATE DEFAULT FILE ─────────────
     def _create_default_file(self):
-        with open(self._path, "w") as f:
-            json.dump(self._persistent_fields, f, indent=4)
-bind = KeyBinds()
+        self._owner.save()
+
+
+bind = KeyBinds(setting)
+settings_editor = SettingEditor()
 
 d.frombattle = False
 d.character_view = 1
@@ -704,10 +744,21 @@ def cls():
 
 
 # INTERACTIVITY TIME! Sound() plays a sound effect. It does this by writing the command to a text file, which is then read by the sound player.
-def sound(cmd):
+def sound(cmd, channel="sound", pan=0.0):
+    """Queue audio without blocking the UI.
+
+    Existing calls remain UI sounds. Battle effects can opt into the separate
+    SFX volume and provide a left/right position for spatial audio.
+    """
+    if channel not in ("sound", "sfx", "music"):
+        raise ValueError(f"Unknown audio channel: {channel}")
+    pan = max(-1.0, min(1.0, float(pan)))
+    command = str(cmd)
+    if channel != "sound" or pan:
+        command = f"@{channel},{pan:.2f}|{command}"
     path = os.path.join(os.getcwd(), "general", "temp", "sound_cmd_queue.txt")
     with open(path, "a", encoding="utf-8") as f:
-        f.write(str(cmd) + "\n")
+        f.write(command + "\n")
 
 
 def stopsound(target=None):
@@ -2201,7 +2252,7 @@ Type an attribute name to override.
                 if target_obj is player and field in getattr(player, "_persistent_fields", {}):
                     player.save()
                     save_note = " (saved to Player/data.txt)"
-                elif target_obj is setting and field in getattr(setting, "_persistent", {}):
+                elif target_obj is setting and field in getattr(setting, "_persistent_fields", {}):
                     setting.save()
                     save_note = " (saved to Settings/settings.txt)"
                 elif target_obj in (item, head, armor, fragment):
@@ -2476,7 +2527,7 @@ def battle_show_data():
         print(f"  {x7}Still nothing! Maybe try pressing some of the keys above, hmm?{reset}")
 
 def enemy_attack():
-    sound("shield")
+    sound("shield", channel="sfx", pan=0.35)
     dmgdealt = max(0, round(enemy.attack * (100 - player.total_def) / 100))
     player.hp -= dmgdealt
     if dmgdealt > 0:
@@ -2516,7 +2567,7 @@ def battle_attack():
         d.latest_action = f"{xf}⚔  {dmgdealt}{xa} DMG{reset}"
     
     enemy.hp -= dmgdealt
-    sound("sword2")
+    sound("sword2", channel="sfx", pan=-0.35)
     
     # then, life steal (steal is float = % of damage dealt that is returned to you as HP):
     if player.life_steal > 0:
@@ -2594,7 +2645,7 @@ def house():
 {player.color}    ██   ██         {x8}│{x9}                                    {x8} │{x1}                                   {x8}  │  
 {player.color}         ██         {x8}│{xlorange}  To access any option on the right,{x8} │  {x5}{bold}[R]{reset}{xd} 🎧 Refresh game music       {x8}   │ 
 {player.color}         ██         {x8}│{xlorange}  simply press the keys that are{x8}     │                                   {x8}  │    
-{player.color}       ██  ██       {x8}│{xlorange}  shown next to them!            {x8}    │  {xc}{bold}[{bind.back_display}] {reset}🏡 {xlred}{italic}<- Return to the main menu{x8}{x8}  │ 
+{player.color}       ██  ██       {x8}│{xlorange}  shown next to them!            {x8}    │  {xc}{bold}[{bind.back.upper()}] {reset}🏡 {xlred}{italic}<- Return to the main menu{x8}{x8}  │ 
 {player.color}     ██      ██     {x8}│{x9}                                    {x8} │                                     │              
 {player.color}                    {x8}╰{x8}────────────────────────────────────{x8}─┴─────────────────────────────────────╯         
     """)
@@ -3270,7 +3321,9 @@ def settings():
     d.settings_selection = "category"
     d.settings_cursor = 1
     d.settings_category = 1
-    d.setting_focused = False
+    d.settings_edit_flash = False
+    d.settings_slider_dragging = False
+    settings_editor.clear()
     cls()
     move(1,1)
     print(f"""
@@ -3374,21 +3427,7 @@ def settings2():
         print(f"{x3}{bold}│    ۵ Developer    │{reset}" if d.settings_selection == "setting" and d.settings_category == 6 else f"{x7}│    ۵ Developer    │")
         print(f"{x3}{bold}│                   │{reset}" if d.settings_selection == "setting" and d.settings_category == 6 else f"{x7}│                   │")
         print(f"{x3}{bold}├───────────────────┼{reset}" if d.settings_selection == "setting" and d.settings_category in [6] else f"{x7}├───────────────────┼")      
-    # page = SOUND_SETTINGS, APPEARANCE_SETTINGS, etc.
-    from Settings.battles import SETTINGS as BATTLE_SETTINGS
-    from Settings.appearance import SETTINGS as APPEARANCE_SETTINGS
-    from Settings.sound import SETTINGS as SOUND_SETTINGS
-    from Settings.keybinds import SETTINGS as KEYBIND_SETTINGS
-    from Settings.accessibility import SETTINGS as ACCESSIBILITY_SETTINGS
-    from Settings.developer import SETTINGS as DEVELOPER_SETTINGS
-    page_list = [
-    BATTLE_SETTINGS,
-    APPEARANCE_SETTINGS,
-    SOUND_SETTINGS,
-    KEYBIND_SETTINGS,
-    ACCESSIBILITY_SETTINGS,
-    DEVELOPER_SETTINGS,
-    ]
+    page_list = SETTINGS_PAGES
     max_settings = [len(p) for p in page_list] # max settings per category
 
     
@@ -3399,6 +3438,66 @@ def settings2():
     SETTINGS_ROW = 8
     BOX_WIDTH = 100
     BOX_HEIGHT = 3
+    CATEGORY_LABELS = [
+        "     ◆ Battles     ",
+        "   ◐ Look & feel   ",
+        "  ◇ Sound & music  ",
+        "    ⬙ Key binds    ",
+        "  ∴ Accessibility  ",
+        "    ۵ Developer    ",
+    ]
+    CATEGORY_SELECTED_RGB = (186, 243, 219)
+    category_focused = d.settings_selection == "category"
+    visually_editing = (
+        settings_editor.active
+        and not getattr(d, "settings_slider_dragging", False)
+    )
+
+    def draw_volume_setting_value(item, raw_value, row, selected, flash=False):
+        before_dot, dot, after_dot, label = volume_slider_parts(item, raw_value)
+        label = f"{label:>4}"
+        slider_width = 11 + 1 + 4
+        move(row + 1, SETTINGS_COL + BOX_WIDTH - slider_width)
+        state_color = (
+            xlred
+            if flash or setting_is_off(item, raw_value)
+            else xa
+        )
+        label_style = f"{state_color}{bold}" if selected else xf
+        print(
+            f"{x8}{before_dot}{state_color}{dot}{x8}{after_dot} "
+            f"{label_style}{label}{reset}",
+            end="",
+            flush=True,
+        )
+
+    def draw_editing_setting_name(item, row, flash=False):
+        move(row + 1, SETTINGS_COL + 2)
+        if flash:
+            print(f"{xlred}✎ {bold}{item['name']}{reset}", end="", flush=True)
+            return
+        shine_offset = (time.monotonic() * 0.65) % 1.0
+        animated_name = shine(
+            item["name"],
+            offset=shine_offset,
+            color=(255, 202, 102),
+            bold=True,
+        )
+        print(f"{xlyellow}✎ {animated_name}{reset}", end="", flush=True)
+
+    def play_boolean_toggle_sound(value):
+        sound("map_switch2" if value else "map_switch1")
+
+    def draw_category_label(index):
+        move(9 + index * 4, 2)
+        shine_offset = (time.monotonic() * 0.65) % 1.0
+        label = shine(
+            CATEGORY_LABELS[index],
+            offset=shine_offset,
+            color=CATEGORY_SELECTED_RGB,
+            bold=True,
+        )
+        print(label, end="", flush=True)
 
     # blanks from top left to bottom right (row, col style)
     blank(SETTINGS_ROW, SETTINGS_COL,  30, SETTINGS_COL + BOX_WIDTH + 2)
@@ -3406,10 +3505,7 @@ def settings2():
     for i, item in enumerate(page):
 
         try:
-            if d.settings_category == 4:   # Key binds
-                obj = bind
-            else:
-                obj = setting
+            obj = setting
 
             value = getattr(obj, item["attr"])
         except Exception as e:
@@ -3417,40 +3513,101 @@ def settings2():
             print(f"ERROR: {e}", end="")
             return
 
-        if item["type"] == "bool":
-            value = "On" if value else "Off"
+        if (
+            settings_editor.active
+            and i == d.settings_cursor - 1
+            and settings_editor.item is item
+        ):
+            value = settings_editor.value
+        raw_value = value
+        value = format_setting_value(item, value)
 
         row = SETTINGS_ROW + i * BOX_HEIGHT
+        is_selected = (
+            i == d.settings_cursor - 1
+            and d.settings_selection == "setting"
+        )
+        is_editing = is_selected and visually_editing
+        is_edit_flash = is_editing and getattr(d, "settings_edit_flash", False)
+        edit_border_color = xc if is_edit_flash else xlyellow
 
         # Top
-        print(reset)
+        print(reset, end="")
         move(row, SETTINGS_COL)
-        if i == d.settings_cursor - 1 and d.settings_selection == "setting":
+        if is_editing:
+            print(f"{edit_border_color}{bold}╔" + "═" * BOX_WIDTH + f"╗{reset}", end="")
+        elif is_selected:
             print(f"{RGB}186;243;219m╭" + "─" * BOX_WIDTH + "╮", end="")
         else:
             print("╭" + "─" * BOX_WIDTH + "╮", end="")
 
         # Middle
         move(row + 1, SETTINGS_COL)
-        if i == d.settings_cursor - 1 and d.settings_selection == "setting":
+        if is_editing:
+            print(f"{edit_border_color}{bold}║{reset}", end="")
+        elif is_selected:
             print(f"{RGB}186;243;219m│", end="")
         else:
             print("│", end="")
 
         move(row + 1, SETTINGS_COL + 2)
 
-        if i == d.settings_cursor - 1 and d.settings_selection == "setting":
+        if is_editing:
+            draw_editing_setting_name(item, row, flash=is_edit_flash)
+        elif is_selected:
             print(f"{xf}→ {xa}{bold}{item['name']}{reset}", end="")
         else:
             print(item["name"], end="")
 
+        if is_editing and item["type"] == "keybind":
+            value = "[press a key...]"
         value = str(value)
-
-        move(row + 1, SETTINGS_COL + BOX_WIDTH - len(value))
-        print(value, end="")
+        if item.get("disabled"):
+            move(row + 1, SETTINGS_COL + BOX_WIDTH - len(value))
+            print(f"{x7}{bold if is_selected else ''}{value}{reset}", end="")
+        elif item.get("display") == "volume":
+            draw_volume_setting_value(
+                item,
+                raw_value,
+                row,
+                selected=is_selected,
+                flash=is_edit_flash,
+            )
+        elif item["type"] == "bool":
+            before_dot, dot, after_dot, label = boolean_slider_parts(raw_value)
+            label = f"{label:>3}"
+            slider_width = 3 + 1 + 3
+            move(row + 1, SETTINGS_COL + BOX_WIDTH - slider_width)
+            state_color = (
+                xlred
+                if is_edit_flash or setting_is_off(item, raw_value)
+                else xa
+            )
+            label_style = f"{state_color}{bold}" if is_selected else xf
+            print(
+                f"{x8}{before_dot}{state_color}{dot}{x8}{after_dot} "
+                f"{label_style}{label}{reset}",
+                end="",
+            )
+        else:
+            move(row + 1, SETTINGS_COL + BOX_WIDTH - len(value))
+            if is_editing and item["type"] == "keybind":
+                keybind_color = xlred if is_edit_flash else xf
+                print(f"{keybind_color}{value}{reset}", end="")
+            elif is_selected:
+                value_color = (
+                    xlred
+                    if is_edit_flash or setting_is_off(item, raw_value)
+                    else xa
+                )
+                print(f"{value_color}{bold}{value}{reset}", end="")
+            else:
+                print(value, end="")
 
         move(row + 1, SETTINGS_COL + BOX_WIDTH + 1)
-        if i == d.settings_cursor - 1 and d.settings_selection == "setting":
+        if is_editing:
+            print(f"{edit_border_color}{bold}║{reset}", end="")
+        elif is_selected:
             print(f"{RGB}186;243;219m│", end="")
         else:
             print("│", end="")
@@ -3458,29 +3615,43 @@ def settings2():
         # Bottom
         if i != 7:
             move(row + 2, SETTINGS_COL)
-            if i == d.settings_cursor - 1 and d.settings_selection == "setting":
+            if is_editing:
+                print(f"{edit_border_color}{bold}╚" + "═" * BOX_WIDTH + f"╝{reset}", end="")
+            elif is_selected:
                 print(f"{RGB}186;243;219m╰" + "─" * BOX_WIDTH + "╯", end="")
             else:
                 print("╰" + "─" * BOX_WIDTH + "╯", end="")
+        if i != len(page) - 1:
+            continue
+
         current = page[d.settings_cursor - 1]
         # Description
-        print(reset)
+        print(reset, end="")
         # blank description window
         blank(32,22, 35,95)
         if d.settings_selection == "setting":
             move(32,23)
-            print(f"{xlorange}🔎 {underline}{bold}Currently selected: {current["name"]}{reset}")
-            if d.setting_focused:
+            if visually_editing:
+                print(f"{xlyellow}✎ {underline}{bold}Editing: {current["name"]}{reset}")
                 move(33, 23)
-                print(f"🖊️ {xf}Currently editing. Press Enter/ESC when done.{reset}")
+                print(f"{xlyellow}◆ {xf}{settings_editor.message}{reset}")
             else:
+                print(f"{xlorange}🔎 {underline}{bold}Currently selected: {current["name"]}{reset}")
                 move(33, 23)
-                print(f"✏️ {xf}Press Enter to edit.{reset}")
+                message = settings_editor.message or (
+                    "Press Enter or click to edit. Ctrl+R resets all keybinds."
+                    if d.settings_category == 4
+                    else "Press Enter or click to edit."
+                )
+                print(f"✏️ {xf}{message}{reset}")
             move(34, 23)
             print(f"📜 {xf}{current["description"]}", end="")
 
             move(35, 23)
-            print(f"{xa}{reset}{xf}✅ {bold}Accepted values: {xa}{unbold}{current['accepted']}", end="")
+            accepted = current["accepted"]
+            if isinstance(accepted, list):
+                accepted = " / ".join(accepted)
+            print(f"{xa}{reset}{xf}✅ {bold}Accepted values: {xa}{unbold}{accepted}", end="")
         else:
             move(32,23)
             settings_category = ["Battles", "Look & feel", "Sound & music", "Key binds", "Accessibility", "Developer"]
@@ -3502,7 +3673,10 @@ def settings2():
 
     if d.settings_selection == "setting":
         move(32,108-12)
-        print(f"{x7}│ {xlyellow}↕ {bold}up/down {reset}- switch setting {x7} │")
+        if visually_editing:
+            print(f"{x7}│ {xlyellow}↕ {bold}up/down {reset}- save & move{x7}     │")
+        else:
+            print(f"{x7}│ {xlyellow}↕ {bold}up/down {reset}- switch setting {x7} │")
     else:
         move(32,108-12)
         print(f"{x7}│ {xlyellow}↕ {bold}up/down {reset}- switch category{x7} │")
@@ -3511,20 +3685,36 @@ def settings2():
         move(34,108-12)
         print(f"{x7}│ {xlyellow}⏎ {bold}enter {reset}- enter category    {x7}│")        
 
-    if d.setting_focused:
-        move(33,108-12)
-        print(f"{x7}│ {xlyellow}↔ {bold}left/right{reset} - set setting{x7}  │")
-        move(34,108-12)
-        print(f"{x7}│ {xlyellow}⏎ {bold}enter {reset}- save what you set {x7}│")
-        move(35,108-12)
-        print(f"{x7}│ {xlyellow}⯯{bold} escape {reset}- discard changes  {x7}│")
-    elif not d.setting_focused and d.settings_selection == "setting":
+    if visually_editing:
+        if settings_editor.item["type"] == "keybind":
+            move(33,108-12)
+            print(f"{x7}│ {xlyellow}⌨ {bold}press key{reset} - save{x7}          │")
+            move(34,108-12)
+            print(f"{x7}│ {xlyellow}⯯{bold} escape {reset}- discard changes  {x7}│")
+            move(35,108-12)
+            print(f"{x7}│ {xlyellow}↻ {bold}ctrl+r{reset} - reset all{x7}        │")
+        elif settings_editor.item["type"] == "bool":
+            move(33,108-12)
+            print(f"{x7}│ {xlyellow}⏎ {bold}enter {reset}- toggle and save   {x7}│")
+            move(35,108-12)
+            print(f"{x7}│ {xlyellow}⯯{bold} escape {reset}- discard changes  {x7}│")
+        else:
+            move(33,108-12)
+            print(f"{x7}│ {xlyellow}↔ {bold}left/right{reset} - set setting{x7}  │")
+            move(34,108-12)
+            print(f"{x7}│ {xlyellow}⏎ {bold}enter {reset}- save what you set {x7}│")
+            move(35,108-12)
+            print(f"{x7}│ {xlyellow}⯯{bold} escape {reset}- discard changes  {x7}│")
+    elif d.settings_selection == "setting":
         move(33,108-12)
         print(f"{x7}│ {xlyellow}← {bold}left{reset} - change category   {x7} │")
         move(34,108-12)
         print(f"{x7}│ {xlyellow}⏎ {bold}enter {reset}- modify setting    {x7}│")
         move(35,108-12)
-        print(f"{x7}│ {xlyellow}⯯{bold} escape {reset}- exit settings {x7}   │")
+        if d.settings_category == 4:
+            print(f"{x7}│ {xlyellow}↻ {bold}ctrl+r{reset} - reset all{x7}        │")
+        else:
+            print(f"{x7}│ {xlyellow}⯯{bold} escape {reset}- exit settings {x7}   │")
     else:
         move(33,108-12)
         print(f"{x7}│ {xlyellow}→ {bold}right{reset} - enter category{x7}    │")
@@ -3533,38 +3723,275 @@ def settings2():
 
     
     print("", end="", flush=True)
+    if getattr(d, "settings_edit_flash", False):
+        d.settings_edit_flash = False
+        time.sleep(0.18)
+        game.goto = settings2
+        return
+
     while True:
-            k = key(mouse=True)
+            k = key(
+                timeout=0.04 if visually_editing or category_focused else None,
+                mouse=True,
+            )
+
+            if k == "TIMEOUT":
+                if visually_editing:
+                    focused_item = page[d.settings_cursor - 1]
+                    focused_row = (
+                        SETTINGS_ROW + (d.settings_cursor - 1) * BOX_HEIGHT
+                    )
+                    draw_editing_setting_name(focused_item, focused_row)
+                    continue
+                if category_focused:
+                    draw_category_label(d.settings_category - 1)
+                    continue
+                continue
 
             if isinstance(k, dict):
-                if k["event"] == "down":
-                    # Settings buttons layout:
-                    # 6 buttons, each 3 rows tall, 20 chars wide
-                    # Starting at row 8, with 1-row gaps between buttons
-                    # Button rows: 8-10, 12-14, 16-18, 20-22, 24-26, 28-30
-                    
-                    btn_col_start = 2  # You need to tell me the starting X column
-                    btn_col_end = btn_col_start + 19  # 20 chars wide (0-indexed)
-                    
-                    # Determine which button row was clicked
-                    button_index = None
-                    for i in range(6):
-                        btn_top = 7 + (i * 4)      # 8, 12, 16, 20, 24, 28
-                        btn_bottom = btn_top + 2    # 3 rows tall
-                        if btn_top <= k["y"] <= btn_bottom and btn_col_start <= k["x"] <= btn_col_end:
-                            button_index = i
-                            break
-                    
-                    if button_index is not None:
-                        d.settings_category = button_index + 1
-                        d.settings_selection = "category"
-                        sounds_list = ["setting_battles", "settings_graphics", "settings_music", "setting_keybinds", "setting_accessibility", "switch"]
-                        sound("map_switch1" if button_index < d.settings_category - 1 else "map_switch2")
-                        sound(sounds_list[d.settings_category - 1])
+                mouse_event = k.get("event")
+                if (
+                    mouse_event == "down"
+                    and k.get("button") == "left"
+                    and back_button_contains(k["x"], k["y"])
+                ):
+                    settings_editor.clear()
+                    d.settings_slider_dragging = False
+                    sound("map_left")
+                    game.goto = house
+                    return
+
+                if (
+                    mouse_event == "up"
+                    and k.get("button") == "left"
+                    and getattr(d, "settings_slider_dragging", False)
+                ):
+                    d.settings_slider_dragging = False
+                    if (
+                        settings_editor.active
+                        and settings_editor.item.get("display") == "volume"
+                    ):
+                        settings_editor.commit()
+                        if d.settings_category == 3:
+                            sound("REFRESH_AUDIO")
+                        sound("map_switch1")
                         game.goto = settings2
                         return
                     continue
+
+                if mouse_event in ("down", "drag") and k.get("button") == "left":
+                    # Win32 mouse coordinates are zero-based; the renderer's
+                    # row/column coordinates are one-based.
+                    clicked_index = setting_index_at(
+                        k["x"],
+                        k["y"],
+                        len(page),
+                        SETTINGS_COL,
+                        SETTINGS_ROW,
+                        BOX_WIDTH,
+                        BOX_HEIGHT,
+                    )
+
+                    if clicked_index is not None:
+                        clicked = page[clicked_index]
+                        owner = setting
+                        same_active_setting = (
+                            settings_editor.active
+                            and clicked_index == d.settings_cursor - 1
+                            and settings_editor.item is clicked
+                        )
+                        value_row = SETTINGS_ROW + clicked_index * BOX_HEIGHT
+                        over_value_row = k["y"] == value_row
+
+                        if clicked.get("display") == "volume" and over_value_row:
+                            clicked_value = volume_value_at_mouse(
+                                k["x"],
+                                clicked,
+                                SETTINGS_COL,
+                                BOX_WIDTH,
+                                clamp=mouse_event == "drag" and same_active_setting,
+                            )
+                            if clicked_value is not None:
+                                was_same_active_setting = same_active_setting
+                                if settings_editor.active and not same_active_setting:
+                                    settings_editor.commit()
+                                    sound("map_switch1")
+                                    if d.settings_category == 3:
+                                        sound("REFRESH_AUDIO")
+
+                                d.settings_selection = "setting"
+                                d.settings_cursor = clicked_index + 1
+                                if not same_active_setting:
+                                    settings_editor.begin(clicked, owner)
+                                settings_editor.value = clicked_value
+                                settings_editor.message = (
+                                    "Click or drag the slider, then Enter to save."
+                                )
+                                d.settings_slider_dragging = True
+                                if mouse_event == "down":
+                                    sound("map_switch2")
+                                if was_same_active_setting and not visually_editing:
+                                    draw_volume_setting_value(
+                                        clicked,
+                                        clicked_value,
+                                        value_row,
+                                        selected=True,
+                                    )
+                                    continue
+                                game.goto = settings2
+                                return
+
+                        if (
+                            mouse_event == "down"
+                            and clicked["type"] == "bool"
+                            and not clicked.get("disabled")
+                            and over_value_row
+                            and boolean_control_contains(
+                                k["x"], SETTINGS_COL, BOX_WIDTH
+                            )
+                        ):
+                            if settings_editor.active:
+                                if same_active_setting:
+                                    settings_editor.clear()
+                                else:
+                                    settings_editor.commit()
+                                    sound("map_switch1")
+                            d.settings_selection = "setting"
+                            d.settings_cursor = clicked_index + 1
+                            new_value = not getattr(owner, clicked["attr"])
+                            setattr(
+                                owner,
+                                clicked["attr"],
+                                new_value,
+                            )
+                            owner.save()
+                            if d.settings_category == 3:
+                                sound("REFRESH_AUDIO")
+                            play_boolean_toggle_sound(new_value)
+                            game.goto = settings2
+                            return
+
+                        # Movement only adjusts an already focused slider.
+                        if mouse_event == "drag":
+                            continue
+
+                        if (
+                            settings_editor.active and same_active_setting
+                        ):
+                            continue
+
+                        if settings_editor.active:
+                            settings_editor.commit()
+                            sound("map_switch1")
+                            if d.settings_category == 3:
+                                sound("REFRESH_AUDIO")
+
+                        d.settings_selection = "setting"
+                        d.settings_cursor = clicked_index + 1
+                        result = settings_editor.begin(clicked, owner)
+                        sound("error2" if result == "disabled" else "map_right")
+                        game.goto = settings2
+                        return
+
+                    if mouse_event == "down":
+                        clicked_category = category_index_at(k["x"], k["y"])
+                        if clicked_category is not None:
+                            if settings_editor.active:
+                                d.settings_edit_flash = True
+                                sound("error2")
+                                game.goto = settings2
+                                return
+
+                            previous_category = d.settings_category
+                            d.settings_category = clicked_category + 1
+                            d.settings_selection = "category"
+                            d.settings_cursor = 1
+                            settings_editor.clear()
+                            sounds_list = [
+                                "setting_battles",
+                                "settings_graphics",
+                                "settings_music",
+                                "setting_keybinds",
+                                "setting_accessibility",
+                                "switch",
+                            ]
+                            direction_sound = (
+                                "map_switch1"
+                                if d.settings_category < previous_category
+                                else "map_switch2"
+                            )
+                            sound(direction_sound)
+                            sound(sounds_list[d.settings_category - 1])
+                            game.goto = settings2
+                            return
+                continue
             else:
+                if d.settings_category == 4 and k.lower() == "ctrl/r":
+                    # TODO: Re-enable this guard when the reset confirmation
+                    # screen has been implemented.
+                    # if not confirm_keybind_reset():
+                    #     continue
+                    bind.reset()
+                    settings_editor.clear()
+                    settings_editor.message = "All keybinds reset to defaults."
+                    sound("map_switch1")
+                    game.goto = settings2
+                    return
+
+                if settings_editor.active:
+                    if k.lower() in ("up", "down"):
+                        settings_editor.commit()
+                        sound("map_switch1")
+                        if d.settings_category == 3:
+                            sound("REFRESH_AUDIO")
+
+                        if k.lower() == "up":
+                            d.settings_cursor = max(1, d.settings_cursor - 1)
+                        else:
+                            d.settings_cursor = min(
+                                max_settings[d.settings_category - 1],
+                                d.settings_cursor + 1,
+                            )
+                        d.settings_selection = "setting"
+                        game.goto = settings2
+                        return
+
+                    edit_key = k
+                    if settings_editor.item["type"] != "keybind":
+                        if k.lower() == bind.confirm.lower():
+                            edit_key = "enter"
+                        elif k.lower() == bind.deny.lower():
+                            edit_key = "esc"
+                    result = settings_editor.handle_key(edit_key)
+                    if result == "saved":
+                        if d.settings_category == 3:
+                            sound("REFRESH_AUDIO")
+                        if settings_editor.item["type"] == "bool":
+                            play_boolean_toggle_sound(settings_editor.value)
+                        else:
+                            sound("map_switch1")
+                    elif result == "cancelled":
+                        sound("map_left")
+                    elif result == "error":
+                        sound("error2")
+                    elif result == "changed":
+                        sound("map_switch2")
+                        if settings_editor.item.get("display") == "volume":
+                            focused_row = (
+                                SETTINGS_ROW
+                                + (d.settings_cursor - 1) * BOX_HEIGHT
+                            )
+                            draw_volume_setting_value(
+                                settings_editor.item,
+                                settings_editor.value,
+                                focused_row,
+                                selected=True,
+                            )
+                            continue
+                    elif result == "ignored":
+                        continue
+                    game.goto = settings2
+                    return
                 if k.lower() == "s" or k.lower() == "down":
                     if d.settings_selection == "category":
                         d.settings_category += 1
@@ -3596,26 +4023,47 @@ def settings2():
                             sound(sounds_list[d.settings_category - 1])
                     elif d.settings_selection == "setting":
                         d.settings_cursor -= 1
-                        if d.settings_cursor <= 1:
+                        if d.settings_cursor < 1:
                             d.settings_cursor = 1
                             sound("map_switch1_end")
                         else:
                             sound("map_switch1")
                     game.goto = settings2
                     return    
-                if d.settings_selection == "category" and k.lower() in ("enter", "right", "d"):
+                if d.settings_selection == "category" and k.lower() in (
+                    "enter", bind.confirm.lower(), "right", "d"
+                ):
                     d.settings_selection = "setting"
                     d.settings_cursor = 1
                     sound("map_right")
                     game.goto = settings2
                     return
-                if d.settings_selection == "setting" and not d.setting_focused and k.lower() in ("esc", "left", "a", bind.back.lower()): # go left
+                if d.settings_selection == "setting" and k.lower() in (
+                    "enter", bind.confirm.lower()
+                ):
+                    current = page[d.settings_cursor - 1]
+                    owner = setting
+                    result = settings_editor.begin(current, owner)
+                    if result == "focused" and current["type"] == "bool":
+                        result = settings_editor.handle_key("enter")
+                        if result == "saved" and d.settings_category == 3:
+                            sound("REFRESH_AUDIO")
+                        play_boolean_toggle_sound(settings_editor.value)
+                    else:
+                        sound("error2" if result == "disabled" else "map_right")
+                    game.goto = settings2
+                    return
+                if d.settings_selection == "setting" and k.lower() in (
+                    "esc", "left", "a", bind.back.lower(), bind.deny.lower()
+                ): # go left
                     d.settings_selection = "category"
                     d.settings_cursor = 1
                     sound("map_left")
                     game.goto = settings2
                     return
-                if d.settings_selection == "category" and (k.lower() == bind.back or k.lower() == "esc") and not d.setting_focused:
+                if d.settings_selection == "category" and k.lower() in (
+                    bind.back.lower(), bind.deny.lower(), "esc"
+                ):
                     game.goto = house
                     return
 
@@ -3652,7 +4100,7 @@ def settings_old():
 {player.color}     ██      ██     {x8}│{x9}                                    {x8} │                                     │              
 {player.color}                    {x8}│{xf}  So go on - {italic}customize and conquer!{reset}{x8}  │  {x3}{bold}{RGB}190;81;70m{xbrown}[C]{reset}{xb}{RGB}213;126;65m{xlbrown} ⚙️ System core and game info{x8}   │ 
 {player.color}  {x8}{italic}leg1⇡      ⇡leg2  {reset}{x8}│{x9}                                    {x8} │                                     │              
-{player.color}                    {x8}│{xf}  {xlorange}🔎 {bold}Press space to search...    {reset}{x8}    │  {xc}{bold}[{bind.back_display}] {reset}🏡 {xlred}{italic}<- Return to your house{x8}{x8}     │ 
+{player.color}                    {x8}│{xf}  {xlorange}🔎 {bold}Press space to search...    {reset}{x8}    │  {xc}{bold}[{bind.back.upper()}] {reset}🏡 {xlred}{italic}<- Return to your house{x8}{x8}     │ 
 {player.color}  {x8}{italic}                  {reset}{x8}│{x9}                                    {x8} │                                     │              
 {player.color} {x8}{italic}     {reset}        {x8}{italic}      {reset}{x8}╰{x8}────────────────────────────────────{x8}─┴─────────────────────────────────────╯   
     """,end="")
@@ -3693,7 +4141,7 @@ def inventory():
 {player.color}         ██         {x8}│{x9}                                    {x8} │                                   {x8}  │  
 {player.color}         ██         {x8}│{xe}  Your inventory has an unlimited   {x8} │  {xlyellow}{bold}[E]{reset}{xe} 🧰 View everything else      {x8}  │ 
 {player.color}         ██         {x8}│{xe}  capacity - store as many things as {x8}│                                   {x8}  │    
-{player.color}       ██  ██       {x8}│{xe}  you need! Now, select an option:  {x8} │  {xc}{bold}[{bind.back_display}] {reset}🏡 {xlred}{italic}<- Return to your house{x8}{x8}     │ 
+{player.color}       ██  ██       {x8}│{xe}  you need! Now, select an option:  {x8} │  {xc}{bold}[{bind.back.upper()}] {reset}🏡 {xlred}{italic}<- Return to your house{x8}{x8}     │ 
 {player.color}     ██      ██     {x8}│{x9}                                    {x8} │                                     │              
 {player.color}                    {x8}╰{x8}────────────────────────────────────{x8}─┴─────────────────────────────────────╯   
     """)
@@ -4171,7 +4619,7 @@ def noitems():
 
     print(f"{reset}\033[16;19H🔱 {bold}{xlorange}{category_title} {xlyellow}{unbold}→ {xlorange}{bold}Empty {x7}(items: {xf}{bold}0{x7}{unbold}){reset}")
     print(f"\033[23;26H{x8}{x7}— {xlyellow}No items in this category. {x7}—{reset}")
-    print(f"\033[31;19H{xlorange}Go back → {xlyellow}{bold}{bind.back_display.upper()} {reset}{xlorange}or {xlyellow}{bold}ESC{reset}")
+    print(f"\033[31;19H{xlorange}Go back → {xlyellow}{bold}{bind.back.upper()} {reset}{xlorange}or {xlyellow}{bold}ESC{reset}")
 
     while True:
         k = key()
@@ -4489,8 +4937,8 @@ def inventory_waitkey():
             sound("positive7")
             if os.path.exists(item_path):
                 subprocess.run(["notepad.exe", item_path])
-        # equip item with enter
-        elif k.lower() == "enter":
+        # Equip with the configured confirm key (Enter remains a terminal-safe fallback).
+        elif k.lower() in ("enter", bind.confirm.lower()):
             item = load_item(d.currsel, game.sel)
             equipped_path = inv_active_path(game.sel)
             if not equipped_path:

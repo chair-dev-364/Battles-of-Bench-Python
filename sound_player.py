@@ -395,7 +395,7 @@ def get_volume(key="sound"):
             return default_volume
             
         settings_dict = {}
-        for k in ["sound", "music"]:
+        for k in ["sound", "sfx", "music"]:
             if k in settings:
                 val = int(settings[k])
                 settings_dict[k] = float(max(0, min(10, val))) / 10.0
@@ -409,6 +409,28 @@ def get_volume(key="sound"):
 
     except Exception:
         return default_volume
+
+
+def spatial_audio_enabled():
+    """Return the current spatial-audio toggle from the shared settings file."""
+    try:
+        if not os.path.isfile(VOLUME_FILE_PATH):
+            return False
+        with open(VOLUME_FILE_PATH, "r", encoding="utf-8") as f:
+            return bool(json.load(f).get("spatial", False))
+    except Exception:
+        return False
+
+
+def refresh_audio_settings():
+    """Invalidate cached values and update an already playing music stream."""
+    global _volume_cache, _volume_file_mtime
+    _volume_cache = {}
+    _volume_file_mtime = 0
+    try:
+        pygame.mixer.music.set_volume(get_volume("music"))
+    except Exception:
+        pass
 
 
 def parse_sound_and_pitch(command):
@@ -447,6 +469,27 @@ def parse_sound_and_pitch(command):
         pitch = 1.0
 
     return head.strip(), pitch
+
+
+def parse_play_request(command):
+    """Parse the optional ``@channel,pan|`` prefix used by the game."""
+    volume_key = None
+    pan = 0.0
+    payload = command
+
+    prefix, separator, remainder = command.partition("|")
+    if separator and prefix.startswith("@"):
+        channel_text, _, pan_text = prefix[1:].partition(",")
+        if channel_text in ("sound", "sfx", "music"):
+            volume_key = channel_text
+            payload = remainder
+            try:
+                pan = max(-1.0, min(1.0, float(pan_text or 0.0)))
+            except ValueError:
+                pan = 0.0
+
+    sound_name, pitch = parse_sound_and_pitch(payload)
+    return sound_name, pitch, volume_key, pan
 
 
 def get_pitched_sound(sound_file, base_sound, pitch):
@@ -531,7 +574,7 @@ def get_pitched_sound(sound_file, base_sound, pitch):
         print(f"Warning: Failed to apply pitch {pitch} for {os.path.basename(sound_file)}: {e}")
         return base_sound
 
-def play_sound_thread(sound_name, pitch=1.0):
+def play_sound_thread(sound_name, pitch=1.0, volume_key=None, pan=0.0):
     """Plays a single sound file in a separate thread using cached Sound objects.
 
     Uses per-play channel volume (doesn't mutate the cached Sound volume).
@@ -543,7 +586,7 @@ def play_sound_thread(sound_name, pitch=1.0):
     music_file_mp3 = os.path.join(music_dir, f"{sound_name}.mp3")
     music_file_wav = os.path.join(music_dir, f"{sound_name}.wav")
 
-    vol_key = "sound"
+    vol_key = volume_key or "sound"
 
     if os.path.isfile(sound_file_mp3):
         # Clean ID3 tags before loading
@@ -605,7 +648,12 @@ def play_sound_thread(sound_name, pitch=1.0):
             print(f"Warning: No available channel to play {sound_name}.")
             return
         try:
-            ch.set_volume(volume)
+            if vol_key == "sfx" and spatial_audio_enabled() and pan:
+                left = 1.0 if pan <= 0 else 1.0 - pan
+                right = 1.0 if pan >= 0 else 1.0 + pan
+                ch.set_volume(volume * left, volume * right)
+            else:
+                ch.set_volume(volume)
         except Exception:
             # Older pygame versions may not support set_volume on channel
             try:
@@ -660,6 +708,9 @@ def handle_client(conn, addr):
                  except socket.error as e:
                      print(f"Warning: Failed to send PONG to {addr}: {e}")
 
+            elif command.upper() == "REFRESH_AUDIO":
+                refresh_audio_settings()
+
             elif command.upper().startswith("STOP"):
                 if command.upper() == "STOP":
                     print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Received STOP command from {addr}. Stopping all sounds.")
@@ -688,11 +739,15 @@ def handle_client(conn, addr):
 
             else:
                 # Assume it's a sound name with optional trailing pitch
-                sound_name, pitch = parse_sound_and_pitch(command)
+                sound_name, pitch, volume_key, pan = parse_play_request(command)
                 if not sound_name:
                     continue
                 # Start playback in a new thread to avoid blocking the listener
-                playback_thread = threading.Thread(target=play_sound_thread, args=(sound_name, pitch), daemon=True)
+                playback_thread = threading.Thread(
+                    target=play_sound_thread,
+                    args=(sound_name, pitch, volume_key, pan),
+                    daemon=True,
+                )
                 # Daemon=True allows the main program to exit even if these threads are running
                 playback_thread.start()
                 # Optionally send an ack back
@@ -743,6 +798,8 @@ def handle_udp_command(command, addr=None, sock=None):
                 sock.sendto(b"PONG\n", addr)
             except Exception as e:
                 print(f"Warning: Failed to send PONG to {addr} via UDP: {e}")
+    elif cmd_up == "REFRESH_AUDIO":
+        refresh_audio_settings()
     elif cmd_up.startswith("STOP"):
         if cmd_up == "STOP":
             print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Received STOP command from {addr}. Stopping all sounds.")
@@ -767,10 +824,14 @@ def handle_udp_command(command, addr=None, sock=None):
             stop_specific_sound(sound_name)
     else:
         # Play sound name with optional trailing pitch (fire-and-forget)
-        sound_name, pitch = parse_sound_and_pitch(command)
+        sound_name, pitch, volume_key, pan = parse_play_request(command)
         if not sound_name:
             return
-        playback_thread = threading.Thread(target=play_sound_thread, args=(sound_name, pitch), daemon=True)
+        playback_thread = threading.Thread(
+            target=play_sound_thread,
+            args=(sound_name, pitch, volume_key, pan),
+            daemon=True,
+        )
         playback_thread.start()
 
 
@@ -821,7 +882,7 @@ QUEUE_POLL_INTERVAL = 0.001  # 1 ms poll for extreme low-latency
 def file_queue_listener():
     """Tails a queue file and executes commands as they arrive.
 
-    This allows `sound.bat` to append via `echo name >> General\Temp\sound_cmd_queue.txt`
+    This allows appending commands to the General/Temp sound queue file
     and avoid launching Python processes per command.
     """
     last_pos = 0

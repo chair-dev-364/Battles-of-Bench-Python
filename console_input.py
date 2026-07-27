@@ -235,6 +235,8 @@ def _process_mouse_event(rec):
 
     if flags & MOUSE_MOVED:
         _prev_button_state = mouse.dwButtonState
+        if mouse.dwButtonState & FROM_LEFT_1ST_BUTTON_PRESSED:
+            return {"type": "mouse", "event": "drag", "button": "left", "x": x, "y": y}
         return None
 
     # Button press/release

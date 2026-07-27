@@ -1,9 +1,10 @@
 SETTINGS = [
     {
-        "name": "Soon",
-        "attr": "soon",
+        "name": "Developer mode",
+        "attr": "developer_mode",
         "type": "bool",
-        "description": "This setting has not been implemented yet.",
-        "accepted": "On / Off",
+        "default": False,
+        "description": "Enable developer-only behavior as it becomes available.",
+        "accepted": ["Off", "On"],
     },
 ]
