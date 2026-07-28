@@ -225,7 +225,7 @@ def flash_prompt(row, col, prompt):
     cursor(False)
     move(row, col)
     print(f"{xlred}{bold}{prompt}{reset}", end="", flush=True)
-    time.sleep(0.12)
+    animation_sleep(0.12)
     move(row, col)
     print(prompt, end="", flush=True)
     cursor(True)
@@ -496,6 +496,11 @@ enemy = EnemyData()
 
 # Load settings.
 class SettingsData:
+    _REDUCE_MOTION_LOCKED_FIELDS = {
+        "animation_speed",
+        "menu_transitions",
+    }
+
     def __init__(self):
         base_dir = os.path.dirname(os.path.abspath(__file__))
         settings_dir = os.path.join(base_dir, "Settings")
@@ -543,7 +548,9 @@ class SettingsData:
         if setting_type == "keybind":
             if not isinstance(value, str) or not value.strip():
                 return default
-            return value.strip().lower()
+            value = value.strip().lower()
+            allowed_keys = item.get("allowed_keys")
+            return value if not allowed_keys or value in allowed_keys else default
         if setting_type == "choice":
             return value if value in item.get("choices", ()) else default
         if setting_type == "slider":
@@ -580,11 +587,17 @@ class SettingsData:
             value = self._validated_value(key, value, default)
             setattr(self, key, value)
 
+        reduced_values_changed = self._enforce_reduce_motion()
+
         # Migrate legacy keybinds and add newly declared settings immediately.
-        if needs_sync or not os.path.exists(self._path):
+        if needs_sync or reduced_values_changed or not os.path.exists(self._path):
             self.save()
 
     def save(self):
+        self._enforce_reduce_motion()
+        for key, default in self._persistent_fields.items():
+            value = getattr(self, key, default)
+            setattr(self, key, self._validated_value(key, value, default))
         data = {
             key: getattr(self, key, default)
             for key, default in self._persistent_fields.items()
@@ -603,6 +616,23 @@ class SettingsData:
             if key in self._persistent_fields:
                 setattr(self, key, self._persistent_fields[key])
         self.save()
+
+    def setting_is_locked(self, attr):
+        return (
+            bool(getattr(self, "reduce_motion", False))
+            and attr in self._REDUCE_MOTION_LOCKED_FIELDS
+        )
+
+    def _enforce_reduce_motion(self):
+        if not getattr(self, "reduce_motion", False):
+            return False
+        changed = (
+            getattr(self, "animation_speed", None) != "Instant"
+            or getattr(self, "menu_transitions", None) is not False
+        )
+        self.animation_speed = "Instant"
+        self.menu_transitions = False
+        return changed
 
     def _create_default_file(self):
         with open(self._path, "w", encoding="utf-8") as f:
@@ -645,6 +675,7 @@ class KeyBinds:
     def __setattr__(self, name, value):
         fields = self.__dict__.get("_persistent_fields", {})
         if name in fields:
+            value = self._owner._validated_value(name, value, fields[name])
             setattr(self._owner, name, value)
             return
         object.__setattr__(self, name, value)
@@ -739,6 +770,45 @@ class CONSOLE_CURSOR_INFO(ctypes.Structure):
 # Clear screen. Simple as that. Sorry, Linux or Mac.
 def cls():
     os.system("cls")
+
+
+def animation_speed_name():
+    """Return the effective tiny-effect animation mode."""
+    if getattr(setting, "reduce_motion", False):
+        return "Instant"
+    return getattr(setting, "animation_speed", "Normal")
+
+
+def animation_rate():
+    """Normal runs at 1x and Fast at 1.5x."""
+    return 1.5 if animation_speed_name() == "Fast" else 1.0
+
+
+def animations_enabled():
+    return animation_speed_name() != "Instant"
+
+
+def animation_sleep(seconds):
+    """Sleep for an animation frame using the configured playback rate."""
+    if not animations_enabled():
+        return
+    time.sleep(max(0.0, seconds) / animation_rate())
+
+
+def screen_wipe(mode, delay_ms):
+    """Run a menu wipe, or clear instantly when transitions are disabled."""
+    transitions_enabled = getattr(setting, "menu_transitions", True)
+    if (
+        getattr(setting, "reduce_motion", False)
+        or not transitions_enabled
+        or not animations_enabled()
+    ):
+        cls()
+        return
+
+    wipe_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wipe.py")
+    subprocess.run([sys.executable, wipe_path, mode, str(delay_ms)])
+
 
 # Key. As simple as that. Press a key, and... that's the return. With some specials.
 
@@ -1424,6 +1494,7 @@ def center(text, row):
 
 # why? Don't ask. Just... rainbow text. That's all.
 def rainbow(text, offset=0, bold=False, italic=False):
+    offset = offset * animation_rate() if animations_enabled() else 0
     colors = [
         (255, 100, 100),
         (255, 180, 100),
@@ -1434,7 +1505,8 @@ def rainbow(text, offset=0, bold=False, italic=False):
         (255, 100, 100),
     ]
 
-    result = ""
+    style = ("\033[1m" if bold else "") + ("\033[3m" if italic else "")
+    result = style
     length = max(len(text), 1)
 
     for i, char in enumerate(text):
@@ -1458,6 +1530,12 @@ def rainbow(text, offset=0, bold=False, italic=False):
 # Now THIS is the MVP function. Amazing for animations.
 # Unlike rainbow, which just cycles through colors, this creates a "shine" effect that travels across the text. You can customize the color, width, intensity, and speed of the shine.
 def shine(text, offset=0, color=(255, 255, 0), bold=False):
+    style = "\033[1m" if bold else ""
+    if not animations_enabled():
+        r, g, b = color
+        return f"\033[38;2;{r};{g};{b}m{style}{text}\033[0m"
+
+    offset *= animation_rate()
     result = ""
     length = max(len(text), 1)
 
@@ -1491,7 +1569,6 @@ def shine(text, offset=0, color=(255, 255, 0), bold=False):
             r = int(255 * (1 - strength) + color[0] * strength)
             g = int(255 * (1 - strength) + color[1] * strength)
             b = int(255 * (1 - strength) + color[2] * strength)
-        style = "\033[1m" if bold else ""
         result += f"\033[38;2;{r};{g};{b}m{style}{char}"
     return result + "\033[0m"
 
@@ -1636,26 +1713,26 @@ def levelup():
             player.color = color
     sound("celebration")
     sound("swish")
-    subprocess.run(["py", "wipe.py", "center", "15"]) # clear screen
+    screen_wipe("center", 15)
     cls()
     delay = 0.05
     print(f"[10;1H{xf}                                  | |   _ / /__\\\\[ \\ [  ]/ /__\\\\ | |  [  | | |[ '/'`\\ \\| | ")
-    time.sleep(delay)
+    animation_sleep(delay)
     print(f"[10;1H{xf}{player.color}                                  | |   _ / /__\\\\[ \\ [  ]/ /__\\\\ | |  [  | | |[ '/'`\\ \\| | ")
     print(f"[9;1H{xf}                                  | |      .---.  _   __  .---.  | |   __   _  _ .--.  | | ")
     print(f"[11;1H{xf}                                 _| |__/ || \\__., \\ \\/ / | \\__., | |   | \\_/ |,| \\__/ ||_| ")
-    time.sleep(delay)
+    animation_sleep(delay)
     print(f"[9;1H{xf}{player.color}                                  | |      .---.  _   __  .---.  | |   __   _  _ .--.  | | ")
     print(f"[11;1H{xf}{player.color}                                 _| |__/ || \\__., \\ \\/ / | \\__., | |   | \\_/ |,| \\__/ ||_| ")
-    time.sleep(delay)
+    animation_sleep(delay)
     print(f"[8;1H{xf}                                |_   _|                         [  |                   | | ")
     print(f"[12;1H{xf}                                |________| '.__.'  \\__/   '.__.'[___]  '.__.'_/| ;.__/ (_) ")
-    time.sleep(delay)
+    animation_sleep(delay)
     print(f"[8;1H{xf}{player.color}                                |_   _|                         [  |                   | | ")
     print(f"[12;1H{xf}{player.color}                                |________| '.__.'  \\__/   '.__.'[___]  '.__.'_/| ;.__/ (_) ")
     print(f"[7;1H{xf}{bold}                                 _____                           __                     _  ")
     print(f"[13;1H{xf}                                                                              [__|         {reset}")
-    time.sleep(delay)
+    animation_sleep(delay)
     print(f"[7;1H{xf}{bold}{player.color}                                 _____                           __                     _  ")
     print(f"[13;1H{xf}{player.color}                                                                              [__|         {reset}")
     
@@ -1719,7 +1796,7 @@ def startup_animation():
     # Quick fade in.
     cls()
     fade_duration = 1.25
-    steps = 15
+    steps = 15 if animations_enabled() else 1
     step_delay = fade_duration / steps
     
     art = f"""
@@ -1771,7 +1848,7 @@ def startup_animation():
         print(frame, end="", flush=True)
         center(re.sub(r'\x1b\[38;2;(\d+);(\d+);(\d+)m', shift_color, tip_text), 8)
         sys.stdout.flush()
-        time.sleep(step_delay)
+        animation_sleep(step_delay)
 
     game.skip_mainmenu_cls = True
     game.goto = mainmenu
@@ -1830,6 +1907,7 @@ def mainmenu():
         game.skip_mainmenu_cls = False    
 
     offset = 0
+    animate_menu_effects = animations_enabled()
     
     # check if you can level up
     if player.xp >= player.xpneeded and player.level < 100:
@@ -1837,13 +1915,14 @@ def mainmenu():
         return
     
     while True:
-        offset += 0.005
+        if animate_menu_effects:
+            offset += 0.005
         print(f"[33;1H{x8}______│_____│_______│_____│_______│__[ == ==]/{x7}.::::::;;; {xlred}{bold}{shine("[B] to battle",offset=offset, color=(255, 71, 76), bold=True)}{reset}{x7} ;;;:::::::.{x8}\\[=  == ]___│_______│_______│_______│___│__{reset}")
         print(f"[35;53H{reset}{shine('[Ctrl+T] to modify data', offset=offset, bold=True,color=(132, 224, 133))}",end="",flush=True)
-        k = key(timeout=0)
+        k = key(timeout=0 if animate_menu_effects else None)
         if k.lower() == "b":
             sound("woosh")
-            subprocess.run(["py", "wipe.py", "normal", "10"])
+            screen_wipe("normal", 10)
             game.goto = battle
             return
         if k.lower() == "1":
@@ -1853,7 +1932,8 @@ def mainmenu():
         if k.lower() == "ctrl/t":
             game.goto = internal_modify
             return
-        time.sleep(0.01)
+        if animate_menu_effects:
+            time.sleep(0.01)
         # play sound: ctrl+R
         if k.lower() == "ctrl/r":
             game.goto = testsounds
@@ -2697,7 +2777,7 @@ def house():
                 sound("ultimatehit")
                 print(f"[23;1H{reset}{player.color}         ██    ██   {x8}│{xlyellow}  Everything related to you, your   {x8} │{x8}   ╰─ {x4}{bold}[E]{reset}{xc}                {x7}          {reset}")
                 print(f"[23;1H{reset}{player.color}         ██    ██   {x8}│{xlyellow}  Everything related to you, your   {x8} │{x8}   ╰─ {x4}{bold}[E]{reset}{x4} 🚫 No XP to convert! {reset}")
-                time.sleep(0.025)
+                animation_sleep(0.025)
                 print(f"[23;1H{reset}{player.color}         ██    ██   {x8}│{xlyellow}  Everything related to you, your   {x8} │{x8}   ╰─ {x4}{bold}[E]{reset}{xc} 🚫 No XP to convert!{reset}")
             else:
                 # determine reward sound from 1 to 5 based on xp amount (max 25,000)
@@ -2722,7 +2802,11 @@ def house():
                 pitch = 1
                 dotsdisplay = "..."
                 
-                counts = min(20, int(math.sqrt(excess_xp / 1000) * 4))
+                counts = (
+                    min(20, int(math.sqrt(excess_xp / 1000) * 4))
+                    if animations_enabled()
+                    else 0
+                )
                 for i in range(counts):
                     # change dots
                     if dotsdisplay == ".  ":
@@ -2749,12 +2833,12 @@ def house():
                         pitch = 2.5
                     if delay < 0.001:
                         delay = 0.001
-                    time.sleep(delay)
+                    animation_sleep(delay)
                 
                 sound("map_right")
             
                 sound(reward_sound)
-                time.sleep(0.1)
+                animation_sleep(0.1)
                 if gold < 100000:
                     print(f"[23;1H{reset}{player.color}         ██    ██   {x8}│{xlyellow}  Everything related to you, your   {x8} │{x8}   ╰─ {x3}{bold}[E]{reset}{xb} 💎 Converted! {xlyellow}({bold}+{round(gold)}{reset}🪙{xlyellow})   {reset}")
                 else:
@@ -3360,7 +3444,7 @@ def settings():
 │                   ├──────────────────────────────────────────────────────────────────────────┬─────────────────────────────┤
 {xlred}│                   {x7}│                                                                          │                             │
 {xlred}│  {xc}{bold} Back to house  {unbold} {xlred}{x7}│{x7}                                                                          │                             │
-{xlred}│  {xc}[press {bold}{bind.back.upper()}{unbold} | {bold}ESC{unbold}]  {xlred}{x7}│{x7}                                                                          │                             │
+{xlred}│  {xc}[press {bold}{setting.back.upper()}{unbold} | {bold}ESC{unbold}]  {xlred}{x7}│{x7}                                                                          │                             │
 {xlred}│                   {x7}│{x7}                                                                          │                             │
 {xlred}╰───────────────────{x7}┴{x7}──────────────────────────────────────────────────────────────────────────┴─────────────────────────────╯
 """.strip(),end="",flush=True)
@@ -3521,6 +3605,7 @@ def settings2():
             value = settings_editor.value
         raw_value = value
         value = format_setting_value(item, value)
+        is_locked = setting.setting_is_locked(item["attr"])
 
         row = SETTINGS_ROW + i * BOX_HEIGHT
         is_selected = (
@@ -3555,14 +3640,23 @@ def settings2():
         if is_editing:
             draw_editing_setting_name(item, row, flash=is_edit_flash)
         elif is_selected:
-            print(f"{xf}→ {xa}{bold}{item['name']}{reset}", end="")
+            name_color = x7 if is_locked else xa
+            lock_icon = "🔒 " if is_locked else ""
+            print(
+                f"{xf}→ {name_color}{bold}{lock_icon}{item['name']}{reset}",
+                end="",
+            )
         else:
             print(item["name"], end="")
 
         if is_editing and item["type"] == "keybind":
             value = "[press a key...]"
         value = str(value)
-        if item.get("disabled"):
+        if is_locked:
+            value = f"🔒 {value}"
+            move(row + 1, SETTINGS_COL + BOX_WIDTH - len(value))
+            print(f"{x7}{bold if is_selected else ''}{value}{reset}", end="")
+        elif item.get("disabled"):
             move(row + 1, SETTINGS_COL + BOX_WIDTH - len(value))
             print(f"{x7}{bold if is_selected else ''}{value}{reset}", end="")
         elif item.get("display") == "volume":
@@ -3625,6 +3719,7 @@ def settings2():
             continue
 
         current = page[d.settings_cursor - 1]
+        current_is_locked = setting.setting_is_locked(current["attr"])
         # Description
         print(reset, end="")
         # blank description window
@@ -3638,11 +3733,14 @@ def settings2():
             else:
                 print(f"{xlorange}🔎 {underline}{bold}Currently selected: {current["name"]}{reset}")
                 move(33, 23)
-                message = settings_editor.message or (
-                    "Press Enter or click to edit. Ctrl+R resets all keybinds."
-                    if d.settings_category == 4
-                    else "Press Enter or click to edit."
-                )
+                if current_is_locked:
+                    message = "Locked by Reduce Motion. Turn Reduce Motion off to edit."
+                else:
+                    message = settings_editor.message or (
+                        "Press Enter or click to edit. Ctrl+R resets all keybinds."
+                        if d.settings_category == 4
+                        else "Press Enter or click to edit."
+                    )
                 print(f"✏️ {xf}{message}{reset}")
             move(34, 23)
             print(f"📜 {xf}{current["description"]}", end="")
@@ -3709,7 +3807,10 @@ def settings2():
         move(33,108-12)
         print(f"{x7}│ {xlyellow}← {bold}left{reset} - change category   {x7} │")
         move(34,108-12)
-        print(f"{x7}│ {xlyellow}⏎ {bold}enter {reset}- modify setting    {x7}│")
+        if current_is_locked:
+            print(f"{x7}│ {x7}🔒 {bold}locked{reset} - reduce motion    {x7}│")
+        else:
+            print(f"{x7}│ {xlyellow}⏎ {bold}enter {reset}- modify setting    {x7}│")
         move(35,108-12)
         if d.settings_category == 4:
             print(f"{x7}│ {xlyellow}↻ {bold}ctrl+r{reset} - reset all{x7}        │")
@@ -3731,7 +3832,12 @@ def settings2():
 
     while True:
             k = key(
-                timeout=0.04 if visually_editing or category_focused else None,
+                timeout=(
+                    0.04
+                    if animations_enabled()
+                    and (visually_editing or category_focused)
+                    else None
+                ),
                 mouse=True,
             )
 
@@ -3845,11 +3951,13 @@ def settings2():
                             mouse_event == "down"
                             and clicked["type"] == "bool"
                             and not clicked.get("disabled")
+                            and not owner.setting_is_locked(clicked["attr"])
                             and over_value_row
                             and boolean_control_contains(
                                 k["x"], SETTINGS_COL, BOX_WIDTH
                             )
                         ):
+                            settings_editor.message = ""
                             if settings_editor.active:
                                 if same_active_setting:
                                     settings_editor.clear()
@@ -3889,7 +3997,11 @@ def settings2():
                         d.settings_selection = "setting"
                         d.settings_cursor = clicked_index + 1
                         result = settings_editor.begin(clicked, owner)
-                        sound("error2" if result == "disabled" else "map_right")
+                        sound(
+                            "error2"
+                            if result in ("disabled", "locked")
+                            else "map_right"
+                        )
                         game.goto = settings2
                         return
 
@@ -3973,6 +4085,7 @@ def settings2():
                     elif result == "cancelled":
                         sound("map_left")
                     elif result == "error":
+                        d.settings_edit_flash = True
                         sound("error2")
                     elif result == "changed":
                         sound("map_switch2")
@@ -3993,6 +4106,7 @@ def settings2():
                     game.goto = settings2
                     return
                 if k.lower() == "s" or k.lower() == "down":
+                    settings_editor.message = ""
                     if d.settings_selection == "category":
                         d.settings_category += 1
                         if d.settings_category > 6:
@@ -4012,6 +4126,7 @@ def settings2():
                     game.goto = settings2
                     return
                 if k.lower() == "w" or k.lower() == "up":
+                    settings_editor.message = ""
                     if d.settings_selection == "category":
                         d.settings_category -= 1
                         if d.settings_category < 1:
@@ -4033,6 +4148,7 @@ def settings2():
                 if d.settings_selection == "category" and k.lower() in (
                     "enter", bind.confirm.lower(), "right", "d"
                 ):
+                    settings_editor.message = ""
                     d.settings_selection = "setting"
                     d.settings_cursor = 1
                     sound("map_right")
@@ -4050,12 +4166,17 @@ def settings2():
                             sound("REFRESH_AUDIO")
                         play_boolean_toggle_sound(settings_editor.value)
                     else:
-                        sound("error2" if result == "disabled" else "map_right")
+                        sound(
+                            "error2"
+                            if result in ("disabled", "locked")
+                            else "map_right"
+                        )
                     game.goto = settings2
                     return
                 if d.settings_selection == "setting" and k.lower() in (
                     "esc", "left", "a", bind.back.lower(), bind.deny.lower()
                 ): # go left
+                    settings_editor.message = ""
                     d.settings_selection = "category"
                     d.settings_cursor = 1
                     sound("map_left")
@@ -4551,7 +4672,7 @@ def first_time_setup():
         f.write("okay")
     sound("payment_success")
     # wipe screen with animation (using wipe.py)
-    subprocess.run(["py", "wipe.py", "normal", "20"])
+    screen_wipe("normal", 20)
     game.goto = startup
     return
 
@@ -4879,6 +5000,7 @@ def inventory_waitkey():
         itemcolour = xe
         itemcolour_rgb = (240, 232, 158)
     counter = 0
+    animate_inventory_effects = animations_enabled()
     while True:
         item = load_item(d.currsel, game.sel)
         ityped = inv_type_icon(item)
@@ -4899,11 +5021,14 @@ def inventory_waitkey():
         elif item.rarity == "0e":
             itemcolour = xe
             itemcolour_rgb = (240, 232, 158)
-        d.offset += 0.0035
+        if animate_inventory_effects:
+            d.offset += 0.0035
         counter += 1
         #print(f"\033[1;1Hcounter: {counter} / offset: {round(d.offset,2)} / currsel: {d.currsel} / current: {d.current} / begin: {d.begin} / end: {d.end} / page: {d.page}                    ")
         print(f"\033[{d.currselrow};20H{bold}{itemcolour}{d.currsel} {unbold}› {ityped} {shine(text=item.name,bold=True,offset=d.offset,color=itemcolour_rgb)}",end="",flush=True)
-        k = key(timeout=0)  # wait a very very short time for key input to allow shine effect to update at the same time
+        k = key(
+            timeout=0 if animate_inventory_effects else None
+        )
         if k == "w" or k == "up":
             itemsel_up()
         elif k == "s" or k == "down":
@@ -5183,7 +5308,8 @@ def inventory_waitkey():
                     print(f"\033[28;63H{reset}{xlorange}• {bold}{round(item1_value)} {reset}{stat_caption} for both items{reset}")
                 # finally, in row 31, print instructions for the user
                 print(f"\033[31;63H{reset}{xf}📜 Navigate any way to exit comparison.{reset}")
-        time.sleep(0.01)
+        if animate_inventory_effects:
+            time.sleep(0.01)
 
 def unselect_current():
     item = load_item(d.currsel, game.sel)

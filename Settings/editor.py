@@ -132,6 +132,9 @@ class SettingEditor:
         if item.get("disabled"):
             self.message = "This option is not implemented yet."
             return "disabled"
+        if getattr(owner, "setting_is_locked", lambda attr: False)(item["attr"]):
+            self.message = "Turn Reduce Motion off to edit this setting."
+            return "locked"
 
         self.active = True
         self.item = item
@@ -193,6 +196,13 @@ class SettingEditor:
         if setting_type == "keybind":
             if key_name == "esc":
                 return self.cancel()
+            allowed_keys = self.item.get("allowed_keys")
+            if allowed_keys and key_name not in allowed_keys:
+                choices = " or ".join(key.upper() for key in allowed_keys)
+                self.message = (
+                    f"{self.item['name']} can only be assigned to {choices}."
+                )
+                return "error"
             if key_name in RESERVED_KEYBINDS or key_name.startswith("ctrl/"):
                 self.message = f"{pressed!r} is reserved; press another key."
                 return "error"

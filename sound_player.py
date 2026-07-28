@@ -375,9 +375,32 @@ def preload_sounds():
 
 _volume_cache = {}
 _volume_file_mtime = 0
+PERCEPTUAL_VOLUME_EXPONENT = 5.0 / 3.0
+
+
+def perceptual_volume_gain(value, maximum=10):
+    """Convert a user-facing volume value to an approximate loudness gain.
+
+    The UI represents perceived loudness, while pygame expects linear
+    amplitude. A 5/3 power taper puts 50% near -10 dB, with exact endpoints
+    at silence and unity gain.
+    """
+    maximum = max(1, maximum)
+    normalized = max(0.0, min(1.0, float(value) / maximum))
+    if normalized == 0:
+        return 0.0
+    return normalized ** PERCEPTUAL_VOLUME_EXPONENT
+
+
+def volume_percent_from_gain(gain):
+    """Convert mixer gain back to its user-facing percentage for logging."""
+    gain = max(0.0, min(1.0, float(gain)))
+    if gain == 0:
+        return 0
+    return round((gain ** (1.0 / PERCEPTUAL_VOLUME_EXPONENT)) * 100)
 
 def get_volume(key="sound"):
-    """Reads volume from Settings/settings.txt (0-10) and converts to 0.0-1.0 using cache"""
+    """Read a 0-10 setting and return perceptually tapered mixer gain."""
     global _volume_cache, _volume_file_mtime
     default_volume = 1.0 # Default to 100% if file is missing or invalid
     try:
@@ -398,7 +421,7 @@ def get_volume(key="sound"):
         for k in ["sound", "sfx", "music"]:
             if k in settings:
                 val = int(settings[k])
-                settings_dict[k] = float(max(0, min(10, val))) / 10.0
+                settings_dict[k] = perceptual_volume_gain(val)
             else:
                 settings_dict[k] = default_volume
 
@@ -620,7 +643,12 @@ def play_sound_thread(sound_name, pitch=1.0, volume_key=None, pan=0.0):
         topdir = relpath.split(os.sep)[0] if relpath and relpath != os.curdir else ''
         if (topdir.lower() == 'music' or vol_key == 'music') and abs(pitch - 1.0) < 1e-9:
             volume = get_volume(key=vol_key) if vol_key == 'music' else get_volume(key="sound")
-            print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Streaming music '{sound_name}' at volume {volume*100:.0f}%")
+            display_volume = volume_percent_from_gain(volume)
+            print(
+                f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] "
+                f"Streaming music '{sound_name}' at volume {display_volume}% "
+                f"(mixer gain {volume:.3f})"
+            )
             try:
                 with suppress_stderr():
                     pygame.mixer.music.load(sound_file)
@@ -640,7 +668,12 @@ def play_sound_thread(sound_name, pitch=1.0, volume_key=None, pan=0.0):
         play_obj = get_pitched_sound(sound_file, sound_obj, pitch)
 
         volume = get_volume(key=vol_key)
-        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Playing '{sound_name}' at volume {volume*100:.0f}% (pitch {pitch:.3f}x)")
+        display_volume = volume_percent_from_gain(volume)
+        print(
+            f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] "
+            f"Playing '{sound_name}' at volume {display_volume}% "
+            f"(mixer gain {volume:.3f}, pitch {pitch:.3f}x)"
+        )
 
         # Play and set volume per-channel (avoids mutating cached Sound object)
         ch = play_obj.play()
