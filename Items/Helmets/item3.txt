@@ -1,2 +1,2 @@
-helmet;;0c;;Adventurer's Insane Helmet;;14;;40;;None;;None;;0
+helmet;;0c;;Adventurer's Insane Helmet;;14;;24;;None;;None;;0;;0.037
 

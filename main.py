@@ -62,6 +62,16 @@ WEAPON_MAX_LEVEL = 25
 ARMOR_MAX_LEVEL = 20
 HEADWEAR_MAX_LEVEL = 20
 
+ARMOR_LEVEL_POWER_DEFAULTS = {
+    "02": 0.035,
+    "03": 0.04,
+    "07": 0.042,
+    "0b": 0.035,
+    "0c": 0.037,
+    "0d": 0.045,
+    "0e": 0.05,
+}
+
 
 if subberversion != 0:
     TITLE = f"Battles of Bench - beta {version}.{subversion}.{subberversion}"
@@ -248,8 +258,12 @@ def getx(
     allow_none=False, # if True, allows empty input (returns None). If False, empty input is invalid.
     highlight_prefix=None, # if set, this string is prefixed to the input for styling when the input is valid. E.g. set highlight_prefix=x2 to make valid input green.
     highlight_suffix=None, # exactly the same as highlight_prefix but AFTER the thing. Mostly used for resetting color with reset.
-    highlight_keywords=None # dictionary of keywords to highlight in the input. Format: {"keyword": (prefix, suffix), ...}. E.g. {"*": (x4, reset)} would make all asterisks red regardless of validity.
+    highlight_keywords=None, # dictionary of keywords to highlight in the input. Format: {"keyword": (prefix, suffix), ...}. E.g. {"*": (x4, reset)} would make all asterisks red regardless of validity.
+    timeout=None # used with expect="key" for non-blocking and timed single-key reads.
 ):
+    if expect == "key":
+        return key(timeout=timeout)
+
     cursor(True)
 
     ANSI_PATTERN = re.compile(r'\x1b\[[0-9;?]*[A-Za-z]') # again, no clue.
@@ -881,6 +895,47 @@ def _reset_object(obj, defaults):
     for key, value in defaults.items():
         setattr(obj, key, value)
 
+
+def _load_armor_item_fields(target, parts, category):
+    target.type_raw = parts[0] if len(parts) > 0 else None
+    target.rarity = parts[1] if len(parts) > 1 else None
+    target.name = parts[2] if len(parts) > 2 else None
+    raw_level = int(parts[3]) if len(parts) > 3 and parts[3] else 0
+    target.level = clamp_item_level(raw_level, category)
+    stored_defense = float(parts[4]) if len(parts) > 4 and parts[4] else 0.0
+    target.description = parts[5] if len(parts) > 5 else ""
+    target.ability = parts[6] if len(parts) > 6 else ""
+    target.locked = int(parts[7]) if len(parts) > 7 and parts[7] != "" else 0
+
+    if len(parts) > 8 and parts[8] != "":
+        target.defense = stored_defense
+        target.level_power = float(parts[8])
+    else:
+        # Legacy armor stored its already-scaled Defense in field five.
+        target.level_power = ARMOR_LEVEL_POWER_DEFAULTS.get(target.rarity, 0.035)
+        target.defense = get_base_equipment_stat(
+            stored_defense,
+            target.level,
+            target.level_power,
+        )
+    return target
+
+
+def _armor_item_parts(target, category):
+    target.level = clamp_item_level(getattr(target, "level", 0), category)
+    return [
+        str(getattr(target, "type_raw", "") or ""),
+        str(getattr(target, "rarity", "") or ""),
+        str(getattr(target, "name", "") or ""),
+        str(getattr(target, "level", 0)),
+        str(getattr(target, "defense", 0)),
+        str(getattr(target, "description", "") or ""),
+        str(getattr(target, "ability", "") or ""),
+        str(getattr(target, "locked", 0)),
+        str(getattr(target, "level_power", 0.0)),
+    ]
+
+
 # Loads an item by ID and category. If ID is 0, loads equipped items from the "active_*.txt" files.
 # Otherwise, loads from the corresponding item file.
 def load_item(item_id, category="Weapons"):
@@ -923,6 +978,7 @@ def load_item(item_id, category="Weapons"):
                     "name": None,
                     "level": 0,
                     "defense": 0,
+                    "level_power": 0.0,
                     "description": None,
                     "ability": None,
                     "locked": 0,
@@ -937,6 +993,7 @@ def load_item(item_id, category="Weapons"):
                     "name": None,
                     "level": 0,
                     "defense": 0,
+                    "level_power": 0.0,
                     "description": None,
                     "ability": None,
                     "locked": 0,
@@ -1032,32 +1089,12 @@ def load_item(item_id, category="Weapons"):
     # ───────────── HELMETS ─────────────
     elif category == "Helmets":
         _clear_object(head)
-
-        head.type_raw = parts[0] if len(parts) > 0 else None
-        head.rarity = parts[1] if len(parts) > 1 else None
-        head.name = parts[2] if len(parts) > 2 else None
-        raw_level = int(parts[3]) if len(parts) > 3 and parts[3] else 0
-        head.level = clamp_item_level(raw_level, "Helmets")
-        head.defense = int(parts[4]) if len(parts) > 4 and parts[4] else 0
-        head.description = parts[5] if len(parts) > 5 else ""
-        head.ability = parts[6] if len(parts) > 6 else ""
-        head.locked = int(parts[7]) if len(parts) > 7 and parts[7] != "" else 0
-        return head
+        return _load_armor_item_fields(head, parts, "Helmets")
 
     # ───────────── BODYWEAR ─────────────
     elif category == "Bodywear":
         _clear_object(armor)
-
-        armor.type_raw = parts[0] if len(parts) > 0 else None
-        armor.rarity = parts[1] if len(parts) > 1 else None
-        armor.name = parts[2] if len(parts) > 2 else None
-        raw_level = int(parts[3]) if len(parts) > 3 and parts[3] else 0
-        armor.level = clamp_item_level(raw_level, "Bodywear")
-        armor.defense = int(parts[4]) if len(parts) > 4 and parts[4] else 0
-        armor.description = parts[5] if len(parts) > 5 else ""
-        armor.ability = parts[6] if len(parts) > 6 else ""
-        armor.locked = int(parts[7]) if len(parts) > 7 and parts[7] != "" else 0
-        return armor
+        return _load_armor_item_fields(armor, parts, "Bodywear")
 
     # ───────────── FRAGMENTS ─────────────
     elif category == "Fragments":
@@ -1122,31 +1159,11 @@ def save_item(item_id, category="Weapons"):
 
     # ───────────── HELMETS ─────────────
     elif category == "Helmets":
-        head.level = clamp_item_level(getattr(head, "level", 0), "Helmets")
-        parts = [
-            str(getattr(head, "type_raw", "") or ""),
-            str(getattr(head, "rarity", "") or ""),
-            str(getattr(head, "name", "") or ""),
-            str(getattr(head, "level", 0)),
-            str(getattr(head, "defense", 0)),
-            str(getattr(head, "description", "") or ""),
-            str(getattr(head, "ability", "") or ""),
-            str(getattr(head, "locked", 0))
-        ]
+        parts = _armor_item_parts(head, "Helmets")
 
     # ───────────── BODYWEAR ─────────────
     elif category == "Bodywear":
-        armor.level = clamp_item_level(getattr(armor, "level", 0), "Bodywear")
-        parts = [
-            str(getattr(armor, "type_raw", "") or ""),
-            str(getattr(armor, "rarity", "") or ""),
-            str(getattr(armor, "name", "") or ""),
-            str(getattr(armor, "level", 0)),
-            str(getattr(armor, "defense", 0)),
-            str(getattr(armor, "description", "") or ""),
-            str(getattr(armor, "ability", "") or ""),
-            str(getattr(armor, "locked", 0))
-        ]
+        parts = _armor_item_parts(armor, "Bodywear")
 
     # ───────────── FRAGMENTS ─────────────
     elif category == "Fragments":
@@ -1311,14 +1328,31 @@ def draw_box_border(
 
     draw_text(text_x, y1, style + padded_text)
     
-def get_actual_atk(item_obj=None):
-
-    target = item_obj if item_obj is not None else item
-    base = float(getattr(target, "atk", 0))
-    level = int(getattr(target, "level", 0))
+def get_scaled_equipment_stat(target, base_stat, level=None):
+    base = float(getattr(target, base_stat, 0))
+    if level is None:
+        level = int(getattr(target, "level", 0))
+    else:
+        level = int(level)
     growth = float(getattr(target, "level_power", 0))
 
     return round(base * ((1 + growth) ** level))
+
+
+def get_base_equipment_stat(scaled_value, level, level_power):
+    growth = (1 + float(level_power)) ** max(0, int(level))
+    if not growth:
+        return float(scaled_value)
+    return round(float(scaled_value) / growth, 6)
+
+
+def get_actual_atk(item_obj=None, level=None):
+    target = item_obj if item_obj is not None else item
+    return get_scaled_equipment_stat(target, "atk", level)
+
+
+def get_actual_defense(item_obj, level=None):
+    return get_scaled_equipment_stat(item_obj, "defense", level)
 
 def draw_box_text(text: str, y1: int, x1: int, y2: int, x2: int):
 
@@ -2903,6 +2937,45 @@ def effective_def(totaldef):
     return min(eff, 75)
 
 
+def refresh_player_core_stats(reload_equipment=True):
+    if reload_equipment:
+        load_item(0)
+
+    level = int(player.level)
+    base_hp = round(50 + (level - 1) * 20 + ((level - 1) * (level + 2)) / 4)
+    base_atk = level * 10
+    base_def = round(level * 0.3, 1)
+
+    item.actual_atk = get_actual_atk()
+    total_dmg = base_atk + item.actual_atk
+
+    raw_def = base_def
+    if getattr(item, "substat", None) == "Defence":
+        raw_def += item.substat_value
+    if getattr(armor, "name", None):
+        armor.actual_defense = get_actual_defense(armor)
+        raw_def += armor.actual_defense
+    if getattr(head, "name", None):
+        head.actual_defense = get_actual_defense(head)
+        raw_def += head.actual_defense
+
+    total_hp = base_hp
+    if getattr(item, "substat", None) == "Health":
+        total_hp += item.substat_value
+
+    player.total_dmg = total_dmg
+    player.total_def = effective_def(raw_def)
+    player.total_hp = total_hp
+    return {
+        "base_hp": base_hp,
+        "base_atk": base_atk,
+        "base_def": base_def,
+        "total_dmg": player.total_dmg,
+        "total_def": player.total_def,
+        "total_hp": player.total_hp,
+    }
+
+
 # (i'm sorry)
 def character():
     player.load()
@@ -2956,10 +3029,10 @@ def character():
     pad = (boxwidth - length) // 2 + 1
     spaces = " " * max(pad, 0)
     centered = spaces + playernamd
-    x=player.level
-    basehp=50 + (x-1)*20 + ((x-1)*(x+2))/4
-    baseatk=player.level*10
-    basedef=round(player.level*0.3,1)
+    core_stats = refresh_player_core_stats(reload_equipment=False)
+    basehp = core_stats["base_hp"]
+    baseatk = core_stats["base_atk"]
+    basedef = core_stats["base_def"]
 
     atksymbol1=f"    {x6}██████{xlyellow}"
     atksymbol2=f"  {x6}██{xlyellow}██{xe}██{xlyellow}██{x6}██{xlyellow}"
@@ -3010,34 +3083,14 @@ def character():
     abilityatk=0
     abilitydef=0
     abilityhp=0
-    item.actual_atk=get_actual_atk()
-    totaldmg=baseatk + abilityatk + item.actual_atk
+    totaldmg = core_stats["total_dmg"]
     totalcritdmg=round(totaldmg*(1+item.atkcrit/100))
     item.atkcrit = round(item.atkcrit)
-    basehp = round(basehp)
-    basedef = round(basedef,1)
     critrate = round(player.crit_rate)
     expected = round(totaldmg * (1 + (critrate / 100) * (item.atkcrit / 100)))
     number = 1
-    # --- Defence ---
-    raw_def = basedef
-
-    if getattr(item, "substat", None) == "Defence":
-        raw_def += item.substat_value
-
-    if getattr(armor, "name", None):
-        raw_def += armor.defense
-
-    if getattr(head, "name", None):
-        raw_def += head.defense
-
-    totaldef = effective_def(raw_def)
-
-    # --- Health ---
-    totalhp = basehp
-
-    if getattr(item, "substat", None) == "Health":
-        totalhp += item.substat_value
+    totaldef = core_stats["total_def"]
+    totalhp = core_stats["total_hp"]
     # ===== INPUTS =====
     EXP = player.xp
     EXP_NEEDED = player.xpneeded
@@ -4825,7 +4878,7 @@ def inv_compare_value(item_obj, category):
         final_atk = get_actual_atk(item_obj)
         crit_bonus = float(getattr(item_obj, "atkcrit", 0)) / 100
         return float(final_atk) * (1 + crit_bonus)
-    return float(getattr(item_obj, "defense", 0))
+    return float(get_actual_defense(item_obj))
 
 
 def item_level_display(item_obj, category):
@@ -4834,6 +4887,387 @@ def item_level_display(item_obj, category):
     if max_level is None:
         return str(level)
     return f"{level}/{max_level}"
+
+
+ITEM_RARITY_VALUES = {
+    "08": (100, 50, 1),
+    "02": (150, 200, 3),
+    "03": (250, 350, 5),
+    "0d": (350, 450, 12),
+    "0e": (750, 500, 24),
+}
+
+ITEM_UPGRADE_BASE_COSTS = {
+    "08": 25,
+    "02": 40,
+    "03": 60,
+    "0d": 85,
+    "0e": 120,
+}
+
+
+def round_upgrade_price(price):
+    price = max(0, round(price))
+    if price > 5000:
+        return round(price, -2)
+    if price > 100:
+        return round(price, -1)
+    return price
+
+
+def item_upgrade_cost_for_level(item_obj, target_level):
+    """Return the gold needed for one level, ending at target_level."""
+    base_cost = ITEM_UPGRADE_BASE_COSTS.get(
+        getattr(item_obj, "rarity", None), 25
+    )
+    level = max(1, int(target_level))
+    return max(1, round_upgrade_price(base_cost * (1.14 ** (level - 1))))
+
+
+def item_upgrade_cost(item_obj, category, levels):
+    current_level = clamp_item_level(getattr(item_obj, "level", 0), category)
+    max_level = get_item_max_level(category)
+    if max_level is None:
+        return 0
+
+    target_level = min(max_level, current_level + max(0, int(levels)))
+    return round_upgrade_price(
+        sum(
+            item_upgrade_cost_for_level(item_obj, level)
+            for level in range(current_level + 1, target_level + 1)
+        )
+    )
+
+
+def max_item_level_for_player(category, player_level):
+    max_level = get_item_max_level(category)
+    if max_level is None:
+        return 0
+
+    usable_level = 1
+    for level in range(2, max_level + 1):
+        if required_player_level_for_item(level, category) > int(player_level):
+            break
+        usable_level = level
+    return usable_level
+
+
+def max_affordable_upgrade_levels(item_obj, category, max_levels, gold):
+    affordable_levels = 0
+    for levels in range(1, max(0, int(max_levels)) + 1):
+        if item_upgrade_cost(item_obj, category, levels) > gold:
+            break
+        affordable_levels = levels
+    return affordable_levels
+
+
+def item_stat_preview(item_obj, category, level):
+    if category == "Weapons":
+        return get_actual_atk(item_obj, level=level)
+    return get_actual_defense(item_obj, level=level)
+
+
+def item_salvage_rewards(item_obj, category):
+    gold_multiplier, gold_bonus, dust_bonus = ITEM_RARITY_VALUES.get(
+        getattr(item_obj, "rarity", None), (1, 100, 10)
+    )
+    level = clamp_item_level(getattr(item_obj, "level", 0), category)
+    gold = round((gold_multiplier * level ** 2) / 98 + gold_bonus)
+
+    dust_multiplier = gold_multiplier
+    if category == "Weapons":
+        level_power = max(0.0, float(getattr(item_obj, "level_power", 0)))
+        dust = round((dust_multiplier * level * level_power) / 150 + dust_bonus)
+    else:
+        dust = round((dust_multiplier * level) / 150 + dust_bonus)
+    if dust >= 1000:
+        dust = round(dust, -1)
+    return gold, dust
+
+
+def confirmation_key(k):
+    return (
+        isinstance(k, str)
+        and k.lower() in ("enter", bind.confirm.lower())
+    )
+
+
+def confirmation_back_key(k):
+    return (
+        isinstance(k, str)
+        and k.lower() in ("esc", bind.back.lower(), bind.deny.lower())
+    )
+
+
+def draw_confirmation_progress(filled):
+    filled = max(0, min(43, int(filled)))
+    d.hold_item = filled
+    xpbar = f"{xc}{'█' * filled}{rgb(48, 18, 18)}{'█' * (43 - filled)}"
+    print(f"\033[20;63H{x0}██{xpbar}{x0}██")
+    print(f"\033[21;63H{x0}██{xpbar}{x0}██", end="", flush=True)
+
+
+def hold_for_confirmation(duration=1.2):
+    """Use repeated key events to distinguish a hold from a normal key press."""
+    started = None
+    last_confirm = None
+    repeating = False
+    last_filled = -1
+
+    while True:
+        k = getx(0, 0, expect="key", timeout=0.05)
+        now = time.monotonic()
+
+        if confirmation_back_key(k):
+            draw_confirmation_progress(0)
+            return False
+
+        if confirmation_key(k):
+            allowed_gap = 0.15 if repeating else 0.7
+            if last_confirm is None or now - last_confirm > allowed_gap:
+                started = now
+                repeating = False
+            elif last_confirm is not None:
+                repeating = True
+            last_confirm = now
+            elapsed = now - started
+            filled = round(43 * min(1.0, elapsed / duration))
+            if filled != last_filled:
+                draw_confirmation_progress(filled)
+                last_filled = filled
+            if elapsed >= duration:
+                draw_confirmation_progress(43)
+                return True
+            continue
+
+        if k == "TIMEOUT":
+            allowed_gap = 0.15 if repeating else 0.7
+            if last_confirm is None or now - last_confirm <= allowed_gap:
+                continue
+
+        started = None
+        last_confirm = None
+        repeating = False
+        if last_filled != 0:
+            draw_confirmation_progress(0)
+            last_filled = 0
+
+
+def draw_upgrade_menu(item_obj, category, levels, message="", draw_title=False):
+    current_level = clamp_item_level(getattr(item_obj, "level", 0), category)
+    max_level = get_item_max_level(category)
+    target_level = min(max_level, current_level + levels)
+    total_cost = item_upgrade_cost(item_obj, category, levels)
+    current_stat = item_stat_preview(item_obj, category, current_level)
+    target_stat = item_stat_preview(item_obj, category, target_level)
+    stat_name = "ATK" if category == "Weapons" else "DEF"
+
+    blank(18, 63, 29, 110)
+    blank(31, 63, 31, 110)
+    if draw_title:
+        blank(16, 63, 16, 110)
+        print(f"\033[16;63H{bold}↑ {xlyellow}Upgrade {item_obj.name}{reset}")
+
+    filled = round((target_level * 43) / max_level)
+    xpbar = f"{xb}{'█' * filled}{rgb(17,45,69)}{'█' * (43 - filled)}"
+    print(f"\033[19;63H{x0}███████████████████████████████████████████████")
+    print(f"\033[20;63H██{xpbar}{x0}██")
+    print(f"\033[21;63H██{xpbar}{x0}██")
+    print(f"\033[22;63H{x0}███████████████████████████████████████████████{reset}")
+
+    print(f"\033[24;63H{xf}Target level: {x7}{current_level} {xf}→ {xlyellow}{bold}{target_level}/{max_level}{reset}")
+    print(f"\033[25;63H{xf}Levels: {xlyellow}{bold}+{levels}{reset}{x7}  (+ increase / - decrease){reset}")
+    print(f"\033[27;63H{xf}{stat_name}: {x7}{current_stat} {xf}→ {xa}{bold}{target_stat}{reset}")
+    cost_colour = xlyellow if player.money >= total_cost else xlred
+    print(f"\033[28;63H{xf}Cost: {cost_colour}{bold}{total_cost} gold{reset}{x7}  (you have {player.money}){reset}")
+    if message:
+        print(f"\033[31;63H{message}{reset}")
+    else:
+        print(f"\033[31;63H{xlorange}Confirm → {xlyellow}{bold}ENTER/{bind.confirm.upper()} {reset}{xlorange}| Back → {xlyellow}{bold}{bind.back.upper()}/ESC{reset}")
+
+
+def upgrade_selected_item():
+    item_obj = load_item(d.currsel, game.sel)
+    max_level = get_item_max_level(game.sel)
+    if not item_obj or max_level is None:
+        return False
+
+    current_level = clamp_item_level(getattr(item_obj, "level", 0), game.sel)
+    usable_level = min(
+        max_level,
+        max_item_level_for_player(game.sel, player.level),
+    )
+    available_levels = usable_level - current_level
+    if available_levels <= 0:
+        blank(31, 63, 31, 110)
+        if current_level >= max_level:
+            message = "This item is already at its maximum level."
+        else:
+            next_level = min(max_level, current_level + 1)
+            required_level = required_player_level_for_item(next_level, game.sel)
+            message = f"Reach player level {required_level} to upgrade this item again."
+        print(f"\033[31;63H{xlred}🚫 {message}{reset}")
+        sound("error2")
+        return False
+
+    levels = 1
+    if getattr(setting, "item_level_up_mode", "One at a Time") == "All":
+        affordable_levels = max_affordable_upgrade_levels(
+            item_obj,
+            game.sel,
+            available_levels,
+            player.money,
+        )
+        levels = max(1, affordable_levels)
+    message = ""
+    draw_title = True
+
+    while True:
+        item_obj = load_item(d.currsel, game.sel)
+        draw_upgrade_menu(
+            item_obj,
+            game.sel,
+            levels,
+            message,
+            draw_title=draw_title,
+        )
+        draw_title = False
+        k = getx(0, 0, expect="key")
+        lowered = k.lower() if isinstance(k, str) else ""
+
+        if lowered == "+":
+            if levels < available_levels:
+                levels += 1
+                message = ""
+                sound("map_switch2")
+            else:
+                sound("map_switch2_end")
+        elif lowered == "-":
+            if levels > 1:
+                levels -= 1
+                message = ""
+                sound("map_switch1")
+            else:
+                sound("map_switch1_end")
+        elif confirmation_back_key(k):
+            sound("map_left")
+            game.preserve_offset = True
+            displaynewsel()
+            return False
+        elif confirmation_key(k):
+            total_cost = item_upgrade_cost(item_obj, game.sel, levels)
+            if player.money < total_cost:
+                message = f"{xlred}🚫 You need {total_cost - player.money} more gold.{reset}"
+                sound("error2")
+                continue
+
+            target_level = min(max_level, current_level + levels)
+            if target_level <= current_level:
+                sound("error2")
+                continue
+
+            player.money -= total_cost
+            item_obj.level = target_level
+            save_item(d.currsel, game.sel)
+            player.save()
+            refresh_player_core_stats()
+            sound("positive7")
+            game.goto = reload_items
+            d.preserved_item_id = d.currsel
+            return True
+
+
+def remove_inventory_item(item_id, category, length):
+    """Remove a numbered item and keep inventory/equipment IDs aligned."""
+    equipped_path = inv_active_path(category)
+    equipped = read(equipped_path, default="none") if equipped_path else "none"
+    try:
+        equipped_id = int(equipped)
+    except (TypeError, ValueError):
+        equipped_id = None
+
+    target = os.path.join("Items", category, f"item{item_id}.txt")
+    if not os.path.exists(target):
+        return False
+    os.remove(target)
+
+    for i in range(item_id + 1, length + 1):
+        src = os.path.join("Items", category, f"item{i}.txt")
+        dst = os.path.join("Items", category, f"item{i - 1}.txt")
+        if os.path.exists(src):
+            shutil.move(src, dst)
+
+    if equipped_path:
+        if equipped_id == item_id:
+            update(equipped_path, "none")
+        elif equipped_id is not None and equipped_id > item_id:
+            update(equipped_path, equipped_id - 1)
+
+    load_item(0)
+    return True
+
+
+def draw_delete_menu(item_obj, category):
+    blank(16, 63, 16, 110)
+    blank(18, 63, 29, 110)
+    blank(31, 63, 31, 110)
+    print(f"\033[16;63H{bold}🗑️ {xlred}Delete {item_obj.name}?{reset}")
+    print(f"\033[19;63H{x0}███████████████████████████████████████████████")
+    draw_confirmation_progress(0)
+    print(f"\033[22;63H{x0}███████████████████████████████████████████████{reset}")
+
+    item_label = inv_item_label(category)
+    confirm_label = bind.confirm.upper()
+    print(f"\033[24;63H{reset}{xf}→ {xc}📛 Hold {bold}{xlred}Enter / {confirm_label}{reset}{xc} to delete {item_label}.{reset}")
+    print(f"\033[25;63H{reset}{xf}→ {xb}💤 Press {bold}{x3}{bind.back.upper()} / ESC / {bind.deny.upper()}{reset}{xb} to cancel deletion.{reset}")
+
+    gold, dust = item_salvage_rewards(item_obj, category)
+    print(f"\033[27;63H{reset}{xf}{rgb(255, 206, 124)}📦 Deleting this {item_label} will give you:{reset}")
+    print(f"\033[28;66H{reset}{x7}├─ 🪙 {xlyellow}{bold}{gold} {reset}{xlyellow}gold")
+    print(f"\033[29;66H{reset}{x7}╰─ ✨ {xlyellow}{bold}{dust} {reset}{xlyellow}magic dust")
+    print(f"\033[31;63H{xlorange}⚠️ You will lose this {item_label} permanently!{reset}")
+
+
+def delete_selected_item():
+    item_obj = load_item(d.currsel, game.sel)
+    if not item_obj:
+        return False
+    if int(getattr(item_obj, "locked", 0)) == 1:
+        blank(31, 63, 31, 110)
+        print(f"\033[31;63H{xlred}🔒 Unlock this item before deleting it.{reset}")
+        sound("error2")
+        return False
+
+    draw_delete_menu(item_obj, game.sel)
+    if not hold_for_confirmation():
+        sound("map_left")
+        game.preserve_offset = True
+        displaynewsel()
+        return False
+
+    gold, dust = item_salvage_rewards(item_obj, game.sel)
+    if not remove_inventory_item(d.currsel, game.sel, d.length):
+        sound("error2")
+        game.preserve_offset = True
+        displaynewsel()
+        return False
+
+    player.money += gold
+    player.dust += dust
+    player.save()
+    d.length -= 1
+    game.comparing.clear()
+    game.is_comparing = False
+    d.inventory_equip_blocked_until = time.monotonic() + 1.0
+    sound("pop_1")
+
+    if d.length <= 0:
+        game.goto = noitems
+        return True
+
+    d.preserved_item_id = max(1, min(d.currsel, d.length))
+    game.goto = reload_items
+    return True
 
 
 def maininv_md():
@@ -4927,7 +5361,7 @@ def inventory_prep():
     #print(f"\n                         {italic}{xlorange}Equip an item with {xlyellow}Enter{xlorange}, delete it with {xlyellow}Backspace{xlorange} or level it up with {xlyellow}Space{xlorange}.")
 
     print(f"{reset}\033[16;19H🔱 {bold}{xlorange}{category_title} {xlyellow}{unbold}→ {xlorange}{bold}Page {bold}{d.page + 1} {unbold}{x7}(items: {xf}{bold}{d.length}{x7}{unbold}){reset}")
-    print(f"\033[31;19H{xlorange}Switch pages → {xlyellow}{bold}A/D {reset}{xlorange}| Select an item → {xlyellow}{bold}W/S{reset}")
+    print(f"\033[31;19H{xlorange}Move {xlyellow}{bold}W/S A/D {reset}{xlorange}| Upgrade {xlyellow}{bold}U {reset}{xlorange}| Delete {xlyellow}{bold}⌫{reset}")
 
     d.currsel = 1
     game.preserve_offset = False
@@ -5026,7 +5460,10 @@ def inventory_waitkey():
         counter += 1
         #print(f"\033[1;1Hcounter: {counter} / offset: {round(d.offset,2)} / currsel: {d.currsel} / current: {d.current} / begin: {d.begin} / end: {d.end} / page: {d.page}                    ")
         print(f"\033[{d.currselrow};20H{bold}{itemcolour}{d.currsel} {unbold}› {ityped} {shine(text=item.name,bold=True,offset=d.offset,color=itemcolour_rgb)}",end="",flush=True)
-        k = key(
+        k = getx(
+            0,
+            0,
+            expect="key",
             timeout=0 if animate_inventory_effects else None
         )
         if k == "w" or k == "up":
@@ -5062,8 +5499,10 @@ def inventory_waitkey():
             sound("positive7")
             if os.path.exists(item_path):
                 subprocess.run(["notepad.exe", item_path])
-        # Equip with the configured confirm key (Enter remains a terminal-safe fallback).
-        elif k.lower() in ("enter", bind.confirm.lower()):
+        # Equipping is intentionally separate from confirmation actions.
+        elif k.lower() == "enter":
+            if time.monotonic() < getattr(d, "inventory_equip_blocked_until", 0):
+                continue
             item = load_item(d.currsel, game.sel)
             equipped_path = inv_active_path(game.sel)
             if not equipped_path:
@@ -5101,6 +5540,9 @@ def inventory_waitkey():
             save_item(item_id=d.currsel, category=game.sel)
             game.preserve_offset = True
             displaynewsel()
+        elif k.lower() == "u":
+            if upgrade_selected_item():
+                return
         # Ctrl+D duplicates selected item (developer function). The dupe will be saved as the next item (duping item 5 will create item 6, shifting all subsequent items up by one if they exist)
         elif k == "ctrl/d":
             for i in range(d.length, d.currsel, -1):
@@ -5142,62 +5584,8 @@ def inventory_waitkey():
         
         # Backspace: production version to delete with confirmation
         elif k == "backspace":
-            blank(16,63, 16,110)
-            blank(18,63, 29,110)
-            blank(31,63, 31,110)
-            print(f"\033[16;63H{bold}🗑️ {xlred}Delete {item.name}?{reset}")
-            xpbar = ""
-            filled = 0
-            empty = 43-filled
-            for i in range(filled):
-                xpbar += f"{xc}█"
-            for i in range(empty):
-                xpbar += f"{rgb(48, 18, 18)}█"
-            print(f"[19;63H{x0}███████████████████████████████████████████████")
-            print(f"[20;63H██{xpbar}{x0}██")
-            print(f"[21;63H██{xpbar}{x0}██")
-            print(f"[22;63H{x0}███████████████████████████████████████████████")
-            print(reset, end="")
-            
-            item_label = inv_item_label(game.sel)
-            print(f"[24;63H{reset}{xf}→ {xc}📛 Hold {bold}{xlred}{bind.confirm.capitalize()}{reset}{xc} to delete {item_label}.{reset}")
-            print(f"[25;63H{reset}{xf}→ {xb}💤 Press {bold}{x3}{bind.back.upper()} {reset}{xb}or {bold}{x3}{bind.deny.upper()}{reset} {xb}to cancel deletion.{reset}")
-            
-            print(f"[27;63H{reset}{xf}{rgb(255, 206, 124)}📦 Deleting this {item_label} will give you:{reset}")
-            
-            # gold multipliers and bases dictionary based on rarity:
-            gold_bases = {
-                "08": (100, 50),
-                "02": (150, 200),
-                "03": (250, 350),
-                "0d": (350, 450),
-                "0e": (750, 500)
-            }
-            goldmult, goldbonus = gold_bases.get(item.rarity, (1.0, 100))
-            
-            # dust multipliers and bases dictionary based on rarity:
-            dust_bases = {
-                "08": (100, 1),
-                "02": (150, 3),
-                "03": (250, 5),
-                "0d": (350, 12),
-                "0e": (750, 24)
-            }
-            dustmult, dustbonus = dust_bases.get(item.rarity, (1.0, 10))
-            
-            # calculate final payback
-            goldpayback = round((goldmult * item.level**2) / 98 + goldbonus)
-            if game.sel == "Weapons":
-                dustpayback = round((dustmult * item.level) / (150 / item.level_power) + dustbonus)
-            else:
-                dustpayback = round((dustmult * item.level) / 150 + dustbonus)
-            # at higher values:
-            if dustpayback >= 1000:
-                dustpayback = round(dustpayback, -1) # round to nearest 10
-            
-            print(f"[28;66H{reset}{x7}╰─ ✨ {xlyellow}{bold}{dustpayback} {reset}{xlyellow}magic dust")
-            
-            print(f"\033[31;63H{xlorange}⚠️ You will lose this {item_label} permanently!{reset}")
+            if delete_selected_item():
+                return
         
         # Pressing space adds item to comparison
         elif k == "space":
@@ -5532,7 +5920,8 @@ def displaynewsel():
         print(f"\033[27;64H› {xf}{ability}")
         print(f"\033[31;63H📜{xlorange} {item.description}\033[0m")
     else:
-        print(f"\033[24;66H🛡️ {xb}{bold}{getattr(item, 'defense', 0)}{unbold}% DEF")
+        item.actual_defense = get_actual_defense(item)
+        print(f"\033[24;66H🛡️ {xb}{bold}{item.actual_defense}{unbold}% DEF")
         print(f"\033[24;94H📶 {xf}Lv {bold}{item_level_display(item, game.sel)}{unbold}{x7}")
         ability = item.ability if item.ability and item.ability.strip() else "None"
         description = item.description if item.description and item.description.strip() else "None"

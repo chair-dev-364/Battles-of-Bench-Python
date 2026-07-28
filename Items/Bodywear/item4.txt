@@ -1,1 +1,1 @@
-bodywear;;03;;Average Armour;;20;;24;;None;;None;;1
+bodywear;;03;;Average Armour;;20;;12;;None;;None;;1;;0.035
