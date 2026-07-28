@@ -1,0 +1,1 @@
+Ring;;Heartstone Ring;;1;;ATK %;;3;;Titan;;0

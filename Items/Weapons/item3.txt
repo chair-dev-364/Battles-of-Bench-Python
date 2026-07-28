@@ -1,1 +1,1 @@
-knife;;02;;Knife something idk;;6;;65;;38.0;;Defence;;5;;Knife yay;;0.030;;0;;0;;0
+knife;;02;;Knife something idk;;25;;65;;38.0;;Defence;;5;;Knife yay;;0.03;;0;;0;;0

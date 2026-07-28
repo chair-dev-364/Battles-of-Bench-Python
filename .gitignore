@@ -28,3 +28,4 @@ General/setup.txt
 *.bak
 Docs/
 desktop.ini
+tests/

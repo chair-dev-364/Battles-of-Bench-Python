@@ -1,0 +1,1 @@
+Ring;;Aegis Ring;;1;;ATK %;;4;;Guardian;;0

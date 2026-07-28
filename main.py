@@ -61,6 +61,53 @@ CHARACTER_MAX_LEVEL = 100
 WEAPON_MAX_LEVEL = 25
 ARMOR_MAX_LEVEL = 20
 HEADWEAR_MAX_LEVEL = 20
+FRAGMENT_MAX_LEVEL = 15
+
+FRAGMENT_SLOTS = ("Bracelet", "Necklace", "Ring")
+FRAGMENT_MAIN_STATS = {
+    "ATK": ((12, 25), 4),
+    "ATK %": ((3, 6), 0.8),
+    "HP": ((80, 160), 30),
+    "HP %": ((4, 7), 1),
+    "DEF": ((5, 10), 2),
+    "Speed": ((2, 4), 0.5),
+    "Crit Rate": ((2, 4), 0.6),
+    "Crit Damage": ((5, 10), 1.5),
+}
+FRAGMENT_SUBSTAT_RANGES = {
+    "ATK": (5, 15),
+    "ATK %": (1, 4),
+    "HP": (25, 80),
+    "HP %": (1, 5),
+    "DEF": (2, 8),
+    "Speed": (1, 3),
+    "Crit Rate": (1, 4),
+    "Crit Damage": (2, 8),
+}
+FRAGMENT_PERCENT_STATS = {
+    "ATK %",
+    "HP %",
+    "Crit Rate",
+    "Crit Damage",
+}
+FRAGMENT_SETS = {
+    "Warrior": {
+        2: {"atk_percent": 12},
+        3: {"speed": 8},
+    },
+    "Guardian": {
+        2: {"def_percent": 15},
+        3: {"damage_taken_percent": -8},
+    },
+    "Assassin": {
+        2: {"crit_rate": 10},
+        3: {"crit_damage": 25},
+    },
+    "Titan": {
+        2: {"hp_percent": 20},
+        3: {"healing_received_percent": 8},
+    },
+}
 
 ARMOR_LEVEL_POWER_DEFAULTS = {
     "02": 0.035,
@@ -152,6 +199,7 @@ def get_item_max_level(category):
         "Weapons": WEAPON_MAX_LEVEL,
         "Bodywear": ARMOR_MAX_LEVEL,
         "Helmets": HEADWEAR_MAX_LEVEL,
+        "Fragments": FRAGMENT_MAX_LEVEL,
     }.get(category)
 
 
@@ -175,6 +223,16 @@ def required_player_level_for_item(item_level, category):
         return level * 4
     if category in ("Bodywear", "Helmets"):
         return level * 5
+    if category == "Fragments":
+        if level <= 3:
+            return 0
+        if level <= 6:
+            return 20
+        if level <= 9:
+            return 40
+        if level <= 12:
+            return 60
+        return 80
     return level
 
 # SAFE EVAL -> Used for getx() later. You'll see why. It handles safer calculation.
@@ -661,6 +719,14 @@ item = ItemData()
 class FragmentData:
     pass
 fragment = FragmentData()
+fragment_bracelet = FragmentData()
+fragment_necklace = FragmentData()
+fragment_ring = FragmentData()
+FRAGMENT_EQUIPPED_OBJECTS = {
+    "Bracelet": fragment_bracelet,
+    "Necklace": fragment_necklace,
+    "Ring": fragment_ring,
+}
 class ArmorData:
     pass
 armor = ArmorData()
@@ -936,6 +1002,275 @@ def _armor_item_parts(target, category):
     ]
 
 
+def normalize_fragment_stat(stat_name):
+    aliases = {
+        "ATKP": "ATK %",
+        "HP P": "HP %",
+        "HPP": "HP %",
+        "SPD": "Speed",
+        "CRIT": "Crit Rate",
+        "CRIT RATE": "Crit Rate",
+        "CRIT DMG": "Crit Damage",
+        "CRIT DAMAGE": "Crit Damage",
+    }
+    text = str(stat_name or "").strip()
+    if not text or text.lower() == "none":
+        return None
+    return aliases.get(text.upper(), text)
+
+
+def compact_number(value):
+    value = round(float(value), 2)
+    return int(value) if value.is_integer() else value
+
+
+def format_fragment_stat(stat_name, value, signed=False):
+    stat_name = normalize_fragment_stat(stat_name) or "Unknown"
+    value = compact_number(value)
+    sign = "+" if signed and float(value) >= 0 else ""
+    if stat_name in FRAGMENT_PERCENT_STATS:
+        label = stat_name[:-2] if stat_name.endswith(" %") else stat_name
+        return f"{sign}{value}% {label}"
+    return f"{sign}{value} {stat_name}"
+
+
+def format_fragment_set_effect(effect_name, value):
+    labels = {
+        "atk_percent": ("ATK", True),
+        "def_percent": ("DEF", True),
+        "hp_percent": ("HP", True),
+        "speed": ("Speed", False),
+        "crit_rate": ("Crit Rate", True),
+        "crit_damage": ("Crit Damage", True),
+        "damage_taken_percent": ("Damage Taken", True),
+        "healing_received_percent": ("Healing Received", True),
+    }
+    label, percent = labels.get(
+        effect_name,
+        (effect_name.replace("_", " ").title(), False),
+    )
+    value = compact_number(value)
+    sign = "+" if float(value) >= 0 else ""
+    suffix = "%" if percent else ""
+    return f"{sign}{value}{suffix} {label}"
+
+
+def get_fragment_main_stat_value(fragment_obj, level=None):
+    stat_name = normalize_fragment_stat(getattr(fragment_obj, "main_stat", None))
+    if stat_name not in FRAGMENT_MAIN_STATS:
+        return 0
+    if level is None:
+        level = getattr(fragment_obj, "level", 1)
+    level = clamp_item_level(level, "Fragments")
+    per_level = FRAGMENT_MAIN_STATS[stat_name][1]
+    base_value = float(getattr(fragment_obj, "main_stat_value", 0))
+    return compact_number(base_value + per_level * max(0, level - 1))
+
+
+def get_fragment_main_stat_base(final_value, stat_name, level):
+    stat_name = normalize_fragment_stat(stat_name)
+    per_level = FRAGMENT_MAIN_STATS.get(stat_name, ((0, 0), 0))[1]
+    return compact_number(float(final_value) - per_level * max(0, int(level) - 1))
+
+
+def generate_fragment_main_stat(stat_name=None):
+    if stat_name is None:
+        stat_name = random.choice(tuple(FRAGMENT_MAIN_STATS))
+    stat_name = normalize_fragment_stat(stat_name)
+    if stat_name not in FRAGMENT_MAIN_STATS:
+        raise ValueError(f"Unknown fragment main stat: {stat_name}")
+    value_range = FRAGMENT_MAIN_STATS[stat_name][0]
+    if isinstance(value_range[0], int) and isinstance(value_range[1], int):
+        value = random.randint(*value_range)
+    else:
+        value = random.uniform(*value_range)
+    return stat_name, compact_number(value)
+
+
+def get_fragment_substats(fragment_obj):
+    substats = []
+    index = 1
+    while hasattr(fragment_obj, f"substat{index}"):
+        stat_name = normalize_fragment_stat(getattr(fragment_obj, f"substat{index}", None))
+        if stat_name:
+            substats.append((
+                stat_name,
+                compact_number(getattr(fragment_obj, f"substat{index}_value", 0)),
+            ))
+        index += 1
+    return substats
+
+
+def generate_fragment_substat(excluded_stats=()):
+    excluded = {normalize_fragment_stat(stat) for stat in excluded_stats}
+    available = [stat for stat in FRAGMENT_SUBSTAT_RANGES if stat not in excluded]
+    if not available:
+        return None
+    stat_name = random.choice(available)
+    minimum, maximum = FRAGMENT_SUBSTAT_RANGES[stat_name]
+    return stat_name, random.randint(minimum, maximum)
+
+
+def apply_fragment_substats(fragment_obj, target_level):
+    existing = get_fragment_substats(fragment_obj)
+    needed = min(3, clamp_item_level(target_level, "Fragments") // 5) - len(existing)
+    additions = []
+    while len(additions) < needed:
+        excluded = [getattr(fragment_obj, "main_stat", None)]
+        excluded.extend(stat for stat, _ in existing + additions)
+        generated = generate_fragment_substat(excluded)
+        if generated is None:
+            break
+        additions.append(generated)
+    for stat_name, value in additions:
+        index = len(existing) + 1
+        setattr(fragment_obj, f"substat{index}", stat_name)
+        setattr(fragment_obj, f"substat{index}_value", value)
+        existing.append((stat_name, value))
+    return additions
+
+
+def fragment_item_parts(fragment_obj):
+    parts = [
+        str(getattr(fragment_obj, "slot", "Bracelet")),
+        str(getattr(fragment_obj, "name", "Unnamed Fragment")),
+        str(clamp_item_level(getattr(fragment_obj, "level", 1), "Fragments")),
+        str(normalize_fragment_stat(getattr(fragment_obj, "main_stat", "ATK"))),
+        str(getattr(fragment_obj, "main_stat_value", 0)),
+        str(
+            getattr(
+                fragment_obj,
+                "set_name",
+                getattr(fragment_obj, "set", "Warrior"),
+            )
+        ),
+        str(int(getattr(fragment_obj, "locked", 0))),
+    ]
+    for stat_name, value in get_fragment_substats(fragment_obj):
+        parts.extend((str(stat_name), str(value)))
+    return parts
+
+
+def load_fragment_item_fields(target, parts):
+    _clear_object(target)
+    if parts and parts[0] in FRAGMENT_SLOTS:
+        target.slot = parts[0]
+        target.name = parts[1] if len(parts) > 1 else f"Unnamed {target.slot}"
+        target.level = clamp_item_level(parts[2] if len(parts) > 2 else 1, "Fragments")
+        target.main_stat = normalize_fragment_stat(parts[3] if len(parts) > 3 else "ATK")
+        target.main_stat_value = float(parts[4]) if len(parts) > 4 and parts[4] else 0
+        target.set_name = parts[5] if len(parts) > 5 and parts[5] in FRAGMENT_SETS else "Warrior"
+        target.set = target.set_name
+        target.locked = int(parts[6]) if len(parts) > 6 and parts[6] else 0
+        stat_parts = parts[7:]
+    else:
+        target.name = parts[0] if parts else "Legacy Fragment"
+        target.slot = next(
+            (slot for slot in FRAGMENT_SLOTS if slot.lower() in target.name.lower()),
+            "Bracelet",
+        )
+        target.level = clamp_item_level(parts[1] if len(parts) > 1 else 1, "Fragments")
+        target.main_stat = normalize_fragment_stat(parts[2] if len(parts) > 2 else "ATK")
+        final_value = float(parts[3]) if len(parts) > 3 and parts[3] else 0
+        target.main_stat_value = get_fragment_main_stat_base(
+            final_value,
+            target.main_stat,
+            target.level,
+        )
+        target.set_name = "Warrior"
+        target.set = target.set_name
+        target.locked = 0
+        stat_parts = parts[4:]
+
+    target.type_raw = target.slot.lower()
+    target.rarity = None
+    target.description = f"{target.set_name} set {target.slot.lower()} fragment."
+    target.ability = ""
+    index = 1
+    for offset in range(0, len(stat_parts) - 1, 2):
+        stat_name = normalize_fragment_stat(stat_parts[offset])
+        if not stat_name or stat_name == target.main_stat:
+            continue
+        if stat_name in {
+            normalize_fragment_stat(getattr(target, f"substat{i}", None))
+            for i in range(1, index)
+        }:
+            continue
+        try:
+            value = compact_number(stat_parts[offset + 1])
+        except (TypeError, ValueError):
+            continue
+        setattr(target, f"substat{index}", stat_name)
+        setattr(target, f"substat{index}_value", value)
+        index += 1
+        if index > 3:
+            break
+    return target
+
+
+def create_fragment(slot=None, main_stat=None, set_name=None, level=1):
+    slot = slot if slot in FRAGMENT_SLOTS else random.choice(FRAGMENT_SLOTS)
+    set_name = set_name if set_name in FRAGMENT_SETS else random.choice(tuple(FRAGMENT_SETS))
+    main_stat, main_value = generate_fragment_main_stat(main_stat)
+    created = FragmentData()
+    created.slot = slot
+    created.type_raw = slot.lower()
+    created.rarity = None
+    created.name = f"{set_name} {slot}"
+    created.level = clamp_item_level(level, "Fragments")
+    created.main_stat = main_stat
+    created.main_stat_value = main_value
+    created.set_name = set_name
+    created.set = created.set_name
+    created.locked = 0
+    created.description = f"{set_name} set {slot.lower()} fragment."
+    created.ability = ""
+    apply_fragment_substats(created, created.level)
+    return created
+
+
+def spawn_fragment(fragment_obj):
+    fragments_dir = Path("Items/Fragments")
+    fragments_dir.mkdir(parents=True, exist_ok=True)
+    item_ids = []
+    for path in fragments_dir.glob("item*.txt"):
+        match = re.fullmatch(r"item(\d+)\.txt", path.name)
+        if match:
+            item_ids.append(int(match.group(1)))
+    existing_ids = set(item_ids)
+    item_id = 1
+    while item_id in existing_ids:
+        item_id += 1
+    path = fragments_dir / f"item{item_id}.txt"
+    path.write_text(";;".join(fragment_item_parts(fragment_obj)), encoding="utf-8")
+    return item_id
+
+
+def fragment_slot_path(slot):
+    if slot not in FRAGMENT_SLOTS:
+        return None
+    return f"Items/active_fragment_{slot.lower()}"
+
+
+def migrate_legacy_fragment_slot():
+    for slot in FRAGMENT_SLOTS:
+        path = fragment_slot_path(slot)
+        if read(path, default=None) is None:
+            update(path, "none")
+    legacy_id = read("Items/active_fragment", default="none")
+    if str(legacy_id).lower() in ("", "none", "0"):
+        return
+    if any(str(read(fragment_slot_path(slot), default="none")).lower() != "none"
+           for slot in FRAGMENT_SLOTS):
+        return
+    try:
+        legacy_fragment = load_item(int(legacy_id), "Fragments")
+    except (OSError, ValueError):
+        return
+    update(fragment_slot_path(legacy_fragment.slot), legacy_id)
+    update("Items/active_fragment", "none")
+
+
 # Loads an item by ID and category. If ID is 0, loads equipped items from the "active_*.txt" files.
 # Otherwise, loads from the corresponding item file.
 def load_item(item_id, category="Weapons"):
@@ -946,6 +1281,7 @@ def load_item(item_id, category="Weapons"):
     # UNIVERSAL EQUIPPED LOADER (ID = 0)
     # ─────────────────────────────────────────────
     if str(item_id) == "0":
+        migrate_legacy_fragment_slot()
         slot_map = {
             "active_weapon.txt": (
                 "Weapons",
@@ -999,7 +1335,21 @@ def load_item(item_id, category="Weapons"):
                     "locked": 0,
                 },
             ),
-            "active_fragment.txt": ("Fragments", fragment, {"name": None, "level": 0}),
+            "active_fragment_bracelet.txt": (
+                "Fragments",
+                fragment_bracelet,
+                {"name": None, "slot": "Bracelet", "level": 0, "locked": 0},
+            ),
+            "active_fragment_necklace.txt": (
+                "Fragments",
+                fragment_necklace,
+                {"name": None, "slot": "Necklace", "level": 0, "locked": 0},
+            ),
+            "active_fragment_ring.txt": (
+                "Fragments",
+                fragment_ring,
+                {"name": None, "slot": "Ring", "level": 0, "locked": 0},
+            ),
         }
 
         for filename, (cat, obj, defaults) in slot_map.items():
@@ -1016,8 +1366,18 @@ def load_item(item_id, category="Weapons"):
             if content.lower() == "none" or content == "":
                 continue
 
-            # Load actual item file via recursion
-            load_item(content, cat)
+            try:
+                loaded = load_item(content, cat)
+            except (OSError, ValueError, IndexError):
+                if cat == "Fragments":
+                    update(
+                        os.path.splitext(os.path.join("Items", filename))[0],
+                        "none",
+                    )
+                    continue
+                raise
+            if cat == "Fragments":
+                _reset_object(obj, vars(loaded))
 
         return
 
@@ -1098,34 +1458,7 @@ def load_item(item_id, category="Weapons"):
 
     # ───────────── FRAGMENTS ─────────────
     elif category == "Fragments":
-        _clear_object(fragment)
-
-        fragment.name = parts[0] if len(parts) > 0 else None
-        fragment.level = int(parts[1]) if len(parts) > 1 and parts[1] else 0
-
-        stats = parts[2:]
-
-        for i in range(0, len(stats), 2):
-            stat_name = stats[i] if stats[i] != "" else None
-            stat_value = stats[i + 1] if i + 1 < len(stats) else None
-
-            if stat_value is not None and stat_value != "":
-                try:
-                    if "." in stat_value:
-                        val = float(stat_value)
-                        if val.is_integer():
-                            val = int(val)
-                        stat_value = val
-                    else:
-                        stat_value = int(stat_value)
-                except Exception:
-                    pass
-
-            idx = i // 2 + 1
-            setattr(fragment, f"stat{idx}", stat_name)
-            setattr(fragment, f"stat{idx}_value", stat_value)
-
-        return fragment
+        return load_fragment_item_fields(fragment, parts)
 
     else:
         raise ValueError(f"Unknown category: {category}")
@@ -1167,21 +1500,8 @@ def save_item(item_id, category="Weapons"):
 
     # ───────────── FRAGMENTS ─────────────
     elif category == "Fragments":
-        parts = [
-            fragment.name,
-            str(fragment.level)
-        ]
-
-        # Dynamically append stat pairs
-        i = 1
-        while hasattr(fragment, f"stat{i}"):
-            stat_name = getattr(fragment, f"stat{i}")
-            stat_value = getattr(fragment, f"stat{i}_value", None)
-
-            parts.append(str(stat_name))
-            parts.append(str(stat_value))
-
-            i += 1
+        fragment.level = clamp_item_level(getattr(fragment, "level", 1), "Fragments")
+        parts = fragment_item_parts(fragment)
 
     else:
         raise ValueError(f"Unknown category: {category}")
@@ -1353,6 +1673,80 @@ def get_actual_atk(item_obj=None, level=None):
 
 def get_actual_defense(item_obj, level=None):
     return get_scaled_equipment_stat(item_obj, "defense", level)
+
+
+def get_equipped_fragments():
+    return [
+        FRAGMENT_EQUIPPED_OBJECTS[slot]
+        for slot in FRAGMENT_SLOTS
+        if getattr(FRAGMENT_EQUIPPED_OBJECTS[slot], "name", None)
+    ]
+
+
+def get_fragment_bonuses():
+    bonuses = {
+        "atk_flat": 0,
+        "atk_percent": 0,
+        "hp_flat": 0,
+        "hp_percent": 0,
+        "def_flat": 0,
+        "def_percent": 0,
+        "speed": 0,
+        "crit_rate": 0,
+        "crit_damage": 0,
+        "damage_taken_percent": 0,
+        "healing_received_percent": 0,
+    }
+    stat_keys = {
+        "ATK": "atk_flat",
+        "ATK %": "atk_percent",
+        "HP": "hp_flat",
+        "HP %": "hp_percent",
+        "DEF": "def_flat",
+        "Speed": "speed",
+        "Crit Rate": "crit_rate",
+        "Crit Damage": "crit_damage",
+    }
+    equipped = get_equipped_fragments()
+    for equipped_fragment in equipped:
+        main_key = stat_keys.get(normalize_fragment_stat(equipped_fragment.main_stat))
+        if main_key:
+            bonuses[main_key] += get_fragment_main_stat_value(equipped_fragment)
+        for stat_name, value in get_fragment_substats(equipped_fragment):
+            key = stat_keys.get(stat_name)
+            if key:
+                bonuses[key] += value
+
+    set_counts = {}
+    for equipped_fragment in equipped:
+        set_name = getattr(
+            equipped_fragment,
+            "set_name",
+            getattr(equipped_fragment, "set", None),
+        )
+        if set_name in FRAGMENT_SETS:
+            set_counts[set_name] = set_counts.get(set_name, 0) + 1
+    active_sets = []
+    active_set_details = []
+    for set_name, count in set_counts.items():
+        for pieces in (2, 3):
+            if count >= pieces:
+                label = f"{set_name} {pieces}pc"
+                effects = FRAGMENT_SETS[set_name][pieces]
+                active_sets.append(label)
+                active_set_details.append((
+                    label,
+                    ", ".join(
+                        format_fragment_set_effect(key, value)
+                        for key, value in effects.items()
+                    ),
+                ))
+                for key, value in effects.items():
+                    bonuses[key] += value
+    bonuses["active_sets"] = active_sets
+    bonuses["active_set_details"] = active_set_details
+    return bonuses
+
 
 def draw_box_text(text: str, y1: int, x1: int, y2: int, x2: int):
 
@@ -2028,7 +2422,7 @@ def internal_modify():
     def read_key_choice(valid_choices):
         valid = {c.lower() for c in valid_choices}
         while True:
-            k = key()
+            k = getx(0, 0, expect="key")
             if not isinstance(k, str):
                 continue
             k = k.lower()
@@ -2072,7 +2466,6 @@ def internal_modify():
         "w": ("weapon", item),
         "h": ("head", head),
         "a": ("armor", armor),
-        "f": ("fragment", fragment),
         "g": ("general", d),
         "y": ("system", game),
         "s": ("settings", setting),
@@ -2082,7 +2475,9 @@ def internal_modify():
         "w": ("Weapon", "Items/active_weapon"),
         "h": ("Head", "Items/active_head"),
         "a": ("Armor", "Items/active_body"),
-        "f": ("Fragment", "Items/active_fragment"),
+        "1": ("Bracelet", "Items/active_fragment_bracelet"),
+        "2": ("Necklace", "Items/active_fragment_necklace"),
+        "3": ("Ring", "Items/active_fragment_ring"),
     }
 
     reset_candidates = {
@@ -2127,17 +2522,89 @@ def internal_modify():
 {xf}--------------------------------------------
 {x3}[K]{xf} ⌨️ Keybinds
 {xf}--------------------------------------------
+{x2}[R]{xf} Spawn random fragments
+{x2}[C]{xf} Spawn custom fragment
+{xf}--------------------------------------------
 {x4}[+]{xf} 💥 Clear or reset...
 {xf}--------------------------------------------
 {xc}[B]{xf} Back to main menu
 {reset}
 """)
 
-            choice = read_key_choice({"p", "n", "w", "h", "a", "f", "g", "y", "s", "e", "k", "+", "b"})
+            choice = read_key_choice({"p", "n", "w", "h", "a", "f", "g", "y", "s", "e", "k", "r", "c", "+", "b"})
 
             if choice == "b":
                 game.goto = mainmenu
                 return
+
+            if choice == "r":
+                cls()
+                print(f"{xb}{bold}=== SPAWN RANDOM FRAGMENTS ==={reset}")
+                amount = getx(
+                    4,
+                    1,
+                    prompt=f"{x3}Amount (1-999){xf}: ",
+                    expect="int",
+                    min_val=1,
+                    max_val=999,
+                )
+                first_id = None
+                for _ in range(amount):
+                    spawned_id = spawn_fragment(create_fragment())
+                    if first_id is None:
+                        first_id = spawned_id
+                print(
+                    f"\n{xa}Spawned {bold}{amount}{unbold} fragments "
+                    f"(items {first_id}-{spawned_id}).{reset}"
+                )
+                print(f"{x7}Press any key to continue.{reset}")
+                getx(0, 0, expect="key")
+                continue
+
+            if choice == "c":
+                cls()
+                print(f"""
+{xb}{bold}=== SPAWN CUSTOM FRAGMENT ==={reset}
+{xf}Slot: {xa}[1]{xf} Bracelet  {xa}[2]{xf} Necklace  {xa}[3]{xf} Ring
+{reset}
+""")
+                slot = FRAGMENT_SLOTS[int(read_key_choice({"1", "2", "3"})) - 1]
+
+                cls()
+                print(f"{xb}{bold}=== SELECT MAIN STAT ==={reset}")
+                main_stats = tuple(FRAGMENT_MAIN_STATS)
+                for index, stat_name in enumerate(main_stats, start=1):
+                    print(f"{xa}[{index}]{xf} {stat_name}")
+                main_stat = main_stats[
+                    int(read_key_choice({str(i) for i in range(1, 9)})) - 1
+                ]
+
+                cls()
+                print(f"{xb}{bold}=== SELECT SET ==={reset}")
+                set_names = tuple(FRAGMENT_SETS)
+                for index, set_name in enumerate(set_names, start=1):
+                    print(f"{xa}[{index}]{xf} {set_name}")
+                set_name = set_names[
+                    int(read_key_choice({str(i) for i in range(1, 5)})) - 1
+                ]
+                level = getx(
+                    10,
+                    1,
+                    prompt=f"{x3}Starting level (1-{FRAGMENT_MAX_LEVEL}){xf}: ",
+                    expect="int",
+                    min_val=1,
+                    max_val=FRAGMENT_MAX_LEVEL,
+                )
+                created = create_fragment(slot, main_stat, set_name, level)
+                spawned_id = spawn_fragment(created)
+                print(
+                    f"\n{xa}Spawned item {bold}{spawned_id}{unbold}: "
+                    f"{created.name}, Lv {created.level}, "
+                    f"{format_fragment_stat(created.main_stat, get_fragment_main_stat_value(created))}.{reset}"
+                )
+                print(f"{x7}Press any key to continue.{reset}")
+                getx(0, 0, expect="key")
+                continue
 
             if choice == "+":
                 while True:
@@ -2243,19 +2710,23 @@ def internal_modify():
     {xa}Weapon{xf}: {read('Items/active_weapon', default='none')}
     {xa}Head{xf}:   {read('Items/active_head', default='none')}
     {xa}Armor{xf}:  {read('Items/active_body', default='none')}
-    {xa}Fragment{xf}: {read('Items/active_fragment', default='none')}
+    {xa}Bracelet{xf}: {read('Items/active_fragment_bracelet', default='none')}
+    {xa}Necklace{xf}: {read('Items/active_fragment_necklace', default='none')}
+    {xa}Ring{xf}:     {read('Items/active_fragment_ring', default='none')}
 
 {xf}Choose slot:
     {xa}[W]{xf} Weapon
     {xa}[H]{xf} Head
     {xa}[A]{xf} Armor
-    {xa}[F]{xf} Fragment
+    {xa}[1]{xf} Bracelet
+    {xa}[2]{xf} Necklace
+    {xa}[3]{xf} Ring
 
 {xc}[B]{xf} Back
 {reset}
 """)
 
-                    slot_choice = read_key_choice({"w", "h", "a", "f", "b"})
+                    slot_choice = read_key_choice({"w", "h", "a", "1", "2", "3", "b"})
                     if slot_choice == "b":
                         break
 
@@ -2327,11 +2798,27 @@ def internal_modify():
                     input(f"{x2}Saved{xf} keybind {field} = {raw_value.lower()!r}. Press Enter to continue...")
                 continue
 
-            if choice not in targets:
-                input(f"{xlred}Invalid option.{xf} Press Enter to continue...")
-                continue
-
-            target_name, target_obj = targets[choice]
+            if choice == "f":
+                cls()
+                print(f"""
+{xb}{bold}=== SELECT EQUIPPED FRAGMENT ==={reset}
+{xa}[1]{xf} Bracelet
+{xa}[2]{xf} Necklace
+{xa}[3]{xf} Ring
+{xc}[B]{xf} Back
+{reset}
+""")
+                fragment_choice = read_key_choice({"1", "2", "3", "b"})
+                if fragment_choice == "b":
+                    continue
+                slot = FRAGMENT_SLOTS[int(fragment_choice) - 1]
+                target_name = f"{slot.lower()} fragment"
+                target_obj = FRAGMENT_EQUIPPED_OBJECTS[slot]
+            else:
+                if choice not in targets:
+                    input(f"{xlred}Invalid option.{xf} Press Enter to continue...")
+                    continue
+                target_name, target_obj = targets[choice]
 
             while True:
                 cls()
@@ -2369,12 +2856,30 @@ Type an attribute name to override.
                 elif target_obj is setting and field in getattr(setting, "_persistent_fields", {}):
                     setting.save()
                     save_note = " (saved to Settings/settings.txt)"
-                elif target_obj in (item, head, armor, fragment):
+                elif target_obj in (
+                    item,
+                    head,
+                    armor,
+                    fragment_bracelet,
+                    fragment_necklace,
+                    fragment_ring,
+                ):
                     category_map = {
                         item: ("Items/active_weapon", "Weapons"),
                         head: ("Items/active_head", "Helmets"),
                         armor: ("Items/active_body", "Bodywear"),
-                        fragment: ("Items/active_fragment", "Fragments"),
+                        fragment_bracelet: (
+                            "Items/active_fragment_bracelet",
+                            "Fragments",
+                        ),
+                        fragment_necklace: (
+                            "Items/active_fragment_necklace",
+                            "Fragments",
+                        ),
+                        fragment_ring: (
+                            "Items/active_fragment_ring",
+                            "Fragments",
+                        ),
                     }
                     active_path, category_name = category_map[target_obj]
                     active_id = read(active_path, default=0)
@@ -2384,7 +2889,11 @@ Type an attribute name to override.
                         active_id = 0
 
                     if active_id > 0:
+                        if category_name == "Fragments":
+                            _reset_object(fragment, vars(target_obj))
                         save_item(active_id, category_name)
+                        if category_name == "Fragments":
+                            load_item(0)
                         save_note = f" (saved to Items/{category_name}/item{active_id}.txt)"
                     else:
                         save_note = " (runtime only: no active item id to save)"
@@ -2440,7 +2949,11 @@ def new_turn():
     d.latest_action += f"\n  {xf}→ New turn started!"
     if not d.first_turn:
          if player.regen > 0:
-             heal_amount = round(player.total_hp * (player.regen / 100))
+             heal_amount = round(
+                 player.total_hp
+                 * (player.regen / 100)
+                 * getattr(player, "healing_received_multiplier", 1)
+             )
              player.hp = min(player.total_hp, player.hp + heal_amount)
              d.latest_action += f"\n  {xb}💧  Regenerated {heal_amount} HP{reset}"
     d.first_turn = False
@@ -2642,7 +3155,15 @@ def battle_show_data():
 
 def enemy_attack():
     sound("shield", channel="sfx", pan=0.35)
-    dmgdealt = max(0, round(enemy.attack * (100 - player.total_def) / 100))
+    dmgdealt = max(
+        0,
+        round(
+            enemy.attack
+            * (100 - player.total_def)
+            / 100
+            * getattr(player, "damage_taken_multiplier", 1)
+        ),
+    )
     player.hp -= dmgdealt
     if dmgdealt > 0:
         d.latest_action += f"{xlred}⚔  {dmgdealt}{xa} DMG RCV{reset}"
@@ -2675,7 +3196,9 @@ def battle_attack():
     # if critical (chance triggers: random int 0-100, if it's less than player's crit chance, it's a crit):
     is_crit = random.randint(0, 100) < player.crit_rate
     if is_crit:
-        dmgdealt = round(dmgdealt * (1 + (getattr(item, "atkcrit", 0) / 100)))
+        dmgdealt = round(
+            dmgdealt * (1 + (getattr(player, "crit_damage", 0) / 100))
+        )
         d.latest_action = f"{rgb(255, 215, 0)}✴  CRIT!{reset} {dmgdealt}{xa} DMG{reset}"
     else:
         d.latest_action = f"{xf}⚔  {dmgdealt}{xa} DMG{reset}"
@@ -2685,7 +3208,11 @@ def battle_attack():
     
     # then, life steal (steal is float = % of damage dealt that is returned to you as HP):
     if player.life_steal > 0:
-        steal_amount = round(dmgdealt * (player.life_steal / 100))
+        steal_amount = round(
+            dmgdealt
+            * (player.life_steal / 100)
+            * getattr(player, "healing_received_multiplier", 1)
+        )
         player.hp = min(player.total_hp, player.hp + steal_amount)
         d.latest_action += f"\n{xlred}🩸 Life steal: {steal_amount} HP stolen!{reset}"
         
@@ -2947,7 +3474,14 @@ def refresh_player_core_stats(reload_equipment=True):
     base_def = round(level * 0.3, 1)
 
     item.actual_atk = get_actual_atk()
-    total_dmg = base_atk + item.actual_atk
+    fragment_bonuses = get_fragment_bonuses()
+    player.fragment_bonuses = fragment_bonuses
+
+    damage_without_fragments = base_atk + item.actual_atk
+    total_dmg = round(
+        (damage_without_fragments + fragment_bonuses["atk_flat"])
+        * (1 + fragment_bonuses["atk_percent"] / 100)
+    )
 
     raw_def = base_def
     if getattr(item, "substat", None) == "Defence":
@@ -2959,13 +3493,47 @@ def refresh_player_core_stats(reload_equipment=True):
         head.actual_defense = get_actual_defense(head)
         raw_def += head.actual_defense
 
-    total_hp = base_hp
+    defense_without_fragments = effective_def(raw_def)
+    raw_def = (
+        raw_def + fragment_bonuses["def_flat"]
+    ) * (1 + fragment_bonuses["def_percent"] / 100)
+
+    hp_without_fragments = base_hp
     if getattr(item, "substat", None) == "Health":
-        total_hp += item.substat_value
+        hp_without_fragments += item.substat_value
+    total_hp = round(
+        (hp_without_fragments + fragment_bonuses["hp_flat"])
+        * (1 + fragment_bonuses["hp_percent"] / 100)
+    )
 
     player.total_dmg = total_dmg
     player.total_def = effective_def(raw_def)
     player.total_hp = total_hp
+    player.bonus_atk = player.total_dmg - base_atk
+    player.bonus_def = round(
+        player.total_def - effective_def(base_def),
+        1,
+    )
+    player.bonus_hp = player.total_hp - base_hp
+    player.fragment_atk_bonus = player.total_dmg - damage_without_fragments
+    player.fragment_def_bonus = round(
+        player.total_def - defense_without_fragments,
+        1,
+    )
+    player.fragment_hp_bonus = player.total_hp - hp_without_fragments
+    player.damage_taken_multiplier = max(
+        0,
+        1 + fragment_bonuses["damage_taken_percent"] / 100,
+    )
+    player.healing_received_multiplier = max(
+        0,
+        1 + fragment_bonuses["healing_received_percent"] / 100,
+    )
+    player.crit_damage = (
+        float(getattr(item, "atkcrit", 0))
+        + fragment_bonuses["crit_damage"]
+    )
+    refresh_player_secondary_stats()
     return {
         "base_hp": base_hp,
         "base_atk": base_atk,
@@ -2973,7 +3541,39 @@ def refresh_player_core_stats(reload_equipment=True):
         "total_dmg": player.total_dmg,
         "total_def": player.total_def,
         "total_hp": player.total_hp,
+        "fragment_bonuses": fragment_bonuses,
     }
+
+
+def refresh_player_secondary_stats():
+    bonuses = getattr(player, "fragment_bonuses", None)
+    if bonuses is None:
+        bonuses = get_fragment_bonuses()
+
+    weapon_crit_rate = (
+        getattr(item, "substat_value", 0)
+        if getattr(item, "substat", None) == "Crit Rate"
+        else 0
+    )
+    crit_without_fragments = (
+        15 + weapon_crit_rate + (int(player.level) // 10)
+    )
+    player.fragment_crit_rate_bonus = bonuses["crit_rate"]
+    player.crit_rate = crit_without_fragments + bonuses["crit_rate"]
+
+    weapon_speed = (
+        getattr(item, "substat_value", 0)
+        if getattr(item, "substat", None) == "Speed"
+        else 0
+    )
+    level_speed = (int(player.level) // 10) * 5
+    level_speed += sum(
+        int(player.level) >= breakpoint
+        for breakpoint in (20, 40, 60, 80, 100)
+    )
+    player.fragment_speed_bonus = bonuses["speed"]
+    player.speed = 100 + weapon_speed + level_speed + bonuses["speed"]
+    player.fragment_crit_damage_bonus = bonuses["crit_damage"]
 
 
 # (i'm sorry)
@@ -3066,28 +3666,14 @@ def character():
     lvsymbol5=f"{RGB}195;255;253m  {RGB}192;253;248m  {RGB}190;251;242m██{RGB}189;249;237m██{RGB}187;247;231m██{RGB}186;245;225m██{RGB}186;243;219m██"
     lvsymbol6=f"{RGB}195;255;253m  {RGB}192;253;248m██{RGB}190;251;242m██{RGB}189;249;237m██{RGB}187;247;231m██{RGB}186;245;225m██{RGB}186;243;219m██"
     lvsymbol7=f"{RGB}195;255;253m██{RGB}192;253;248m██{RGB}190;251;242m██{RGB}189;249;237m██{RGB}187;247;231m██{RGB}186;245;225m██{RGB}186;243;219m██"
-    # let's make crit rate
-    # base crit rate is 15%
-    base_crit_rate = 15
-    # if weapon substat is crit rate, add the same
-    weapon_crit_rate = 0
-    if getattr(item, "substat", None) == "Crit Rate":
-        weapon_crit_rate = item.substat_value
-    # any bonuses:
-    bonus_crit_rate = 0
-    # for every 10 levels of player, +1% crit rate
-    level_crit_rate = (player.level // 10) * 1
-    player.crit_rate = base_crit_rate + weapon_crit_rate + level_crit_rate + bonus_crit_rate
-    del base_crit_rate, weapon_crit_rate, level_crit_rate, bonus_crit_rate
-    
     abilityatk=0
     abilitydef=0
     abilityhp=0
     totaldmg = core_stats["total_dmg"]
-    totalcritdmg=round(totaldmg*(1+item.atkcrit/100))
+    totalcritdmg=round(totaldmg*(1+player.crit_damage/100))
     item.atkcrit = round(item.atkcrit)
     critrate = round(player.crit_rate)
-    expected = round(totaldmg * (1 + (critrate / 100) * (item.atkcrit / 100)))
+    expected = round(totaldmg * (1 + (critrate / 100) * (player.crit_damage / 100)))
     number = 1
     totaldef = core_stats["total_def"]
     totalhp = core_stats["total_hp"]
@@ -3185,42 +3771,6 @@ def character():
     player.regen = base_regen + weapon_regen + bonus_regen
     del base_regen, weapon_regen, bonus_regen
     
-    # let's make speed work
-    # base speed is 100
-    base_speed = 100
-    # if weapon substat is speed, add the same
-    weapon_speed = 0
-    if getattr(item, "substat", None) == "Speed":
-        weapon_speed = item.substat_value
-    # for every 10 levels of player, +5 speed
-    level_speed = (player.level // 10) * 5
-    
-    # at breakpoints of 20, 40, 60, 80, 100, +1 speed each (stacking)
-    if player.level >= 20:
-        level_speed += 1
-    if player.level >= 40:
-        level_speed += 1
-    if player.level >= 60:
-        level_speed += 1
-    if player.level >= 80:
-        level_speed += 1
-    if player.level >= 100:
-        level_speed += 1
-    
-    bonus_speed = 0
-    # if fragment's stat is speed, add it
-    if getattr(fragment, "stat1", None) == "Speed":
-        bonus_speed += getattr(fragment, "stat1_value", 0)
-    if getattr(fragment, "stat2", None) == "Speed":
-        bonus_speed += getattr(fragment, "stat2_value", 0)
-    if getattr(fragment, "stat3", None) == "Speed":
-        bonus_speed += getattr(fragment, "stat3_value", 0)
-    
-    player.speed = base_speed + weapon_speed + level_speed + bonus_speed
-    del base_speed, weapon_speed, level_speed, bonus_speed
-    
-    
-    
     # now, make total ATK, DEF and Hp actually global
     player.total_dmg = totaldmg
     player.total_def = totaldef
@@ -3281,7 +3831,7 @@ def character():
 [35;3H{x7}{bold}│ {reset}{xf}🔢 {xlyellow}{bold}[5] {reset}{xe}{xf}-{xe} Lifetime stats{reset}{x7}{bold}            │
 [15;20H{item.type} {xlyellow}Attack{reset}{x8}.....{bold}{xe}{char_round(round(totaldmg))}{reset}
 [16;20H🛡️ {x3}Defence{reset}{x8}....{bold}{xb}{char_round(round(totaldef,1))}%{reset}
-[17;20H❤️ {xc}Health{reset}{x8}.....{bold}{xlred}{char_round(round(totalhp))} {reset}
+[17;20H❤️ {xc}Health{reset}{x8}.....{bold}{xlred}{char_round(round(totalhp))}{reset}
 [08;42H{xf}{bold}{RGB}255;219;187m╭───────────────────────────────────────╮ {RGB}186;243;219m╭─────────────────────────────────────────╮
 [09;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                         │
 [10;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                         │
@@ -3349,9 +3899,11 @@ def character():
 [13;60H{reset}✸ 
 [13;62H{RGB}255;219;187mCrit Rate{x8}-----{xlyellow}{bold}{char_round(player.crit_rate)}%{reset}
 [14;60H{reset}※ 
-[14;62H{RGB}255;219;187mCrit DMG{x8}------{xlyellow}{bold}{char_round(item.atkcrit)}%{reset}
+[14;62H{RGB}255;219;187mCrit DMG{x8}------{xlyellow}{bold}{char_round(player.crit_damage)}%{reset}
 [15;60H{reset}⟐ 
 [15;62H{RGB}255;219;187mSpeed{x8}---------{xlyellow}{bold}{char_round(player.speed)}{reset}
+[16;60H{reset}+
+[16;62H{RGB}255;219;187mBonus ATK{x8}-----{xlyellow}{bold}{char_round(player.bonus_atk + abilityatk)}{reset}
 [18;44H{reset}{RGB}255;219;187m⇝{xf} 
 [13;101H{reset}⌬ 
 [13;103H{RGB}186;243;219mSkill Lv.{x8}-----{xa}{bold}soon!{reset}{RGB}186;243;219m/15{reset}
@@ -3369,17 +3921,17 @@ def character():
 [29;60H{reset}◇ 
 [29;62H{RGB}173;216;225mBase DEF{x8}------{xb}{bold}{char_round(basedef)}%{reset}
 [30;60H{reset}∆ 
-[30;62H{RGB}173;216;225mArmour DEF{x8}----{xb}{bold}{char_round(getattr(armor, "defense", 0))}%{reset}
+[30;62H{RGB}173;216;225mArmour DEF{x8}----{xb}{bold}{char_round(getattr(armor, "actual_defense", 0))}%{reset}
 [31;60H{reset}⦿ 
-[31;62H{RGB}173;216;225mHelmet DEF{x8}----{xb}{bold}{char_round(getattr(head, "defense", 0))}%{reset}
+[31;62H{RGB}173;216;225mHelmet DEF{x8}----{xb}{bold}{char_round(getattr(head, "actual_defense", 0))}%{reset}
 [32;60H{reset}★ 
-[32;62H{RGB}173;216;225mBonus DEF{x8}-----{xb}{bold}{char_round(abilitydef)}%{reset}
+[32;62H{RGB}173;216;225mBonus DEF{x8}-----{xb}{bold}{char_round(abilitydef + player.bonus_def)}{reset}
 [33;60H{reset}⊗ 
 [33;62H{RGB}173;216;225mDodge Rate{x8}----{xb}{bold}{char_round(player.dodge)}%{reset}
 [29;101H{reset}♥ 
 [29;103H{RGB}255;203;204mBase HP{x8}---------{xlred}{bold}{char_round(basehp)}{reset}
 [30;101H{reset}♡ 
-[30;103H{RGB}255;203;204mBonus HP{x8}--------{xlred}{bold}{char_round(abilityhp)}{reset}
+[30;103H{RGB}255;203;204mBonus HP{x8}--------{xlred}{bold}{char_round(abilityhp + player.bonus_hp)}{reset}
 [31;101H{reset}⬣ 
 [31;103H{RGB}255;203;204mEffect RES{x8}------{xlred}{bold}{char_round(round(player.effect_res))}%{reset}
 [32;101H{reset}↺ 
@@ -3391,7 +3943,7 @@ def character():
 """.strip().replace("\n", ""),end="",flush=True)
     if item.type_raw is not None: print(f"""
 [18;46HYour {item.type_raw} {bold}crits {RGB}255;219;187m{char_round(player.crit_rate)}%{reset} of the time,{reset}
-[19;46H{reset}in which case you deal {RGB}255;219;187m{bold}+{char_round(item.atkcrit)}%{reset} DMG:
+[19;46H{reset}in which case you deal {RGB}255;219;187m{bold}+{char_round(player.crit_damage)}%{reset} DMG:
 [22;44H{reset}{RGB}255;219;187m•{xf} 
 [22;46HDamage every critical hit: {RGB}255;219;187m{bold}{char_round(totalcritdmg)}{reset}
 [23;44H{reset}{RGB}255;219;187m•{xf} 
@@ -3427,7 +3979,7 @@ def character():
     print(f"""
 [15;20H{item.type} {xlyellow}Attack{reset}{x8}.....{bold}{xe}{char_round(round(totaldmg))}{reset}
 [16;20H🛡️ {x3}Defence{reset}{x8}....{bold}{xb}{char_round(round(totaldef,1))}%{reset}
-[17;20H❤️ {xc}Health{reset}{x8}.....{bold}{xlred}{char_round(round(totalhp))} {reset}
+[17;20H❤️ {xc}Health{reset}{x8}.....{bold}{xlred}{char_round(round(totalhp))}{reset}
 """.strip().replace("\n",""),end="",flush=True)
     del hpsymbol1,hpsymbol2,hpsymbol3,hpsymbol4,hpsymbol5,hpsymbol6,hpsymbol7, atksymbol1,atksymbol2,atksymbol3,atksymbol4,atksymbol5,atksymbol6,atksymbol7,defsymbol1,defsymbol2,defsymbol3,defsymbol4,defsymbol5,defsymbol6,defsymbol7,lvsymbol1,lvsymbol2,lvsymbol3,lvsymbol4,lvsymbol5,lvsymbol6,lvsymbol7
     while True:
@@ -4313,7 +4865,7 @@ def inventory():
 {player.color}     ██  ██  ██     {x8}│{xlorange}  helmet or material you've gotten {x8}  │                                   {x8}  │ 
 {player.color}       ██████       {x8}│{xlorange}  will be stored right here!        {x8} │  {x5}{bold}[3]{reset}{xd} 🪖 View all helmets          {x8}  │ 
 {player.color}         ██         {x8}│{x9}                                    {x8} │                                   {x8}  │  
-{player.color}         ██         {x8}│{xe}  Your inventory has an unlimited   {x8} │  {xlyellow}{bold}[E]{reset}{xe} 🧰 View everything else      {x8}  │ 
+{player.color}         ██         {x8}│{xe}  Your inventory has an unlimited   {x8} │  {xlyellow}{bold}[E]{reset}{xe} 🧩 View all fragments        {x8}  │
 {player.color}         ██         {x8}│{xe}  capacity - store as many things as {x8}│                                   {x8}  │    
 {player.color}       ██  ██       {x8}│{xe}  you need! Now, select an option:  {x8} │  {xc}{bold}[{bind.back.upper()}] {reset}🏡 {xlred}{italic}<- Return to your house{x8}{x8}     │ 
 {player.color}     ██      ██     {x8}│{x9}                                    {x8} │                                     │              
@@ -4337,8 +4889,14 @@ def inventory():
             game.sel = "Helmets"
             game.goto = inventory_prep
             return
+        if k.lower() == "e":
+            game.sel = "Fragments"
+            game.goto = inventory_prep
+            return
 
 def get_ability(iname):
+    if not iname:
+        return f"{xlyellow}{bold}No ability{reset} is associated with this item."
     if iname.lower() == "Krita User Manual".lower():
         return f"Hitting an enemy makes it panic about color theory → it gets {xlyellow}{bold}dizzy {reset}permanently (stackable)."
     elif iname.lower() == "Befriend a Shark in 30 Days".lower():
@@ -4347,28 +4905,16 @@ def get_ability(iname):
         return f"{xlyellow}{bold}No ability{reset} is associated with this item yet. Hold tight for more info in a later update!"
 
 
-def character2():
+def draw_equipment_title_bar():
     boxwidth = 25
-    playername=read("General/playername")
+    playername = read("General/playername", default="Player")
     playernamd = f"{playername} › Equipment "
     length = visible_len(playernamd)
     pad = (boxwidth - length) // 2 + 1
     spaces = " " * max(pad, 0)
     centered = spaces + playernamd
-    number = 1
-    if item.rarity == "08":
-        rarity_indicator = f"{reset}{x7}★ {xf}Common"
-    elif item.rarity == "02":
-        rarity_indicator = f"{reset}{xa}★★ {xf}Rare"
-    elif item.rarity == "03":
-        rarity_indicator = f"{reset}{xb}★★★ {xf}Special"
-    elif item.rarity == "0d":
-        rarity_indicator = f"{reset}{xd}★★★★ {xf}Legendary"
-    else:
-        rarity_indicator = f"{reset}{xe}★★★★★ {xf}Divine"
-        
     print(f"""
-[1;{number}H{reset}
+[1;1H{reset}
 [2;17H#3{x7}╭───────────────────────────╮
 [3;17H#4{x7}╭───────────────────────────╮
 [4;17H#3{x7}│ {xf}{bold}{centered}       {reset}
@@ -4377,6 +4923,44 @@ def character2():
 [7;17H#4{x7}╰───────────────────────────╯
 [4;45H#3{x7}│ {reset}{x7}{bold}{reset}
 [5;45H#4{x7}│ {reset}{x7}{bold}{reset}
+""".strip().replace("\n", ""), end="", flush=True)
+
+
+def equipped_fragment_summary_lines():
+    slot_lines = []
+    for slot in FRAGMENT_SLOTS:
+        equipped_fragment = FRAGMENT_EQUIPPED_OBJECTS[slot]
+        if getattr(equipped_fragment, "name", None):
+            slot_lines.append(
+                f"{slot}: {equipped_fragment.name} "
+                f"(Lv {equipped_fragment.level})"
+            )
+        else:
+            slot_lines.append(f"{slot}: Empty")
+    bonuses = get_fragment_bonuses()
+    set_lines = [
+        f"{label}: {effect}"
+        for label, effect in bonuses["active_set_details"]
+    ]
+    if not set_lines:
+        set_lines = ["No active set bonuses"]
+    return slot_lines, set_lines
+
+
+def character2():
+    if getattr(item, "rarity", None) == "08":
+        rarity_indicator = f"{reset}{x7}★ {xf}Common"
+    elif getattr(item, "rarity", None) == "02":
+        rarity_indicator = f"{reset}{xa}★★ {xf}Rare"
+    elif getattr(item, "rarity", None) == "03":
+        rarity_indicator = f"{reset}{xb}★★★ {xf}Special"
+    elif getattr(item, "rarity", None) == "0d":
+        rarity_indicator = f"{reset}{xd}★★★★ {xf}Legendary"
+    else:
+        rarity_indicator = f"{reset}{xe}★★★★★ {xf}Divine"
+
+    draw_equipment_title_bar()
+    print(f"""
 [08;3H{xf}{bold}╭────────────────────────────────────╮{reset}
 [09;3H{xf}{bold}│                                    │{reset}
 [10;3H{xf}{bold}│ {player.color}   ██████                        {xf}  │{reset}
@@ -4425,7 +5009,7 @@ def character2():
 [24;42H{xf}{bold}{RGB}255;219;187m│                                       │ {RGB}186;243;219m│                                         │
 [25;42H{xf}{bold}{RGB}255;219;187m╰───────────────────────────────────────╯ {RGB}186;243;219m╰─────────────────────────────────────────╯
 [08;43H{RGB}255;219;187m{bold}┤ {item.type} {item.name if item.name is not None else "Weapon"} ├
-[08;85H{RGB}186;243;219m{bold}┤ 🧩 {fragment.name if fragment.name is not None else "Fragments"} ├
+[08;85H{RGB}186;243;219m{bold}┤ 🧩 Fragments ├
 [26;42H{RGB}173;216;225m╭───────────────────────────────────────╮ {RGB}255;203;204m╭─────────────────────────────────────────╮
 [27;42H{RGB}173;216;225m│                                       │ {RGB}255;203;204m│                                         │
 [28;42H{RGB}173;216;225m│                                       │ {RGB}255;203;204m│                                         │
@@ -4476,7 +5060,12 @@ def character2():
 
 
 """.strip().replace("\n",""),end="",flush=True)
-    full_ability = get_ability(item.name)
+    slot_lines, set_lines = equipped_fragment_summary_lines()
+    for row, text in zip((10, 12, 14), slot_lines):
+        print(f"\033[{row};87H{reset}{RGB}186;243;219m{text[:38]:<38}{reset}")
+    for row, text in enumerate(set_lines[:2], start=17):
+        print(f"\033[{row};87H{reset}{x7}{text[:38]:<38}{reset}")
+    full_ability = get_ability(getattr(item, "name", None))
     draw_box_text(f"→ {full_ability}", 21,45, 23,79)
     while True:
         k = key()
@@ -4820,6 +5409,7 @@ def inv_category_title(category):
         "Weapons": "Weapons",
         "Bodywear": " Armor ",
         "Helmets": "Helmets",
+        "Fragments": "Fragments",
     }.get(category, str(category))
 
 
@@ -4828,10 +5418,13 @@ def inv_item_label(category):
         "Weapons": "weapon",
         "Bodywear": "armour",
         "Helmets": "helmet",
+        "Fragments": "fragment",
     }.get(category, "item")
 
 
-def inv_active_path(category):
+def inv_active_path(category, item_obj=None):
+    if category == "Fragments":
+        return fragment_slot_path(getattr(item_obj, "slot", None))
     return {
         "Weapons": "Items/active_weapon",
         "Bodywear": "Items/active_body",
@@ -4839,8 +5432,22 @@ def inv_active_path(category):
     }.get(category)
 
 
+def inv_active_paths(category):
+    if category == "Fragments":
+        return [fragment_slot_path(slot) for slot in FRAGMENT_SLOTS]
+    path = inv_active_path(category)
+    return [path] if path else []
+
+
 def inv_type_icon(item_obj):
     type_raw = getattr(item_obj, "type_raw", None)
+    fragment_icons = {
+        "bracelet": "📿",
+        "necklace": "🔗",
+        "ring": "💍",
+    }
+    if type_raw in fragment_icons:
+        return fragment_icons[type_raw]
     type_map = {
         None: "❌",
         "None": "❌",
@@ -4870,6 +5477,8 @@ def inv_type_label(item_obj):
 
 
 def inv_compare_label(category):
+    if category == "Fragments":
+        return "main stat"
     return "DMG" if category == "Weapons" else "DEF"
 
 
@@ -4878,6 +5487,8 @@ def inv_compare_value(item_obj, category):
         final_atk = get_actual_atk(item_obj)
         crit_bonus = float(getattr(item_obj, "atkcrit", 0)) / 100
         return float(final_atk) * (1 + crit_bonus)
+    if category == "Fragments":
+        return float(get_fragment_main_stat_value(item_obj))
     return float(get_actual_defense(item_obj))
 
 
@@ -4915,8 +5526,11 @@ def round_upgrade_price(price):
     return price
 
 
-def item_upgrade_cost_for_level(item_obj, target_level):
-    """Return the gold needed for one level, ending at target_level."""
+def item_upgrade_cost_for_level(item_obj, target_level, category=None):
+    """Return the currency needed for one level, ending at target_level."""
+    if category == "Fragments" or hasattr(item_obj, "slot"):
+        level = max(1, int(target_level))
+        return max(1, round(8 * (1.22 ** (level - 1))))
     base_cost = ITEM_UPGRADE_BASE_COSTS.get(
         getattr(item_obj, "rarity", None), 25
     )
@@ -4933,7 +5547,7 @@ def item_upgrade_cost(item_obj, category, levels):
     target_level = min(max_level, current_level + max(0, int(levels)))
     return round_upgrade_price(
         sum(
-            item_upgrade_cost_for_level(item_obj, level)
+            item_upgrade_cost_for_level(item_obj, level, category)
             for level in range(current_level + 1, target_level + 1)
         )
     )
@@ -4961,13 +5575,51 @@ def max_affordable_upgrade_levels(item_obj, category, max_levels, gold):
     return affordable_levels
 
 
+def apply_item_upgrade(item_obj, category, levels):
+    """Apply a validated upgrade and deduct the category's currency."""
+    current_level = clamp_item_level(getattr(item_obj, "level", 0), category)
+    max_level = get_item_max_level(category)
+    if max_level is None:
+        return False, 0
+
+    requested_levels = max(0, int(levels))
+    usable_level = min(
+        max_level,
+        max_item_level_for_player(category, player.level),
+    )
+    target_level = min(max_level, current_level + requested_levels)
+    total_cost = item_upgrade_cost(item_obj, category, requested_levels)
+    currency_attr = "dust" if category == "Fragments" else "money"
+    currency = getattr(player, currency_attr, 0)
+    if (
+        requested_levels <= 0
+        or target_level > usable_level
+        or target_level - current_level != requested_levels
+        or currency < total_cost
+    ):
+        return False, total_cost
+
+    if category == "Fragments":
+        # Milestone substats are rolled only after the held confirmation succeeds.
+        apply_fragment_substats(item_obj, target_level)
+    setattr(player, currency_attr, currency - total_cost)
+    item_obj.level = target_level
+    return True, total_cost
+
+
 def item_stat_preview(item_obj, category, level):
     if category == "Weapons":
         return get_actual_atk(item_obj, level=level)
+    if category == "Fragments":
+        return get_fragment_main_stat_value(item_obj, level=level)
     return get_actual_defense(item_obj, level=level)
 
 
 def item_salvage_rewards(item_obj, category):
+    if category == "Fragments":
+        level = clamp_item_level(getattr(item_obj, "level", 1), category)
+        return 0, max(2, round(level * 1.5))
+
     gold_multiplier, gold_bonus, dust_bonus = ITEM_RARITY_VALUES.get(
         getattr(item_obj, "rarity", None), (1, 100, 10)
     )
@@ -4985,44 +5637,42 @@ def item_salvage_rewards(item_obj, category):
     return gold, dust
 
 
-def confirmation_key(k):
-    return (
-        isinstance(k, str)
-        and k.lower() in ("enter", bind.confirm.lower())
-    )
-
-
-def confirmation_back_key(k):
-    return (
-        isinstance(k, str)
-        and k.lower() in ("esc", bind.back.lower(), bind.deny.lower())
-    )
-
-
-def draw_confirmation_progress(filled):
+def draw_confirmation_progress(filled, action):
     filled = max(0, min(43, int(filled)))
     d.hold_item = filled
-    xpbar = f"{xc}{'█' * filled}{rgb(48, 18, 18)}{'█' * (43 - filled)}"
+    if action == "upgrade":
+        filled_colour = xa
+        empty_colour = rgb(17, 45, 69)
+    else:
+        filled_colour = xc
+        empty_colour = rgb(48, 18, 18)
+    xpbar = (
+        f"{filled_colour}{'█' * filled}"
+        f"{empty_colour}{'█' * (43 - filled)}"
+    )
     print(f"\033[20;63H{x0}██{xpbar}{x0}██")
     print(f"\033[21;63H{x0}██{xpbar}{x0}██", end="", flush=True)
 
 
-def hold_for_confirmation(duration=1.2):
+def hold_for_confirmation(action, duration=1.2, initial_confirm=False):
     """Use repeated key events to distinguish a hold from a normal key press."""
-    started = None
-    last_confirm = None
+    if getattr(d, "inventory_action_mode", None) != action:
+        return False
+    started = time.monotonic() if initial_confirm else None
+    last_confirm = started
     repeating = False
     last_filled = -1
 
     while True:
         k = getx(0, 0, expect="key", timeout=0.05)
         now = time.monotonic()
+        lowered = k.lower() if isinstance(k, str) else ""
 
-        if confirmation_back_key(k):
-            draw_confirmation_progress(0)
+        if lowered in ("esc", bind.back.lower()):
+            draw_confirmation_progress(0, action)
             return False
 
-        if confirmation_key(k):
+        if lowered in ("enter", bind.confirm.lower()):
             allowed_gap = 0.15 if repeating else 0.7
             if last_confirm is None or now - last_confirm > allowed_gap:
                 started = now
@@ -5033,10 +5683,10 @@ def hold_for_confirmation(duration=1.2):
             elapsed = now - started
             filled = round(43 * min(1.0, elapsed / duration))
             if filled != last_filled:
-                draw_confirmation_progress(filled)
+                draw_confirmation_progress(filled, action)
                 last_filled = filled
             if elapsed >= duration:
-                draw_confirmation_progress(43)
+                draw_confirmation_progress(43, action)
                 return True
             continue
 
@@ -5049,18 +5699,29 @@ def hold_for_confirmation(duration=1.2):
         last_confirm = None
         repeating = False
         if last_filled != 0:
-            draw_confirmation_progress(0)
+            draw_confirmation_progress(0, action)
             last_filled = 0
 
 
-def draw_upgrade_menu(item_obj, category, levels, message="", draw_title=False):
+def draw_upgrade_menu(
+    item_obj,
+    category,
+    levels,
+    message="",
+    draw_title=False,
+):
     current_level = clamp_item_level(getattr(item_obj, "level", 0), category)
     max_level = get_item_max_level(category)
     target_level = min(max_level, current_level + levels)
     total_cost = item_upgrade_cost(item_obj, category, levels)
     current_stat = item_stat_preview(item_obj, category, current_level)
     target_stat = item_stat_preview(item_obj, category, target_level)
-    stat_name = "ATK" if category == "Weapons" else "DEF"
+    if category == "Weapons":
+        stat_name = "ATK"
+    elif category == "Fragments":
+        stat_name = normalize_fragment_stat(item_obj.main_stat)
+    else:
+        stat_name = "DEF"
 
     blank(18, 63, 29, 110)
     blank(31, 63, 31, 110)
@@ -5077,16 +5738,44 @@ def draw_upgrade_menu(item_obj, category, levels, message="", draw_title=False):
 
     print(f"\033[24;63H{xf}Target level: {x7}{current_level} {xf}→ {xlyellow}{bold}{target_level}/{max_level}{reset}")
     print(f"\033[25;63H{xf}Levels: {xlyellow}{bold}+{levels}{reset}{x7}  (+ increase / - decrease){reset}")
-    print(f"\033[27;63H{xf}{stat_name}: {x7}{current_stat} {xf}→ {xa}{bold}{target_stat}{reset}")
-    cost_colour = xlyellow if player.money >= total_cost else xlred
-    print(f"\033[28;63H{xf}Cost: {cost_colour}{bold}{total_cost} gold{reset}{x7}  (you have {player.money}){reset}")
+    if category == "Fragments":
+        current_display = format_fragment_stat(stat_name, current_stat)
+        target_display = format_fragment_stat(stat_name, target_stat)
+        print(f"\033[27;63H{xf}Main stat: {x7}{current_display} {xf}→ {xa}{bold}{target_display}{reset}")
+    else:
+        print(f"\033[27;63H{xf}{stat_name}: {x7}{current_stat} {xf}→ {xa}{bold}{target_stat}{reset}")
+    currency = player.dust if category == "Fragments" else player.money
+    currency_name = "magic dust" if category == "Fragments" else "gold"
+    cost_colour = xlyellow if currency >= total_cost else xlred
+    print(f"\033[28;63H{xf}Cost: {cost_colour}{bold}{total_cost} {currency_name}{reset}{x7}  (you have {currency}){reset}")
+    if category == "Fragments":
+        existing_count = len(get_fragment_substats(item_obj))
+        target_count = min(3, target_level // 5)
+        new_substat_count = max(0, target_count - existing_count)
+        if new_substat_count:
+            plural = "substats" if new_substat_count != 1 else "substat"
+            print(
+                f"\033[29;63H{xf}After confirmation: "
+                f"{xa}{bold}{new_substat_count} random {plural}{reset}"
+            )
     if message:
         print(f"\033[31;63H{message}{reset}")
     else:
-        print(f"\033[31;63H{xlorange}Confirm → {xlyellow}{bold}ENTER/{bind.confirm.upper()} {reset}{xlorange}| Back → {xlyellow}{bold}{bind.back.upper()}/ESC{reset}")
+        confirm_action = "Hold confirm" if category == "Fragments" else "Confirm"
+        print(f"\033[31;63H{xlorange}{confirm_action} → {xlyellow}{bold}ENTER/{bind.confirm.upper()} {reset}{xlorange}| Back → {xlyellow}{bold}{bind.back.upper()}/ESC{reset}")
 
 
 def upgrade_selected_item():
+    if getattr(d, "inventory_action_mode", "inventory") != "inventory":
+        return False
+    d.inventory_action_mode = "upgrade"
+    try:
+        return _upgrade_selected_item_flow()
+    finally:
+        d.inventory_action_mode = "inventory"
+
+
+def _upgrade_selected_item_flow():
     item_obj = load_item(d.currsel, game.sel)
     max_level = get_item_max_level(game.sel)
     if not item_obj or max_level is None:
@@ -5111,12 +5800,13 @@ def upgrade_selected_item():
         return False
 
     levels = 1
+    currency = player.dust if game.sel == "Fragments" else player.money
     if getattr(setting, "item_level_up_mode", "One at a Time") == "All":
         affordable_levels = max_affordable_upgrade_levels(
             item_obj,
             game.sel,
             available_levels,
-            player.money,
+            currency,
         )
         levels = max(1, affordable_levels)
     message = ""
@@ -5149,15 +5839,17 @@ def upgrade_selected_item():
                 sound("map_switch1")
             else:
                 sound("map_switch1_end")
-        elif confirmation_back_key(k):
+        elif lowered in ("esc", bind.back.lower()):
             sound("map_left")
             game.preserve_offset = True
             displaynewsel()
             return False
-        elif confirmation_key(k):
+        elif lowered in ("enter", bind.confirm.lower()):
             total_cost = item_upgrade_cost(item_obj, game.sel, levels)
-            if player.money < total_cost:
-                message = f"{xlred}🚫 You need {total_cost - player.money} more gold.{reset}"
+            currency = player.dust if game.sel == "Fragments" else player.money
+            currency_name = "magic dust" if game.sel == "Fragments" else "gold"
+            if currency < total_cost:
+                message = f"{xlred}🚫 You need {total_cost - currency} more {currency_name}.{reset}"
                 sound("error2")
                 continue
 
@@ -5166,8 +5858,27 @@ def upgrade_selected_item():
                 sound("error2")
                 continue
 
-            player.money -= total_cost
-            item_obj.level = target_level
+            if (
+                game.sel == "Fragments"
+                and not hold_for_confirmation(
+                    "upgrade",
+                    initial_confirm=True,
+                )
+            ):
+                sound("map_left")
+                game.preserve_offset = True
+                displaynewsel()
+                return False
+
+            upgraded, _ = apply_item_upgrade(
+                item_obj,
+                game.sel,
+                levels,
+            )
+            if not upgraded:
+                message = f"{xlred}🚫 This upgrade is no longer available.{reset}"
+                sound("error2")
+                continue
             save_item(d.currsel, game.sel)
             player.save()
             refresh_player_core_stats()
@@ -5179,12 +5890,12 @@ def upgrade_selected_item():
 
 def remove_inventory_item(item_id, category, length):
     """Remove a numbered item and keep inventory/equipment IDs aligned."""
-    equipped_path = inv_active_path(category)
-    equipped = read(equipped_path, default="none") if equipped_path else "none"
-    try:
-        equipped_id = int(equipped)
-    except (TypeError, ValueError):
-        equipped_id = None
+    equipped_ids = {}
+    for equipped_path in inv_active_paths(category):
+        try:
+            equipped_ids[equipped_path] = int(read(equipped_path, default="none"))
+        except (TypeError, ValueError):
+            equipped_ids[equipped_path] = None
 
     target = os.path.join("Items", category, f"item{item_id}.txt")
     if not os.path.exists(target):
@@ -5197,13 +5908,40 @@ def remove_inventory_item(item_id, category, length):
         if os.path.exists(src):
             shutil.move(src, dst)
 
-    if equipped_path:
+    for equipped_path, equipped_id in equipped_ids.items():
         if equipped_id == item_id:
             update(equipped_path, "none")
         elif equipped_id is not None and equipped_id > item_id:
             update(equipped_path, equipped_id - 1)
 
-    load_item(0)
+    refresh_player_core_stats()
+    return True
+
+
+def duplicate_inventory_item(item_id, category, length):
+    """Duplicate one item and preserve IDs for every equipped slot."""
+    source = os.path.join("Items", category, f"item{item_id}.txt")
+    if not os.path.exists(source):
+        return False
+
+    equipped_ids = {}
+    for equipped_path in inv_active_paths(category):
+        try:
+            equipped_ids[equipped_path] = int(read(equipped_path, default="none"))
+        except (TypeError, ValueError):
+            equipped_ids[equipped_path] = None
+
+    for i in range(length, item_id, -1):
+        src = os.path.join("Items", category, f"item{i}.txt")
+        dst = os.path.join("Items", category, f"item{i + 1}.txt")
+        if os.path.exists(src):
+            shutil.move(src, dst)
+    shutil.copy(source, os.path.join("Items", category, f"item{item_id + 1}.txt"))
+
+    for equipped_path, equipped_id in equipped_ids.items():
+        if equipped_id is not None and equipped_id > item_id:
+            update(equipped_path, equipped_id + 1)
+    refresh_player_core_stats()
     return True
 
 
@@ -5213,22 +5951,35 @@ def draw_delete_menu(item_obj, category):
     blank(31, 63, 31, 110)
     print(f"\033[16;63H{bold}🗑️ {xlred}Delete {item_obj.name}?{reset}")
     print(f"\033[19;63H{x0}███████████████████████████████████████████████")
-    draw_confirmation_progress(0)
+    draw_confirmation_progress(0, "delete")
     print(f"\033[22;63H{x0}███████████████████████████████████████████████{reset}")
 
     item_label = inv_item_label(category)
     confirm_label = bind.confirm.upper()
     print(f"\033[24;63H{reset}{xf}→ {xc}📛 Hold {bold}{xlred}Enter / {confirm_label}{reset}{xc} to delete {item_label}.{reset}")
-    print(f"\033[25;63H{reset}{xf}→ {xb}💤 Press {bold}{x3}{bind.back.upper()} / ESC / {bind.deny.upper()}{reset}{xb} to cancel deletion.{reset}")
+    print(f"\033[25;63H{reset}{xf}→ {xb}💤 Press {bold}{x3}{bind.back.upper()} / ESC{reset}{xb} to cancel deletion.{reset}")
 
     gold, dust = item_salvage_rewards(item_obj, category)
     print(f"\033[27;63H{reset}{xf}{rgb(255, 206, 124)}📦 Deleting this {item_label} will give you:{reset}")
-    print(f"\033[28;66H{reset}{x7}├─ 🪙 {xlyellow}{bold}{gold} {reset}{xlyellow}gold")
-    print(f"\033[29;66H{reset}{x7}╰─ ✨ {xlyellow}{bold}{dust} {reset}{xlyellow}magic dust")
+    if category == "Fragments":
+        print(f"\033[28;66H{reset}{x7}╰─ ✨ {xlyellow}{bold}{dust} {reset}{xlyellow}magic dust")
+    else:
+        print(f"\033[28;66H{reset}{x7}├─ 🪙 {xlyellow}{bold}{gold} {reset}{xlyellow}gold")
+        print(f"\033[29;66H{reset}{x7}╰─ ✨ {xlyellow}{bold}{dust} {reset}{xlyellow}magic dust")
     print(f"\033[31;63H{xlorange}⚠️ You will lose this {item_label} permanently!{reset}")
 
 
 def delete_selected_item():
+    if getattr(d, "inventory_action_mode", "inventory") != "inventory":
+        return False
+    d.inventory_action_mode = "delete"
+    try:
+        return _delete_selected_item_flow()
+    finally:
+        d.inventory_action_mode = "inventory"
+
+
+def _delete_selected_item_flow():
     item_obj = load_item(d.currsel, game.sel)
     if not item_obj:
         return False
@@ -5239,7 +5990,7 @@ def delete_selected_item():
         return False
 
     draw_delete_menu(item_obj, game.sel)
-    if not hold_for_confirmation():
+    if not hold_for_confirmation("delete"):
         sound("map_left")
         game.preserve_offset = True
         displaynewsel()
@@ -5287,6 +6038,7 @@ def inventory_prep():
     d.massdelete = 0
     d.current = 0
     d.hold_item = 0
+    d.inventory_action_mode = "inventory"
     d.length = len(list(Path(f"Items/{game.sel}").glob("item*.txt")))
 
     if d.length == 0:
@@ -5323,12 +6075,25 @@ def inventory_prep():
         print(f"                                                      \033[38;2;2;74;48m{atksymbol5}")
         print(f"                                                        \033[38;2;2;74;48m{atksymbol6}")
         print(f"                                                          \033[38;2;2;74;48m{atksymbol7}")
+    elif game.sel == "Fragments":
+        fragment_colour = RGB + "186;243;219m"
+        print(f"                                                            {fragment_colour}╭──╮")
+        print(f"                                                          {fragment_colour}╭─╯  ╰─╮")
+        print(f"                                                        {fragment_colour}╭─╯  🧩  ╰─╮")
+        print(f"                                                        {fragment_colour}│          │")
+        print(f"                                                        {fragment_colour}╰─╮      ╭─╯")
+        print(f"                                                          {fragment_colour}╰─╮  ╭─╯")
+        print(f"                                                            {fragment_colour}╰──╯")
     
     # title
+    title_inner_width = 23
+    title_padding = max(0, title_inner_width - visible_len(category_title))
+    title_left = " " * (title_padding // 2)
+    title_right = " " * (title_padding - len(title_left))
     print(f"\033#3{reset}                  {xlorange}╭───────────────────────{xlorange}╮")
     print(f"\033#4                  {xlorange}╭───────────────────────{xlorange}╮")
-    print(f"\033#3                  {xlorange}│        {bold}{xlyellow}{category_title}        {xlorange}│")
-    print(f"\033#4                  {xlorange}│        {bold}{xlyellow}{category_title}        {xlorange}│")
+    print(f"\033#3                  {xlorange}│{title_left}{bold}{xlyellow}{category_title}{title_right}{xlorange}│")
+    print(f"\033#4                  {xlorange}│{title_left}{bold}{xlyellow}{category_title}{title_right}{xlorange}│")
     print(f"\033#3                  {xlorange}╰───────────────────────{xlorange}╯")
     print(f"\033#4                  {xlorange}╰───────────────────────{xlorange}╯")
 
@@ -5370,7 +6135,6 @@ def inventory_prep():
     game.comparing = []
     # comparing is false
     game.is_comparing = False
-    
     
     item_pager()
 
@@ -5418,19 +6182,19 @@ def inventory_waitkey():
     ityped = inv_type_icon(item)
     itemcolour = xf
     itemcolour_rgb = (255, 255, 255)
-    if item.rarity == "08":
+    if getattr(item, "rarity", None) == "08":
         itemcolour = xf
         itemcolour_rgb = (255, 255, 255)
-    elif item.rarity == "02":
+    elif getattr(item, "rarity", None) == "02":
         itemcolour = xa
         itemcolour_rgb = (70, 198, 107)
-    elif item.rarity == "03":
+    elif getattr(item, "rarity", None) == "03":
         itemcolour = xb
         itemcolour_rgb = (122, 195, 230)
-    elif item.rarity == "0d":
+    elif getattr(item, "rarity", None) == "0d":
         itemcolour = xd
         itemcolour_rgb = (214, 138, 230)
-    elif item.rarity == "0e":
+    elif getattr(item, "rarity", None) == "0e":
         itemcolour = xe
         itemcolour_rgb = (240, 232, 158)
     counter = 0
@@ -5440,19 +6204,19 @@ def inventory_waitkey():
         ityped = inv_type_icon(item)
         itemcolour = xf
         itemcolour_rgb = (255, 255, 255)
-        if item.rarity == "08":
+        if getattr(item, "rarity", None) == "08":
             itemcolour = xf
             itemcolour_rgb = (255, 255, 255)
-        elif item.rarity == "02":
+        elif getattr(item, "rarity", None) == "02":
             itemcolour = xa
             itemcolour_rgb = (70, 198, 107)
-        elif item.rarity == "03":
+        elif getattr(item, "rarity", None) == "03":
             itemcolour = xb
             itemcolour_rgb = (122, 195, 230)
-        elif item.rarity == "0d":
+        elif getattr(item, "rarity", None) == "0d":
             itemcolour = xd
             itemcolour_rgb = (214, 138, 230)
-        elif item.rarity == "0e":
+        elif getattr(item, "rarity", None) == "0e":
             itemcolour = xe
             itemcolour_rgb = (240, 232, 158)
         if animate_inventory_effects:
@@ -5474,7 +6238,7 @@ def inventory_waitkey():
             inv_prevpage()
         elif k == "d" or k == "right":
             inv_nextpage()
-        elif k == bind.back:
+        elif k in (bind.back, "esc"):
             game.goto = inventory
             return
         elif k in ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]:
@@ -5504,7 +6268,7 @@ def inventory_waitkey():
             if time.monotonic() < getattr(d, "inventory_equip_blocked_until", 0):
                 continue
             item = load_item(d.currsel, game.sel)
-            equipped_path = inv_active_path(game.sel)
+            equipped_path = inv_active_path(game.sel, item)
             if not equipped_path:
                 continue
             req_level = required_player_level_for_item(item.level, game.sel)
@@ -5516,7 +6280,7 @@ def inventory_waitkey():
                 else:
                     sound(f"equip_{random.choice(['1','2','3'])}")
                     update(equipped_path, d.currsel)
-                load_item(0)
+                refresh_player_core_stats()
                 # preserve current offset for shine effect
                 game.preserve_offset = True
                 displaynewsel()
@@ -5545,17 +6309,9 @@ def inventory_waitkey():
                 return
         # Ctrl+D duplicates selected item (developer function). The dupe will be saved as the next item (duping item 5 will create item 6, shifting all subsequent items up by one if they exist)
         elif k == "ctrl/d":
-            for i in range(d.length, d.currsel, -1):
-                src = os.path.join("Items", game.sel, f"item{i}.txt")
-                dst = os.path.join("Items", game.sel, f"item{i+1}.txt")
-                if os.path.exists(src):
-                    shutil.move(src, dst)
-            
-            src = os.path.join("Items", game.sel, f"item{d.currsel}.txt")
-            dst = os.path.join("Items", game.sel, f"item{d.currsel+1}.txt")
-            if os.path.exists(src):
-                shutil.copy(src, dst)
-                
+            if not duplicate_inventory_item(d.currsel, game.sel, d.length):
+                sound("error2")
+                continue
             d.length += 1
             sound("pop_2")
             game.preserve_offset = True
@@ -5565,22 +6321,25 @@ def inventory_waitkey():
             
         # Ctrl+X deletes selected item (developer function). Shifts subsequent items down.
         elif k == "ctrl/x":
-            target = os.path.join("Items", game.sel, f"item{d.currsel}.txt")
-            if os.path.exists(target):
-                os.remove(target)
-            
-            for i in range(d.currsel + 1, d.length + 1):
-                src = os.path.join("Items", game.sel, f"item{i}.txt")
-                dst = os.path.join("Items", game.sel, f"item{i-1}.txt")
-                if os.path.exists(src):
-                    shutil.move(src, dst)
-                    
-            if d.length > 0:
+            if game.sel == "Fragments":
+                if not duplicate_inventory_item(d.currsel, game.sel, d.length):
+                    sound("error2")
+                    continue
+                d.length += 1
+                sound("pop_2")
+                game.goto = reload_items
+                d.preserved_item_id = d.currsel
+                return
+            if remove_inventory_item(d.currsel, game.sel, d.length):
                 d.length -= 1
-            sound("pop_1")
-            game.goto = reload_items
-            d.preserved_item_id = max(1, min(d.currsel, d.length))
-            return
+                sound("pop_1")
+                if d.length <= 0:
+                    game.goto = noitems
+                else:
+                    game.goto = reload_items
+                    d.preserved_item_id = max(1, min(d.currsel, d.length))
+                return
+            sound("error2")
         
         # Backspace: production version to delete with confirmation
         elif k == "backspace":
@@ -5793,15 +6552,15 @@ def render_items():
         indicator = "↑"
         req_level = required_player_level_for_item(item.level, game.sel)
         colour = x7 if req_level <= int(player.level) else xlred
-        if item.rarity == "08":
+        if getattr(item, "rarity", None) == "08":
             itemcolour = xf
-        elif item.rarity == "02":
+        elif getattr(item, "rarity", None) == "02":
             itemcolour = xa
-        elif item.rarity == "03":
+        elif getattr(item, "rarity", None) == "03":
             itemcolour = xb
-        elif item.rarity == "0d":
+        elif getattr(item, "rarity", None) == "0d":
             itemcolour = xd
-        elif item.rarity == "0e":
+        elif getattr(item, "rarity", None) == "0e":
             itemcolour = xe
         print(f"\033[{d.rowdisplay};20H\033[38;5;8m{bold}{d.current} {unbold}{x7}› {ityped} {x7}{item.name} {reset}\033[{d.rowdisplay};56H{colour}{indicator}{item.level}")
         
@@ -5840,19 +6599,19 @@ def displaynewsel():
     colour = x7 if req_level <= int(player.level) else xlred
     itemcolour = xf
     itemcolour_rgb = (255, 255, 255)
-    if item.rarity == "08":
+    if getattr(item, "rarity", None) == "08":
         itemcolour = xf
         itemcolour_rgb = (255, 255, 255)
-    elif item.rarity == "02":
+    elif getattr(item, "rarity", None) == "02":
         itemcolour = xa
         itemcolour_rgb = (70, 198, 107)
-    elif item.rarity == "03":
+    elif getattr(item, "rarity", None) == "03":
         itemcolour = xb
         itemcolour_rgb = (122, 195, 230)
-    elif item.rarity == "0d":
+    elif getattr(item, "rarity", None) == "0d":
         itemcolour = xd
         itemcolour_rgb = (214, 138, 230)
-    elif item.rarity == "0e":
+    elif getattr(item, "rarity", None) == "0e":
         itemcolour = xe
         itemcolour_rgb = (240, 232, 158)
     req_level = required_player_level_for_item(item.level, game.sel)
@@ -5885,7 +6644,7 @@ def displaynewsel():
     print(reset, end="")
     indicators = ""
     # If equipped, show equipped indicator
-    equipped_path = inv_active_path(game.sel)
+    equipped_path = inv_active_path(game.sel, item)
     if equipped_path and str(d.currsel) == str(read(equipped_path)):
         indicators += "✅"
     # If locked (item.locked = 1), show locked indicator
@@ -5918,6 +6677,21 @@ def displaynewsel():
         ability = item.ability if item.ability and item.ability.strip() else "None"
         print(f"\033[26;63H🍹 {bold}{xf}Combat ability:{reset}")
         print(f"\033[27;64H› {xf}{ability}")
+        print(f"\033[31;63H📜{xlorange} {item.description}\033[0m")
+    elif game.sel == "Fragments":
+        main_value = get_fragment_main_stat_value(item)
+        main_display = format_fragment_stat(item.main_stat, main_value, signed=True)
+        print(f"\033[24;66H✨ {xa}{bold}{main_display}{unbold}")
+        print(f"\033[24;94H📶 {xf}Lv {bold}{item_level_display(item, game.sel)}{unbold}{x7}")
+        print(f"\033[25;63H🧩 {xf}Set: {xlyellow}{bold}{item.set_name}{reset}")
+        substats = get_fragment_substats(item)
+        print(f"\033[26;63H✦ {bold}{xf}Substats:{reset}")
+        if substats:
+            for row, (stat_name, value) in enumerate(substats, start=27):
+                stat_display = format_fragment_stat(stat_name, value, signed=True)
+                print(f"\033[{row};64H› {xf}{stat_display}{reset}")
+        else:
+            print(f"\033[27;64H› {x7}Unlocks at levels 5, 10 and 15.{reset}")
         print(f"\033[31;63H📜{xlorange} {item.description}\033[0m")
     else:
         item.actual_defense = get_actual_defense(item)

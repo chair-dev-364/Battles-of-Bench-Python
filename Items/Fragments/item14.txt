@@ -1,0 +1,1 @@
+Necklace;;Bastion Necklace;;1;;DEF;;9;;Guardian;;0

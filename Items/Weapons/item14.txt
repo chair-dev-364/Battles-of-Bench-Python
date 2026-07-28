@@ -1,1 +1,1 @@
-knife;;02;;Basic Knife;;8;;65;;38.0;;Defence;;5;;Knife yay;;0.03;;ability;;0;;0
+book;;0e;;Befriend a Shark in 30 Days;;19;;178;;148.3;;Regeneration;;19;;Filled with shark facts and... fanfics?!;;0.05;;A shark will attack after you do! (30% DMG);;0;;1

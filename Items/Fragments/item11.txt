@@ -1,0 +1,1 @@
+Bracelet;;Bulwark Bracelet;;1;;DEF;;10;;Guardian;;0

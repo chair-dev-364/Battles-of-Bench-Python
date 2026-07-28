@@ -1,0 +1,1 @@
+Ring;;Conqueror's Ring;;1;;DEF;;8;;Warrior;;0

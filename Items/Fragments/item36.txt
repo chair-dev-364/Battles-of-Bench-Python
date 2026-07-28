@@ -1,0 +1,1 @@
+Ring;;Everliving Ring;;1;;Crit Damage;;5;;Titan;;0

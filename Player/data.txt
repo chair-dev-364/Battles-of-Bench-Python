@@ -1,8 +1,8 @@
 {
-    "dust": 61,
+    "dust": 69,
     "gems": 0,
     "level": 100,
-    "money": 189816,
+    "money": 183159,
     "skill_main": 1,
     "skill_skill": 1,
     "skill_ult": 1,
