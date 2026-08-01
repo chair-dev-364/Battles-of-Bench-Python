@@ -1,1 +1,1 @@
-wand;;03;;Magic Wand Pro Max;;6;;70;;35.0;;Strength;;5;;a;;0.04;;No ability.;;0;;0
+wand;;03;;Magic Wand Pro Max;;8;;70;;35.0;;Strength;;5;;a;;0.04;;No ability.;;0;;0

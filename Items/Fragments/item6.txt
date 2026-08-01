@@ -1,1 +1,1 @@
-Necklace;;Warcry Necklace;;1;;HP;;120;;Warrior;;0
+Necklace;;Warcry Necklace;;15;;HP;;120.0;;Warrior;;0;;HP %;;1;;Crit Rate;;2;;ATK;;9

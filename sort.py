@@ -2,8 +2,9 @@ import os
 import shutil
 import sys
 
-# Define the working directory
-folder = os.path.join(os.getcwd(), "Items", "Weapons")
+# Resolve items from the project rather than the caller's working directory.
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+folder = os.path.join(PROJECT_ROOT, "Items", "Weapons")
 
 # Get the sorting method from command-line arguments
 if len(sys.argv) != 2 or sys.argv[1] not in "123456":

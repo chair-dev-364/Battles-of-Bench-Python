@@ -227,11 +227,15 @@ def _remove_metadata_with_ffmpeg(mp3_path):
     tmp = mp3_path + '.nometa.tmp.mp3'
     cmd = [ffmpeg, '-loglevel', 'error', '-y', '-i', mp3_path, '-map', '0:a', '-c', 'copy', '-map_metadata', '-1', tmp]
     try:
-        # Suppress window on Windows
-        creationflags = 0
+        run_options = {"check": True}
         if os.name == 'nt':
-            creationflags = getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000)
-        subprocess.run(cmd, check=True, creationflags=creationflags)
+            # This keyword is Windows-only; omit it entirely on POSIX.
+            run_options["creationflags"] = getattr(
+                subprocess,
+                'CREATE_NO_WINDOW',
+                0x08000000,
+            )
+        subprocess.run(cmd, **run_options)
         # Replace original file atomically
         try:
             os.replace(tmp, mp3_path)
@@ -294,7 +298,7 @@ def preload_sounds():
     try:
         extensions = {'.mp3', '.wav'}
         files = []
-        # Explicit skip list for all music files in Sounds\Music (case-insensitive)
+        # Explicit skip list for all music files in Sounds/Music (case-insensitive)
         skip_music_files = {
             'battle_boss.mp3', 'battle_regular.mp3', 'choose.mp3',
             'download1.mp3', 'download2.mp3', 'download3.mp3',
@@ -907,7 +911,7 @@ def udp_listener():
 
 
 # --- File-queue fast-path (zero-launch) ---
-# Uses an append-only queue file that CMD can write to with built-in `echo`.
+# Uses an append-only queue file that the game can write without a new process.
 QUEUE_FILE = os.path.join(BASE_DIR, 'General', 'Temp', 'sound_cmd_queue.txt')
 QUEUE_POLL_INTERVAL = 0.001  # 1 ms poll for extreme low-latency
 

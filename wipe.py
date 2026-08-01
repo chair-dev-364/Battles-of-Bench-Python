@@ -4,27 +4,34 @@ import time
 import math
 import random
 import shutil
-import ctypes
 import argparse
-import winsound  # For optional beep sound
 
-# ===== Windows console setup =====
-STD_OUTPUT_HANDLE = -11
-handle = ctypes.windll.kernel32.GetStdHandle(STD_OUTPUT_HANDLE)
+def enable_virtual_terminal_output():
+    """Enable ANSI output when running in a Windows console."""
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
 
-# little struct for cursor pos
-class COORD(ctypes.Structure):
-    _fields_ = [("X", ctypes.c_short), ("Y", ctypes.c_short)]
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.GetStdHandle(-11)
+        mode = ctypes.c_uint()
+        if kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+            kernel32.SetConsoleMode(handle, mode.value | 0x0004)
+    except (AttributeError, OSError):
+        pass
+
+
+enable_virtual_terminal_output()
 
 def move_cursor(x, y):
     """Move the cursor to column x, row y (0-indexed)."""
-    pos = COORD(x, y)
-    ctypes.windll.kernel32.SetConsoleCursorPosition(handle, pos)
+    sys.stdout.write(f"\033[{y + 1};{x + 1}H")
 
 def write_text(text):
-    """Write wide-character text to the console."""
-    written = ctypes.c_ulong(0)
-    ctypes.windll.kernel32.WriteConsoleW(handle, ctypes.c_wchar_p(text), len(text), ctypes.byref(written), None)
+    """Write text immediately using the active terminal encoding."""
+    sys.stdout.write(text)
+    sys.stdout.flush()
 
 def sleep_ms(ms):
     time.sleep(ms / 1000.0)
@@ -189,13 +196,14 @@ MODES = {
 
 # ===== optional sound =====
 def play_sound_effect():
-    # simple beep
-    winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
+    # ASCII BEL is the portable terminal-notification equivalent.
+    sys.stdout.write("\a")
+    sys.stdout.flush()
 
 # ===== Argument Parsing & Main Runner =====
 def main():
     parser = argparse.ArgumentParser(
-        description="Ultimate Windows Terminal Wipe Engine",
+        description="Terminal wipe engine",
         usage="wipe.py <mode> <delay_ms> [--reverse] [--color] [--noise] [--cycles N] [--sound]"
     )
     parser.add_argument("mode", help="Wipe mode. Options: " + ", ".join(MODES.keys()))

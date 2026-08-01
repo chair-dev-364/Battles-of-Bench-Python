@@ -1,1 +1,1 @@
-Ring;;Heartstone Ring;;1;;ATK %;;3;;Titan;;0
+Ring;;Heartstone Ring;;10;;ATK %;;3.0;;Titan;;0;;Crit Damage;;5;;ATK;;15

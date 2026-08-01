@@ -1,1 +1,1 @@
-Bracelet;;Shade Bracelet;;1;;Speed;;4;;Assassin;;0
+Bracelet;;Shade Bracelet;;15;;Speed;;4.0;;Assassin;;0;;ATK %;;3;;DEF;;3;;Crit Damage;;2

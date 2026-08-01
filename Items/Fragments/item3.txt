@@ -1,1 +1,1 @@
-Bracelet;;Ironpulse Bracelet;;1;;ATK;;22;;Warrior;;0
+Bracelet;;Ironpulse Bracelet;;6;;ATK;;22.0;;Warrior;;0;;DEF;;5

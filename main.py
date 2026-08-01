@@ -39,10 +39,16 @@ from Settings.schema import (
     SETTINGS_BY_ATTR,
     SETTINGS_PAGES,
 )
-import msvcrt, os, time, sys, ctypes, ast, math, operator as op, subprocess, json, re, random, shutil, socket, tempfile, stat, urllib.request  # noqa: E401, E402
+import atexit, os, time, sys, ctypes, ast, math, operator as op, subprocess, json, re, random, shlex, shutil, tempfile, stat, urllib.request  # noqa: E401, E402
 from pathlib import Path  # noqa: E402
 from typing import Literal  # noqa: E402
 RGB="[38;2;"
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+# Legacy gameplay paths are relative by design. Anchor them once so launching
+# the script through Finder, a desktop shortcut, or an absolute path uses the
+# same save and asset directories on every operating system.
+os.chdir(PROJECT_ROOT)
 
 
 import time
@@ -55,13 +61,17 @@ from console_input import key
 
 version=2
 subversion=0
-subberversion="0-pre1"
+subberversion="0-pre2"
 
 CHARACTER_MAX_LEVEL = 100
 WEAPON_MAX_LEVEL = 25
 ARMOR_MAX_LEVEL = 20
 HEADWEAR_MAX_LEVEL = 20
 FRAGMENT_MAX_LEVEL = 15
+WEAPON_REFINEMENT_MAX = 3
+WEAPON_REFINEMENT_CRIT_DAMAGE = 7.5
+WEAPON_REFINEMENT_ATK_RATE = 0.10
+WEAPON_REFINEMENT_DUST_BASE_COST = 50
 
 FRAGMENT_SLOTS = ("Bracelet", "Necklace", "Ring")
 FRAGMENT_MAIN_STATS = {
@@ -89,6 +99,18 @@ FRAGMENT_PERCENT_STATS = {
     "HP %",
     "Crit Rate",
     "Crit Damage",
+}
+FRAGMENT_OFFENSIVE_SCALE = 0.5
+FRAGMENT_BONUS_SCALES = {
+    "atk_flat": FRAGMENT_OFFENSIVE_SCALE,
+    "atk_percent": FRAGMENT_OFFENSIVE_SCALE,
+    "hp_flat": 0.5,
+    "hp_percent": 0.75,
+    "def_flat": 0.5,
+    "def_percent": 0.5,
+    "speed": 1.0,
+    "crit_rate": FRAGMENT_OFFENSIVE_SCALE,
+    "crit_damage": FRAGMENT_OFFENSIVE_SCALE,
 }
 FRAGMENT_SETS = {
     "Warrior": {
@@ -125,54 +147,127 @@ if subberversion != 0:
 else:
     TITLE = f"Battles of Bench - beta {version}.{subversion}"
 
-os.system(f"title {TITLE}")
-sys.stdout.reconfigure(encoding="utf-8") # actually make it display shit
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8") # actually make it display shit
+
+
+def _enable_virtual_terminal_output():
+    """Enable ANSI output on Windows; POSIX terminals already support it."""
+    if os.name != "nt":
+        return
+    try:
+        kernel32 = ctypes.windll.kernel32
+        output_handle = kernel32.GetStdHandle(-11)
+        mode = ctypes.c_uint()
+        if kernel32.GetConsoleMode(output_handle, ctypes.byref(mode)):
+            kernel32.SetConsoleMode(output_handle, mode.value | 0x0004)
+    except (AttributeError, OSError):
+        pass
+
+
+def _set_terminal_title(title):
+    """Set the terminal title without invoking a platform-specific shell."""
+    if getattr(sys.stdout, "isatty", lambda: False)():
+        sys.stdout.write(f"\x1b]0;{title}\x07")
+        sys.stdout.flush()
+
+
+def _create_windows_kill_job(process):
+    """Keep Windows' kill-on-parent-close behavior for the sound helper."""
+    if os.name != "nt":
+        return None
+
+    from ctypes import wintypes
+
+    class JOBOBJECT_BASIC_LIMIT_INFORMATION(ctypes.Structure):
+        _fields_ = [
+            ("PerProcessUserTimeLimit", ctypes.c_longlong),
+            ("PerJobUserTimeLimit", ctypes.c_longlong),
+            ("LimitFlags", wintypes.DWORD),
+            ("MinimumWorkingSetSize", ctypes.c_size_t),
+            ("MaximumWorkingSetSize", ctypes.c_size_t),
+            ("ActiveProcessLimit", wintypes.DWORD),
+            ("Affinity", ctypes.c_size_t),
+            ("PriorityClass", wintypes.DWORD),
+            ("SchedulingClass", wintypes.DWORD),
+        ]
+
+    class IO_COUNTERS(ctypes.Structure):
+        _fields_ = [
+            ("ReadOperationCount", ctypes.c_ulonglong),
+            ("WriteOperationCount", ctypes.c_ulonglong),
+            ("OtherOperationCount", ctypes.c_ulonglong),
+            ("ReadTransferCount", ctypes.c_ulonglong),
+            ("WriteTransferCount", ctypes.c_ulonglong),
+            ("OtherTransferCount", ctypes.c_ulonglong),
+        ]
+
+    class JOBOBJECT_EXTENDED_LIMIT_INFORMATION(ctypes.Structure):
+        _fields_ = [
+            ("BasicLimitInformation", JOBOBJECT_BASIC_LIMIT_INFORMATION),
+            ("IoInfo", IO_COUNTERS),
+            ("ProcessMemoryLimit", ctypes.c_size_t),
+            ("JobMemoryLimit", ctypes.c_size_t),
+            ("PeakProcessMemoryUsed", ctypes.c_size_t),
+            ("PeakJobMemoryUsed", ctypes.c_size_t),
+        ]
+
+    try:
+        kernel32 = ctypes.windll.kernel32
+        kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+        job_handle = kernel32.CreateJobObjectW(None, None)
+        if not job_handle:
+            return None
+
+        job_info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
+        job_info.BasicLimitInformation.LimitFlags = 0x00002000
+        configured = kernel32.SetInformationJobObject(
+            job_handle,
+            9,  # JobObjectExtendedLimitInformation
+            ctypes.byref(job_info),
+            ctypes.sizeof(job_info),
+        )
+        assigned = configured and kernel32.AssignProcessToJobObject(
+            job_handle,
+            process._handle,
+        )
+        if not assigned:
+            kernel32.CloseHandle(job_handle)
+            return None
+        return job_handle
+    except (AttributeError, OSError):
+        return None
+
+
+def _stop_sound_process():
+    """Stop the helper on normal exits on every supported operating system."""
+    if sound_process.poll() is None:
+        try:
+            sound_process.terminate()
+            sound_process.wait(timeout=1)
+        except (OSError, subprocess.TimeoutExpired):
+            try:
+                sound_process.kill()
+            except OSError:
+                pass
+    if _windows_sound_job is not None:
+        try:
+            ctypes.windll.kernel32.CloseHandle(_windows_sound_job)
+        except (AttributeError, OSError):
+            pass
+
+
+_enable_virtual_terminal_output()
+_set_terminal_title(TITLE)
 
 sound_process = subprocess.Popen(
-    [sys.executable, "sound_player.py"],
+    [sys.executable, str(PROJECT_ROOT / "sound_player.py")],
+    cwd=str(PROJECT_ROOT),
     stdout=subprocess.DEVNULL,
-    stderr=subprocess.DEVNULL
+    stderr=subprocess.DEVNULL,
 )
-
-current_pid = os.getpid()
-current_script = os.path.abspath(__file__)
-
-kernel32 = ctypes.windll.kernel32
-
-# make job object
-job = kernel32.CreateJobObjectW(None, None)
-
-# kill child processes when this one dies
-class JOBOBJECT_EXTENDED_LIMIT_INFORMATION(ctypes.Structure):
-    _fields_ = [
-        ("BasicLimitInformation", ctypes.c_byte * 40),
-        ("IoInfo", ctypes.c_byte * 48),
-        ("ProcessMemoryLimit", ctypes.c_size_t),
-        ("JobMemoryLimit", ctypes.c_size_t),
-        ("PeakProcessMemoryUsed", ctypes.c_size_t),
-        ("PeakJobMemoryUsed", ctypes.c_size_t),
-    ]
-
-info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
-JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
-
-ctypes.memset(ctypes.byref(info), 0, ctypes.sizeof(info))
-info.BasicLimitInformation[16] = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE & 0xFF
-
-kernel32.SetInformationJobObject(
-    job,
-    9,  # JobObjectExtendedLimitInformation
-    ctypes.byref(info),
-    ctypes.sizeof(info)
-)
-
-kernel32.AssignProcessToJobObject(job, kernel32.GetCurrentProcess())
-
-kernel32 = ctypes.windll.kernel32
-handle = kernel32.GetStdHandle(-11)
-mode = ctypes.c_uint()
-kernel32.GetConsoleMode(handle, ctypes.byref(mode))
-kernel32.SetConsoleMode(handle, mode.value | 4)
+_windows_sound_job = _create_windows_kill_job(sound_process)
+atexit.register(_stop_sound_process)
 
 """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 🎯 FUNCTIONS
@@ -202,7 +297,7 @@ def get_item_max_level(category):
         "Fragments": FRAGMENT_MAX_LEVEL,
     }.get(category)
 
-
+# same thing, let's go.
 def clamp_item_level(level, category):
     try:
         parsed = int(level)
@@ -214,7 +309,7 @@ def clamp_item_level(level, category):
         return max(0, parsed)
     return max(0, min(parsed, max_level))
 
-
+# oh wow, again!
 def required_player_level_for_item(item_level, category):
     level = clamp_item_level(item_level, category)
     if level <= 1:
@@ -272,21 +367,11 @@ def char_round(value):
 
 # Simple. "cursor(True)" to show, "cursor(False)" to hide.
 def cursor(x):
-    handle = ctypes.windll.kernel32.GetStdHandle(-11)  # STD_OUTPUT_HANDLE
-    info = CONSOLE_CURSOR_INFO()
-    ctypes.windll.kernel32.GetConsoleCursorInfo(handle, ctypes.byref(info))
-    info.bVisible = bool(x)  # True = show, False = hide
-    ctypes.windll.kernel32.SetConsoleCursorInfo(handle, ctypes.byref(info))
+    print("\x1b[?25h" if x else "\x1b[?25l", end="", flush=True)
 
 # Move cursor to (row, col). Yes, it's reversed because I got used to ANSI.
 def move(row, col):
     print(f"[{row};{col}H", end="")
-
-# Wrong answer in getx() later, obliterate it.
-def clear_input(row, start_col, width):
-    move(row, start_col)
-    print(" " * width, end="")
-    move(row, start_col)
 
 # Flashes the prompt in red for a moment. Used in getx() when input is invalid.
 def flash_prompt(row, col, prompt):
@@ -412,16 +497,19 @@ def getx(
                     back = visible_len(preview_text)
                     print(f"\x1b[{back}D", end="", flush=True)
 
-                ch = msvcrt.getwch()
+                ch = key()
 
-                if ch == "\r":
+                if ch == "enter":
                     break
 
-                if ch == "\x08":
+                if ch == "backspace":
                     buffer = buffer[:-1]
                     continue
 
-                if not ch.isprintable():
+                if ch == "space":
+                    ch = " "
+
+                if not isinstance(ch, str) or len(ch) != 1 or not ch.isprintable():
                     continue
 
                 if max_len and len(buffer) >= max_len:
@@ -706,11 +794,6 @@ class SettingsData:
         self.menu_transitions = False
         return changed
 
-    def _create_default_file(self):
-        with open(self._path, "w", encoding="utf-8") as f:
-            json.dump(self._persistent_fields, f, indent=4)
-
-
 # Create global instance
 setting = SettingsData()
 class ItemData:
@@ -768,10 +851,6 @@ class KeyBinds:
 
     def reset(self):
         self._owner.reset_fields(self._persistent_fields)
-
-    def _create_default_file(self):
-        self._owner.save()
-
 
 bind = KeyBinds(setting)
 settings_editor = SettingEditor()
@@ -841,26 +920,19 @@ uncolor = ESC + "39m"
 unbg = ESC + "49m"
 # ...but at least they work.
 
-class CONSOLE_CURSOR_INFO(ctypes.Structure):
-    _fields_ = [
-        ("dwSize", ctypes.c_int),
-        ("bVisible", ctypes.c_bool)
-    ] # yep, cursor hide core
-
-# Clear screen. Simple as that. Sorry, Linux or Mac.
+# Clear the visible terminal and return the cursor to the top-left corner.
 def cls():
-    os.system("cls")
+    print("\x1b[2J\x1b[H", end="", flush=True)
 
+# animation configs!! for accessibility settings.
 
 def animation_speed_name():
-    """Return the effective tiny-effect animation mode."""
     if getattr(setting, "reduce_motion", False):
         return "Instant"
     return getattr(setting, "animation_speed", "Normal")
 
 
 def animation_rate():
-    """Normal runs at 1x and Fast at 1.5x."""
     return 1.5 if animation_speed_name() == "Fast" else 1.0
 
 
@@ -869,14 +941,14 @@ def animations_enabled():
 
 
 def animation_sleep(seconds):
-    """Sleep for an animation frame using the configured playback rate."""
     if not animations_enabled():
         return
     time.sleep(max(0.0, seconds) / animation_rate())
 
+# -- end prev.
 
+# cls but another cls.
 def screen_wipe(mode, delay_ms):
-    """Run a menu wipe, or clear instantly when transitions are disabled."""
     transitions_enabled = getattr(setting, "menu_transitions", True)
     if (
         getattr(setting, "reduce_motion", False)
@@ -886,45 +958,58 @@ def screen_wipe(mode, delay_ms):
         cls()
         return
 
-    wipe_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wipe.py")
-    subprocess.run([sys.executable, wipe_path, mode, str(delay_ms)])
+    wipe_path = PROJECT_ROOT / "wipe.py"
+    subprocess.run([sys.executable, str(wipe_path), mode, str(delay_ms)])
+
+
+def open_text_file(path):
+    """Open a text file in the platform's editor and wait when supported."""
+    resolved_path = Path(path)
+    if not resolved_path.is_absolute():
+        resolved_path = PROJECT_ROOT / resolved_path
+    resolved_path = resolved_path.resolve()
+
+    if os.name == "nt":
+        command = ["notepad.exe", str(resolved_path)]
+    else:
+        configured_editor = os.environ.get("VISUAL") or os.environ.get("EDITOR")
+        if configured_editor:
+            command = shlex.split(configured_editor) + [str(resolved_path)]
+        elif sys.platform == "darwin":
+            command = ["open", "-W", str(resolved_path)]
+        else:
+            opener = shutil.which("xdg-open")
+            if opener:
+                command = [opener, str(resolved_path)]
+            else:
+                fallback_editor = shutil.which("nano") or shutil.which("vi")
+                if not fallback_editor:
+                    return False
+                command = [fallback_editor, str(resolved_path)]
+
+    try:
+        return subprocess.run(command, check=False).returncode == 0
+    except OSError:
+        return False
 
 
 # Key. As simple as that. Press a key, and... that's the return. With some specials.
-
+#[[removed and replaced by a key-mouse detect from imports!]]
 
 # INTERACTIVITY TIME! Sound() plays a sound effect. It does this by writing the command to a text file, which is then read by the sound player.
 def sound(cmd, channel="sound", pan=0.0):
-    """Queue audio without blocking the UI.
-
-    Existing calls remain UI sounds. Battle effects can opt into the separate
-    SFX volume and provide a left/right position for spatial audio.
-    """
-    if channel not in ("sound", "sfx", "music"):
+    if channel not in ("sound", "sfx", "music"): # set your type!
         raise ValueError(f"Unknown audio channel: {channel}")
     pan = max(-1.0, min(1.0, float(pan)))
     command = str(cmd)
     if channel != "sound" or pan:
         command = f"@{channel},{pan:.2f}|{command}"
-    path = os.path.join(os.getcwd(), "general", "temp", "sound_cmd_queue.txt")
+    path = PROJECT_ROOT / "General" / "Temp" / "sound_cmd_queue.txt"
+    path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "a", encoding="utf-8") as f:
         f.write(command + "\n")
 
-
-def stopsound(target=None):
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-            if target is None:
-                msg = b"STOP"
-            elif target.lower() == "music":
-                msg = b"STOP MUSIC"
-            else:
-                msg = f"STOP {target}".encode('utf-8')
-            s.sendto(msg, ("127.0.0.1", 65432))
-    except Exception:
-        pass
-
-
+# file operations!
 def update(path, value):
     # Normalize path
     full_path = os.path.join(os.getcwd(), path + ".txt")
@@ -961,7 +1046,7 @@ def _reset_object(obj, defaults):
     for key, value in defaults.items():
         setattr(obj, key, value)
 
-
+# item stat loading time!
 def _load_armor_item_fields(target, parts, category):
     target.type_raw = parts[0] if len(parts) > 0 else None
     target.rarity = parts[1] if len(parts) > 1 else None
@@ -1207,7 +1292,7 @@ def load_fragment_item_fields(target, parts):
             break
     return target
 
-
+# dev tools
 def create_fragment(slot=None, main_stat=None, set_name=None, level=1):
     slot = slot if slot in FRAGMENT_SLOTS else random.choice(FRAGMENT_SLOTS)
     set_name = set_name if set_name in FRAGMENT_SETS else random.choice(tuple(FRAGMENT_SETS))
@@ -1251,7 +1336,7 @@ def fragment_slot_path(slot):
         return None
     return f"Items/active_fragment_{slot.lower()}"
 
-
+# for your old guys:
 def migrate_legacy_fragment_slot():
     for slot in FRAGMENT_SLOTS:
         path = fragment_slot_path(slot)
@@ -1424,7 +1509,10 @@ def load_item(item_id, category="Weapons"):
         item.substat_value = int(item.substat_value)
         item.level_power = float(item.level_power)
         item.locked = int(item.locked)
-        item.refine = int(item.refine)
+        item.refine = max(
+            0,
+            min(WEAPON_REFINEMENT_MAX, int(item.refine)),
+        )
 
         type_map = {
             None: "❌",
@@ -1511,15 +1599,6 @@ def save_item(item_id, category="Weapons"):
     with open(path, "w", encoding="utf-8") as f:
         f.write(line)
 
-
-
-
-BASE = Path("Settings/Keybinds")
-# Loads a bind by name. E.g. load_bind("attack") would read the "attack.txt" file in the Keybinds folder and return the value.
-def load_bind(name):
-    value = read(BASE / f"{name}.txt").strip()
-    return value
-    
 def load_binds():
     bind.load()
 
@@ -1675,12 +1754,41 @@ def get_actual_defense(item_obj, level=None):
     return get_scaled_equipment_stat(item_obj, "defense", level)
 
 
-def get_equipped_fragments():
-    return [
-        FRAGMENT_EQUIPPED_OBJECTS[slot]
-        for slot in FRAGMENT_SLOTS
-        if getattr(FRAGMENT_EQUIPPED_OBJECTS[slot], "name", None)
-    ]
+def scale_fragment_bonus(key, value):
+    """Return the effective value granted by one fragment stat or set effect."""
+    scaled = float(value) * FRAGMENT_BONUS_SCALES.get(key, 1.0)
+    if key == "hp_percent":
+        return round(scaled)
+    return compact_number(scaled)
+
+
+def scale_fragment_stat(stat_name, value):
+    stat_keys = {
+        "ATK": "atk_flat",
+        "ATK %": "atk_percent",
+        "HP": "hp_flat",
+        "HP %": "hp_percent",
+        "DEF": "def_flat",
+        "Speed": "speed",
+        "Crit Rate": "crit_rate",
+        "Crit Damage": "crit_damage",
+    }
+    normalized = normalize_fragment_stat(stat_name)
+    return scale_fragment_bonus(stat_keys.get(normalized, ""), value)
+
+
+def fragment_stat_icon(stat_name):
+    """Return a compact Unicode icon for a fragment stat."""
+    return {
+        "ATK": "⚔",
+        "ATK %": "⚔",
+        "HP": "♥",
+        "HP %": "♥",
+        "DEF": "🛡",
+        "Speed": "➟",
+        "Crit Rate": "✦",
+        "Crit Damage": "✴",
+    }.get(normalize_fragment_stat(stat_name), "•")
 
 
 def get_fragment_bonuses():
@@ -1707,15 +1815,22 @@ def get_fragment_bonuses():
         "Crit Rate": "crit_rate",
         "Crit Damage": "crit_damage",
     }
-    equipped = get_equipped_fragments()
+    equipped = [
+        FRAGMENT_EQUIPPED_OBJECTS[slot]
+        for slot in FRAGMENT_SLOTS
+        if getattr(FRAGMENT_EQUIPPED_OBJECTS[slot], "name", None)
+    ]
     for equipped_fragment in equipped:
         main_key = stat_keys.get(normalize_fragment_stat(equipped_fragment.main_stat))
         if main_key:
-            bonuses[main_key] += get_fragment_main_stat_value(equipped_fragment)
+            bonuses[main_key] += scale_fragment_bonus(
+                main_key,
+                get_fragment_main_stat_value(equipped_fragment),
+            )
         for stat_name, value in get_fragment_substats(equipped_fragment):
             key = stat_keys.get(stat_name)
             if key:
-                bonuses[key] += value
+                bonuses[key] += scale_fragment_bonus(key, value)
 
     set_counts = {}
     for equipped_fragment in equipped:
@@ -1737,12 +1852,15 @@ def get_fragment_bonuses():
                 active_set_details.append((
                     label,
                     ", ".join(
-                        format_fragment_set_effect(key, value)
+                        format_fragment_set_effect(
+                            key,
+                            scale_fragment_bonus(key, value),
+                        )
                         for key, value in effects.items()
                     ),
                 ))
                 for key, value in effects.items():
-                    bonuses[key] += value
+                    bonuses[key] += scale_fragment_bonus(key, value)
     bonuses["active_sets"] = active_sets
     bonuses["active_set_details"] = active_set_details
     return bonuses
@@ -3238,10 +3356,6 @@ def battle_heal():
     game.goto = battle_loop
     return
 
-def battle_forfeit():
-    game.goto = battle_loop
-    return
-
 # battle loop incoming:
 def battle_loop():
     game.goto = new_turn
@@ -3477,11 +3591,12 @@ def refresh_player_core_stats(reload_equipment=True):
     fragment_bonuses = get_fragment_bonuses()
     player.fragment_bonuses = fragment_bonuses
 
-    damage_without_fragments = base_atk + item.actual_atk
-    total_dmg = round(
-        (damage_without_fragments + fragment_bonuses["atk_flat"])
+    damage_before_weapon = round(
+        (base_atk + fragment_bonuses["atk_flat"])
         * (1 + fragment_bonuses["atk_percent"] / 100)
     )
+    total_dmg = damage_before_weapon + item.actual_atk
+    damage_without_fragments = base_atk + item.actual_atk
 
     raw_def = base_def
     if getattr(item, "substat", None) == "Defence":
@@ -3509,7 +3624,7 @@ def refresh_player_core_stats(reload_equipment=True):
     player.total_dmg = total_dmg
     player.total_def = effective_def(raw_def)
     player.total_hp = total_hp
-    player.bonus_atk = player.total_dmg - base_atk
+    player.bonus_atk = player.total_dmg - base_atk - item.actual_atk
     player.bonus_def = round(
         player.total_def - effective_def(base_def),
         1,
@@ -3574,6 +3689,17 @@ def refresh_player_secondary_stats():
     player.fragment_speed_bonus = bonuses["speed"]
     player.speed = 100 + weapon_speed + level_speed + bonuses["speed"]
     player.fragment_crit_damage_bonus = bonuses["crit_damage"]
+
+
+def character_exp_progress(level, xp, xp_needed, bar_length=30):
+    """Return EXP percentage/bar fill, or None once the level cap is reached."""
+    if int(level) >= CHARACTER_MAX_LEVEL:
+        return None
+    if xp_needed <= 0:
+        return 0, 0
+    percent = min(100, max(0, round((xp / xp_needed) * 100)))
+    filled = min(bar_length, max(0, (xp * bar_length) // xp_needed))
+    return percent, filled
 
 
 # (i'm sorry)
@@ -3962,20 +4088,24 @@ def character():
     FILLED_SEG = f"{xa}█"
     EMPTY_SEG = f"{x0}█"
 
-    if EXP_NEEDED > 0:
-        percent = min(100, max(0, round((EXP / EXP_NEEDED) * 100)))
-        FILLED = min(BAR_LENGTH, max(0, (EXP * BAR_LENGTH) // EXP_NEEDED))
+    exp_progress = character_exp_progress(
+        player.level,
+        EXP,
+        EXP_NEEDED,
+        BAR_LENGTH,
+    )
+    if exp_progress is None:
+        print(f"\033[18;86H{reset}{rgb(186,243,219)}✦ \033[18;88H{bold}MAX LEVEL{reset}")
+        print(f"\033[19;88H{reset}{x7}Level cap reached.{reset}")
     else:
-        percent = 0
-        FILLED = 0
-
-    EXP_BAR = (FILLED_SEG * FILLED) + (EMPTY_SEG * (BAR_LENGTH - FILLED))
-    print(f"\033[18;86H{reset}{rgb(255,219,187)}{rgb(186,243,219)}✚{xf}\033[18;88H{bold}EXP: {EXP_BAR}{reset} ", end="")
-    if percent < 10:
-        print(f"{xf}{bold}{rgback(0,0,1)}\033[18;94H{percent}%")
-    else:
-        print(f"{xba}{xf}{bold}\033[18;94H{percent}%")
-    print(f"\033[19;93H{reset}{x7}{rgb(186,243,219)}↑ {bold}{EXP}/{EXP_NEEDED} {reset}XP to get level {player.level+1}{reset} ")
+        percent, FILLED = exp_progress
+        EXP_BAR = (FILLED_SEG * FILLED) + (EMPTY_SEG * (BAR_LENGTH - FILLED))
+        print(f"\033[18;86H{reset}{rgb(255,219,187)}{rgb(186,243,219)}✚{xf}\033[18;88H{bold}EXP: {EXP_BAR}{reset} ", end="")
+        if percent < 10:
+            print(f"{xf}{bold}{rgback(0,0,1)}\033[18;94H{percent}%")
+        else:
+            print(f"{xba}{xf}{bold}\033[18;94H{percent}%")
+        print(f"\033[19;93H{reset}{x7}{rgb(186,243,219)}↑ {bold}{EXP}/{EXP_NEEDED} {reset}XP to get level {player.level+1}{reset} ")
     print(f"""
 [15;20H{item.type} {xlyellow}Attack{reset}{x8}.....{bold}{xe}{char_round(round(totaldmg))}{reset}
 [16;20H🛡️ {x3}Defence{reset}{x8}....{bold}{xb}{char_round(round(totaldef,1))}%{reset}
@@ -4176,17 +4306,6 @@ def settings2():
 
     def play_boolean_toggle_sound(value):
         sound("map_switch2" if value else "map_switch1")
-
-    def draw_category_label(index):
-        move(9 + index * 4, 2)
-        shine_offset = (time.monotonic() * 0.65) % 1.0
-        label = shine(
-            CATEGORY_LABELS[index],
-            offset=shine_offset,
-            color=CATEGORY_SELECTED_RGB,
-            bold=True,
-        )
-        print(label, end="", flush=True)
 
     # blanks from top left to bottom right (row, col style)
     blank(SETTINGS_ROW, SETTINGS_COL,  30, SETTINGS_COL + BOX_WIDTH + 2)
@@ -4455,7 +4574,15 @@ def settings2():
                     draw_editing_setting_name(focused_item, focused_row)
                     continue
                 if category_focused:
-                    draw_category_label(d.settings_category - 1)
+                    category_index = d.settings_category - 1
+                    move(9 + category_index * 4, 2)
+                    label = shine(
+                        CATEGORY_LABELS[category_index],
+                        offset=(time.monotonic() * 0.65) % 1.0,
+                        color=CATEGORY_SELECTED_RGB,
+                        bold=True,
+                    )
+                    print(label, end="", flush=True)
                     continue
                 continue
 
@@ -4491,8 +4618,8 @@ def settings2():
                     continue
 
                 if mouse_event in ("down", "drag") and k.get("button") == "left":
-                    # Win32 mouse coordinates are zero-based; the renderer's
-                    # row/column coordinates are one-based.
+                    # Input coordinates are zero-based on every platform; the
+                    # renderer's row/column coordinates are one-based.
                     clicked_index = setting_index_at(
                         k["x"],
                         k["y"],
@@ -5242,7 +5369,7 @@ def screensetup():
         k = key(timeout=1)
         if k.lower() == "y":
             # create screensetup.txt with contents "okay"
-            with open("general/screensetup.txt", "w") as f:
+            with open("General/screensetup.txt", "w") as f:
                 f.write("okay")
             game.goto = startup
             return
@@ -5306,11 +5433,11 @@ def first_time_setup():
                                 {x7}╰────────────────────────────────────────────────────╯{reset}
 """.strip(),end="",flush=True)
     player.name = getx(23,35,f"{xb}{bold}› {xf}{bold}",max_len=15)
-    # save player name into settings (general/playername.txt)
-    with open("general/playername.txt", "w") as f:
+    # save player name into settings (General/playername.txt)
+    with open("General/playername.txt", "w") as f:
         f.write(player.name)
     # setup confirmed! write into setup
-    with open("general/setup.txt", "w") as f:
+    with open("General/setup.txt", "w") as f:
         f.write("okay")
     sound("payment_success")
     # wipe screen with animation (using wipe.py)
@@ -5391,17 +5518,26 @@ def noitems():
             return
 
 def startup():
-    # check if <cd>/general/screensetup.txt exists
-    if not os.path.exists("general/screensetup.txt"):
+    # check if <cd>/General/screensetup.txt exists
+    if not os.path.exists("General/screensetup.txt"):
         game.goto = screensetup
         return
-    # check if <cd>/general/setup.txt exists
-    if not os.path.exists("general/setup.txt"):
+    # check if <cd>/General/setup.txt exists
+    if not os.path.exists("General/setup.txt"):
         game.goto = first_time_setup
         return
     sound(random.choice(["music_default"]))
     game.goto = startup_animation
     return
+
+
+INVENTORY_RARITY_STYLES = {
+    "08": (xf, (255, 255, 255)),
+    "02": (xa, (70, 198, 107)),
+    "03": (xb, (122, 195, 230)),
+    "0d": (xd, (214, 138, 230)),
+    "0e": (xe, (240, 232, 158)),
+}
 
 
 def inv_category_title(category):
@@ -5439,6 +5575,16 @@ def inv_active_paths(category):
     return [path] if path else []
 
 
+def inv_item_number_marker(category, item_id, item_obj):
+    """Show equipped fragments with a checkmark in the inventory list."""
+    if category == "Fragments":
+        equipped_path = inv_active_path(category, item_obj)
+        equipped_id = read(equipped_path, default="none") if equipped_path else "none"
+        if str(item_id) == str(equipped_id).strip():
+            return "✓"
+    return "›"
+
+
 def inv_type_icon(item_obj):
     type_raw = getattr(item_obj, "type_raw", None)
     fragment_icons = {
@@ -5469,26 +5615,20 @@ def inv_type_icon(item_obj):
     return type_map.get(type_raw, type_raw)
 
 
-def inv_type_label(item_obj):
-    type_raw = getattr(item_obj, "type_raw", None)
-    if not type_raw or type_raw == "None":
-        return "None"
-    return str(type_raw).title()
+INVENTORY_COMPARISON_CATEGORIES = {"Weapons", "Bodywear", "Helmets"}
 
 
-def inv_compare_label(category):
-    if category == "Fragments":
-        return "main stat"
-    return "DMG" if category == "Weapons" else "DEF"
+def inv_category_supports_comparison(category):
+    return category in INVENTORY_COMPARISON_CATEGORIES
 
 
 def inv_compare_value(item_obj, category):
+    if not inv_category_supports_comparison(category):
+        raise ValueError(f"{category} items do not support comparison.")
     if category == "Weapons":
         final_atk = get_actual_atk(item_obj)
         crit_bonus = float(getattr(item_obj, "atkcrit", 0)) / 100
         return float(final_atk) * (1 + crit_bonus)
-    if category == "Fragments":
-        return float(get_fragment_main_stat_value(item_obj))
     return float(get_actual_defense(item_obj))
 
 
@@ -5600,18 +5740,100 @@ def apply_item_upgrade(item_obj, category, levels):
         return False, total_cost
 
     if category == "Fragments":
-        # Milestone substats are rolled only after the held confirmation succeeds.
+        # Milestone substats are rolled only inside the validated upgrade.
         apply_fragment_substats(item_obj, target_level)
     setattr(player, currency_attr, currency - total_cost)
     item_obj.level = target_level
     return True, total_cost
 
 
+def weapon_refinement_cost(item_obj, target_stage):
+    """Return the gold cost of reaching a one-based refinement stage."""
+    target_stage = max(1, min(WEAPON_REFINEMENT_MAX, int(target_stage)))
+    level_25_cost = item_upgrade_cost_for_level(
+        item_obj,
+        WEAPON_MAX_LEVEL,
+        "Weapons",
+    )
+    return round_upgrade_price(level_25_cost * (1.5 + target_stage * 0.75))
+
+
+def weapon_refinement_preview(item_obj):
+    """Return the next refinement's stage, ATK, Crit DMG and cost."""
+    current_stage = max(0, int(getattr(item_obj, "refine", 0)))
+    target_stage = min(WEAPON_REFINEMENT_MAX, current_stage + 1)
+    at_max = current_stage >= WEAPON_REFINEMENT_MAX
+    target_base_atk = int(getattr(item_obj, "atk", 0))
+    if not at_max:
+        target_base_atk = max(
+            target_base_atk + 1,
+            round(target_base_atk * (1 + WEAPON_REFINEMENT_ATK_RATE)),
+        )
+    target_actual_atk = round(
+        target_base_atk
+        * (
+            (1 + float(getattr(item_obj, "level_power", 0)))
+            ** int(getattr(item_obj, "level", WEAPON_MAX_LEVEL))
+        )
+    )
+    target_crit_damage = (
+        float(getattr(item_obj, "atkcrit", 0))
+        + (0 if at_max else WEAPON_REFINEMENT_CRIT_DAMAGE)
+    )
+    return {
+        "current_stage": current_stage,
+        "target_stage": target_stage,
+        "target_base_atk": target_base_atk,
+        "target_actual_atk": target_actual_atk,
+        "target_crit_damage": target_crit_damage,
+        "gold_cost": (
+            0 if at_max else weapon_refinement_cost(item_obj, target_stage)
+        ),
+        "dust_cost": (
+            0
+            if at_max
+            else WEAPON_REFINEMENT_DUST_BASE_COST * target_stage
+        ),
+    }
+
+
+def apply_weapon_refinement(item_obj):
+    """Apply one refinement after atomically validating both currencies."""
+    no_cost = {"gold": 0, "dust": 0}
+    current_stage = max(0, int(getattr(item_obj, "refine", 0)))
+    if (
+        int(getattr(item_obj, "level", 0)) < WEAPON_MAX_LEVEL
+        or current_stage >= WEAPON_REFINEMENT_MAX
+    ):
+        return False, no_cost
+
+    preview = weapon_refinement_preview(item_obj)
+    costs = {
+        "gold": preview["gold_cost"],
+        "dust": preview["dust_cost"],
+    }
+    if (
+        getattr(player, "money", 0) < costs["gold"]
+        or getattr(player, "dust", 0) < costs["dust"]
+    ):
+        return False, costs
+
+    player.money -= costs["gold"]
+    player.dust -= costs["dust"]
+    item_obj.atk = preview["target_base_atk"]
+    item_obj.atkcrit = preview["target_crit_damage"]
+    item_obj.refine = preview["target_stage"]
+    return True, costs
+
+
 def item_stat_preview(item_obj, category, level):
     if category == "Weapons":
         return get_actual_atk(item_obj, level=level)
     if category == "Fragments":
-        return get_fragment_main_stat_value(item_obj, level=level)
+        return scale_fragment_stat(
+            item_obj.main_stat,
+            get_fragment_main_stat_value(item_obj, level=level),
+        )
     return get_actual_defense(item_obj, level=level)
 
 
@@ -5655,9 +5877,43 @@ def draw_confirmation_progress(filled, action):
 
 
 def hold_for_confirmation(action, duration=1.2, initial_confirm=False):
-    """Use repeated key events to distinguish a hold from a normal key press."""
+    """Wait for the configured hold or double-tap confirmation gesture."""
     if getattr(d, "inventory_action_mode", None) != action:
         return False
+
+    if getattr(setting, "double_tap_confirmation", False):
+        taps = 1 if initial_confirm else 0
+        last_filled = -1
+        if taps:
+            last_filled = round(43 / 2)
+            draw_confirmation_progress(last_filled, action)
+
+        while True:
+            k = getx(0, 0, expect="key", timeout=0.05)
+            lowered = k.lower() if isinstance(k, str) else ""
+
+            if lowered in ("esc", bind.back.lower()):
+                draw_confirmation_progress(0, action)
+                return False
+
+            if lowered in ("enter", bind.confirm.lower()):
+                taps += 1
+                filled = 43 if taps >= 2 else round(43 / 2)
+                if filled != last_filled:
+                    draw_confirmation_progress(filled, action)
+                    last_filled = filled
+                if taps >= 2:
+                    return True
+                continue
+
+            if k == "TIMEOUT":
+                continue
+
+            taps = 0
+            if last_filled != 0:
+                draw_confirmation_progress(0, action)
+                last_filled = 0
+
     started = time.monotonic() if initial_confirm else None
     last_confirm = started
     repeating = False
@@ -5761,8 +6017,70 @@ def draw_upgrade_menu(
     if message:
         print(f"\033[31;63H{message}{reset}")
     else:
-        confirm_action = "Hold confirm" if category == "Fragments" else "Confirm"
-        print(f"\033[31;63H{xlorange}{confirm_action} → {xlyellow}{bold}ENTER/{bind.confirm.upper()} {reset}{xlorange}| Back → {xlyellow}{bold}{bind.back.upper()}/ESC{reset}")
+        confirm_action = "Confirm"
+        print(f"\033[31;63H{xlorange}{confirm_action} → {xlyellow}{bold}Enter/{bind.confirm.title()} {reset}{xlorange}| Back → {xlyellow}{bold}{bind.back.title()}/Esc{reset}")
+
+
+def draw_refinement_menu(item_obj, message="", draw_title=False):
+    preview = weapon_refinement_preview(item_obj)
+    current_stage = preview["current_stage"]
+    target_stage = preview["target_stage"]
+    current_atk = get_actual_atk(item_obj)
+    current_crit = compact_number(getattr(item_obj, "atkcrit", 0))
+    target_crit = compact_number(preview["target_crit_damage"])
+
+    # Row 30 is the inventory panel separator; clear the content above and
+    # below it without erasing the border.
+    blank(18, 63, 29, 110)
+    blank(31, 63, 31, 110)
+    if draw_title:
+        blank(16, 63, 16, 110)
+        print(f"\033[16;63H{bold}✦ {xd}Refine {item_obj.name}{reset}")
+
+    filled = round((target_stage * 43) / WEAPON_REFINEMENT_MAX)
+    refine_bar = (
+        f"{xd}{'█' * filled}"
+        f"{rgb(54,18,49)}{'█' * (43 - filled)}"
+    )
+    print(f"\033[19;63H{x0}{'█' * 47}")
+    print(f"\033[20;63H██{refine_bar}{x0}██")
+    print(f"\033[21;63H██{refine_bar}{x0}██")
+    print(f"\033[22;63H{x0}{'█' * 47}{reset}")
+
+    print(
+        f"\033[24;63H{xf}Refinement: {x7}R{current_stage} {xf}→ "
+        f"{xd}{bold}R{target_stage}/{WEAPON_REFINEMENT_MAX}{reset}"
+    )
+    print(
+        f"\033[26;63H{xf}ATK: {x7}{current_atk} {xf}→ "
+        f"{xd}{bold}{preview['target_actual_atk']}{reset}"
+    )
+    print(
+        f"\033[27;63H{xf}Crit DMG: {x7}{current_crit}% {xf}→ "
+        f"{xd}{bold}{target_crit}%{reset}"
+    )
+    gold_colour = xd if player.money >= preview["gold_cost"] else xlred
+    dust_colour = xd if player.dust >= preview["dust_cost"] else xlred
+    print(
+        f"\033[28;63H{xf}Gold: {gold_colour}{bold}{preview['gold_cost']}"
+        f"{reset}{x7}  (you have {player.money}){reset}"
+    )
+    print(
+        f"\033[29;63H{xf}Magic dust: {dust_colour}{bold}"
+        f"{preview['dust_cost']}"
+        f"{reset}{x7}  (you have {player.dust}){reset}"
+    )
+
+    if message:
+        print(f"\033[31;63H{message}{reset}")
+    elif current_stage >= WEAPON_REFINEMENT_MAX:
+        print(f"\033[31;63H{xd}{bold}Maximum refinement reached.{reset}")
+    else:
+        print(
+            f"\033[31;63H{xd}Refine → {bold}Enter/{bind.confirm.title()} "
+            f"{reset}{xlorange}| Back → {xlyellow}{bold}"
+            f"{bind.back.title()}/Esc{reset}"
+        )
 
 
 def upgrade_selected_item():
@@ -5781,39 +6099,119 @@ def _upgrade_selected_item_flow():
     if not item_obj or max_level is None:
         return False
 
-    current_level = clamp_item_level(getattr(item_obj, "level", 0), game.sel)
-    usable_level = min(
-        max_level,
-        max_item_level_for_player(game.sel, player.level),
-    )
-    available_levels = usable_level - current_level
-    if available_levels <= 0:
-        blank(31, 63, 31, 110)
-        if current_level >= max_level:
-            message = "This item is already at its maximum level."
-        else:
-            next_level = min(max_level, current_level + 1)
-            required_level = required_player_level_for_item(next_level, game.sel)
-            message = f"Reach player level {required_level} to upgrade this item again."
-        print(f"\033[31;63H{xlred}🚫 {message}{reset}")
-        sound("error2")
-        return False
-
     levels = 1
-    currency = player.dust if game.sel == "Fragments" else player.money
-    if getattr(setting, "item_level_up_mode", "One at a Time") == "All":
-        affordable_levels = max_affordable_upgrade_levels(
-            item_obj,
-            game.sel,
-            available_levels,
-            currency,
-        )
-        levels = max(1, affordable_levels)
     message = ""
     draw_title = True
+    screen_mode = None
 
     while True:
         item_obj = load_item(d.currsel, game.sel)
+        current_level = clamp_item_level(
+            getattr(item_obj, "level", 0),
+            game.sel,
+        )
+
+        if game.sel == "Weapons" and current_level >= WEAPON_MAX_LEVEL:
+            if screen_mode != "refinement":
+                screen_mode = "refinement"
+                draw_title = True
+                message = ""
+
+            draw_refinement_menu(
+                item_obj,
+                message,
+                draw_title=draw_title,
+            )
+            draw_title = False
+            k = getx(0, 0, expect="key")
+            lowered = k.lower() if isinstance(k, str) else ""
+
+            if lowered in ("esc", bind.back.lower()):
+                sound("map_left")
+                game.preserve_offset = True
+                displaynewsel()
+                return False
+            if lowered not in ("enter", bind.confirm.lower()):
+                continue
+
+            preview = weapon_refinement_preview(item_obj)
+            if preview["current_stage"] >= WEAPON_REFINEMENT_MAX:
+                message = f"{xd}Maximum refinement reached.{reset}"
+                sound("error2")
+                continue
+            missing_costs = []
+            if player.money < preview["gold_cost"]:
+                missing_costs.append(
+                    f"{preview['gold_cost'] - player.money} more gold"
+                )
+            if player.dust < preview["dust_cost"]:
+                missing_costs.append(
+                    f"{preview['dust_cost'] - player.dust} more magic dust"
+                )
+            if missing_costs:
+                message = (
+                    f"{xlred}🚫 You need {' and '.join(missing_costs)}.{reset}"
+                )
+                sound("error2")
+                continue
+
+            refined, _ = apply_weapon_refinement(item_obj)
+            if not refined:
+                message = f"{xlred}🚫 This refinement is no longer available.{reset}"
+                sound("error2")
+                continue
+
+            save_item(d.currsel, "Weapons")
+            player.save()
+            refresh_player_core_stats()
+            sound("positive7")
+            message = (
+                f"{xd}✦ Refined to R{preview['target_stage']}! "
+                f"Stats updated.{reset}"
+            )
+            continue
+
+        if screen_mode != "upgrade":
+            screen_mode = "upgrade"
+            draw_title = True
+            message = ""
+
+        usable_level = min(
+            max_level,
+            max_item_level_for_player(game.sel, player.level),
+        )
+        available_levels = max(0, usable_level - current_level)
+        currency = player.dust if game.sel == "Fragments" else player.money
+
+        if available_levels <= 0:
+            levels = 0
+            if not message:
+                if current_level >= max_level:
+                    message = (
+                        f"{xlyellow}This item is already at its maximum level."
+                        f"{reset}"
+                    )
+                else:
+                    next_level = min(max_level, current_level + 1)
+                    required_level = required_player_level_for_item(
+                        next_level,
+                        game.sel,
+                    )
+                    message = (
+                        f"{xlred}🚫 Reach player level {required_level} "
+                        f"to upgrade this item again.{reset}"
+                    )
+        else:
+            levels = max(1, min(levels, available_levels))
+            if getattr(setting, "item_level_up_mode", "One at a Time") == "All":
+                affordable_levels = max_affordable_upgrade_levels(
+                    item_obj,
+                    game.sel,
+                    available_levels,
+                    currency,
+                )
+                levels = max(1, affordable_levels)
+
         draw_upgrade_menu(
             item_obj,
             game.sel,
@@ -5845,6 +6243,10 @@ def _upgrade_selected_item_flow():
             displaynewsel()
             return False
         elif lowered in ("enter", bind.confirm.lower()):
+            if available_levels <= 0 or levels <= 0:
+                sound("error2")
+                continue
+
             total_cost = item_upgrade_cost(item_obj, game.sel, levels)
             currency = player.dust if game.sel == "Fragments" else player.money
             currency_name = "magic dust" if game.sel == "Fragments" else "gold"
@@ -5857,18 +6259,6 @@ def _upgrade_selected_item_flow():
             if target_level <= current_level:
                 sound("error2")
                 continue
-
-            if (
-                game.sel == "Fragments"
-                and not hold_for_confirmation(
-                    "upgrade",
-                    initial_confirm=True,
-                )
-            ):
-                sound("map_left")
-                game.preserve_offset = True
-                displaynewsel()
-                return False
 
             upgraded, _ = apply_item_upgrade(
                 item_obj,
@@ -5883,9 +6273,11 @@ def _upgrade_selected_item_flow():
             player.save()
             refresh_player_core_stats()
             sound("positive7")
-            game.goto = reload_items
-            d.preserved_item_id = d.currsel
-            return True
+            new_level = current_level + levels
+            message = (
+                f"{xa}✓ Upgraded to level {new_level}. Stats updated.{reset}"
+            )
+            levels = 1
 
 
 def remove_inventory_item(item_id, category, length):
@@ -5956,7 +6348,15 @@ def draw_delete_menu(item_obj, category):
 
     item_label = inv_item_label(category)
     confirm_label = bind.confirm.upper()
-    print(f"\033[24;63H{reset}{xf}→ {xc}📛 Hold {bold}{xlred}Enter / {confirm_label}{reset}{xc} to delete {item_label}.{reset}")
+    if getattr(setting, "double_tap_confirmation", False):
+        confirmation_prompt = (
+            f"Press {bold}{xlred}Enter / {confirm_label}{reset}{xc} twice"
+        )
+    else:
+        confirmation_prompt = (
+            f"Hold {bold}{xlred}Enter / {confirm_label}{reset}{xc}"
+        )
+    print(f"\033[24;63H{reset}{xf}→ {xc}📛 {confirmation_prompt} to delete {item_label}.{reset}")
     print(f"\033[25;63H{reset}{xf}→ {xb}💤 Press {bold}{x3}{bind.back.upper()} / ESC{reset}{xb} to cancel deletion.{reset}")
 
     gold, dust = item_salvage_rewards(item_obj, category)
@@ -6019,20 +6419,6 @@ def _delete_selected_item_flow():
     d.preserved_item_id = max(1, min(d.currsel, d.length))
     game.goto = reload_items
     return True
-
-
-def maininv_md():
-    for r in range(19, 29):
-        print(f"\033[{r};20H                                        ")
-
-    d.length = len(list(Path(f"Items/{game.sel}").glob("item*.txt")))
-    d.currsel = (d.page * 10) + 1
-    d.current = d.begin - 1
-
-    if d.length == d.page * 10:
-        inv_prevpage()
-        return
-    item_pager()
 
 def inventory_prep():
     d.massdelete = 0
@@ -6154,12 +6540,17 @@ def get_specials(name):
         d.ability_line1 = f"A cute shark will attack after you do!"
         d.ability_line2 = f"He's considered a {rainbow(text="phantom", bold=True, offset=d.offset)} during a battle."
         d.notice = "Phantom"
-        d.notice_text = f"Phantom beings can't be killed. They appear {shine(text="invisible", bold=True, offset=d.offset)} to all enemies."
+        d.notice_text = f"Phantom beings can't be killed. They appear {shine(text="invisible", bold=True, offset=d.offset+0.2)} to all enemies."
     elif name == "Krita User Manual":
         d.ability_line1 = f"Hitting an enemy makes it panic about"
         d.ability_line2 = f"color theory → it gets {xlbrown}dizzy{reset} permanently."
         d.notice = "Dizzy"
         d.notice_text = f"Every stack makes the target move 1% slower and take 1% more damage from attacks."
+    elif name == "Wand of Galanb III.":
+        d.ability_line1 = f"3 pigeons will aid you in battle! Each one"
+        d.ability_line2 = f"inflicts 2 turns of {xc}{bold}bleeding{reset} every turn."
+        d.notice = "Bleeding"
+        d.notice_text = f"Every stack chops away {xlred}{bold}0-1% {x7}(randomized) {reset}of the enemy's remaining HP every turn."
     
     
     # if d.ability_line1 is defined:
@@ -6178,52 +6569,18 @@ def inventory_waitkey():
         d.offset = 0
     else:
         game.preserve_offset = False
-    item = load_item(d.currsel, game.sel)
-    ityped = inv_type_icon(item)
-    itemcolour = xf
-    itemcolour_rgb = (255, 255, 255)
-    if getattr(item, "rarity", None) == "08":
-        itemcolour = xf
-        itemcolour_rgb = (255, 255, 255)
-    elif getattr(item, "rarity", None) == "02":
-        itemcolour = xa
-        itemcolour_rgb = (70, 198, 107)
-    elif getattr(item, "rarity", None) == "03":
-        itemcolour = xb
-        itemcolour_rgb = (122, 195, 230)
-    elif getattr(item, "rarity", None) == "0d":
-        itemcolour = xd
-        itemcolour_rgb = (214, 138, 230)
-    elif getattr(item, "rarity", None) == "0e":
-        itemcolour = xe
-        itemcolour_rgb = (240, 232, 158)
-    counter = 0
     animate_inventory_effects = animations_enabled()
     while True:
         item = load_item(d.currsel, game.sel)
         ityped = inv_type_icon(item)
-        itemcolour = xf
-        itemcolour_rgb = (255, 255, 255)
-        if getattr(item, "rarity", None) == "08":
-            itemcolour = xf
-            itemcolour_rgb = (255, 255, 255)
-        elif getattr(item, "rarity", None) == "02":
-            itemcolour = xa
-            itemcolour_rgb = (70, 198, 107)
-        elif getattr(item, "rarity", None) == "03":
-            itemcolour = xb
-            itemcolour_rgb = (122, 195, 230)
-        elif getattr(item, "rarity", None) == "0d":
-            itemcolour = xd
-            itemcolour_rgb = (214, 138, 230)
-        elif getattr(item, "rarity", None) == "0e":
-            itemcolour = xe
-            itemcolour_rgb = (240, 232, 158)
+        number_marker = inv_item_number_marker(game.sel, d.currsel, item)
+        itemcolour, itemcolour_rgb = INVENTORY_RARITY_STYLES.get(
+            getattr(item, "rarity", None),
+            (xf, (255, 255, 255)),
+        )
         if animate_inventory_effects:
             d.offset += 0.0035
-        counter += 1
-        #print(f"\033[1;1Hcounter: {counter} / offset: {round(d.offset,2)} / currsel: {d.currsel} / current: {d.current} / begin: {d.begin} / end: {d.end} / page: {d.page}                    ")
-        print(f"\033[{d.currselrow};20H{bold}{itemcolour}{d.currsel} {unbold}› {ityped} {shine(text=item.name,bold=True,offset=d.offset,color=itemcolour_rgb)}",end="",flush=True)
+        print(f"\033[{d.currselrow};20H{bold}{itemcolour}{d.currsel} {unbold}{number_marker} {ityped} {shine(text=item.name,bold=True,offset=d.offset,color=itemcolour_rgb)}",end="",flush=True)
         k = getx(
             0,
             0,
@@ -6231,13 +6588,13 @@ def inventory_waitkey():
             timeout=0 if animate_inventory_effects else None
         )
         if k == "w" or k == "up":
-            itemsel_up()
+            move_item_selection(-1)
         elif k == "s" or k == "down":
-            itemsel_down()
+            move_item_selection(1)
         elif k == "a" or k == "left":
-            inv_prevpage()
+            change_inventory_page(-1)
         elif k == "d" or k == "right":
-            inv_nextpage()
+            change_inventory_page(1)
         elif k in (bind.back, "esc"):
             game.goto = inventory
             return
@@ -6257,12 +6614,12 @@ def inventory_waitkey():
                     d.currsel = target
                     d.currselrow = 19 + (d.currsel - d.begin)
                     displaynewsel()
-        # if E is pressed, open file in notepad
+        # If E is pressed, open the item in the platform's text editor.
         elif k.lower() == "e":
             item_path = f"Items/{game.sel}/item{d.currsel}.txt"
             sound("positive7")
             if os.path.exists(item_path):
-                subprocess.run(["notepad.exe", item_path])
+                open_text_file(item_path)
         # Equipping is intentionally separate from confirmation actions.
         elif k.lower() == "enter":
             if time.monotonic() < getattr(d, "inventory_equip_blocked_until", 0):
@@ -6346,8 +6703,8 @@ def inventory_waitkey():
             if delete_selected_item():
                 return
         
-        # Pressing space adds item to comparison
-        elif k == "space":
+        # Pressing space adds comparable equipment to comparison.
+        elif k == "space" and inv_category_supports_comparison(game.sel):
             # append current selection to comparison array if it's not already in there
             # if 2 items are in the comparison array already, delete the array and start over with the new selection
             
@@ -6390,7 +6747,7 @@ def inventory_waitkey():
                 item1_value = inv_compare_value(item1, game.sel)
                 item2 = load_item(game.comparing[1], game.sel)
                 item2_value = inv_compare_value(item2, game.sel)
-                stat_label = inv_compare_label(game.sel)
+                stat_label = "DMG" if game.sel == "Weapons" else "DEF"
                 
                 
                 # determine if item2 is an upgrade or downgrade
@@ -6462,31 +6819,29 @@ def unselect_current():
     item = load_item(d.currsel, game.sel)
     if not item: return
     ityped = inv_type_icon(item)
+    number_marker = inv_item_number_marker(game.sel, d.currsel, item)
 
     req_level = required_player_level_for_item(item.level, game.sel)
     colour = x7 if req_level <= int(player.level) else xlred
-    print(f"\033[{d.currselrow};20H\033[38;5;8m{d.currsel} › {ityped} \033[0m{x7}{item.name} \033[{d.currselrow};56H{colour}↑{item.level}")
+    print(f"\033[{d.currselrow};20H\033[38;5;8m{d.currsel} {number_marker} {ityped} \033[0m{x7}{item.name} \033[{d.currselrow};56H{colour}↑{item.level}")
 
-def itemsel_down():
+def move_item_selection(direction):
     unselect_current()
-    d.currsel += 1
-    if d.currsel > d.length:
-        d.currsel = d.length
-    elif d.currsel > d.current:
-        d.currsel = d.current
+    d.currsel += direction
+    if direction > 0:
+        if d.currsel > d.length:
+            d.currsel = d.length
+        elif d.currsel > d.current:
+            d.currsel = d.current
+        else:
+            d.currselrow += 1
     else:
-        d.currselrow += 1
-    displaynewsel()
-
-def itemsel_up():
-    unselect_current()
-    d.currsel -= 1
-    if d.currsel < d.begin:
-        d.currsel = (d.page * 10) + 1
-    elif d.currsel == 0:
-        d.currsel = 1
-    else:
-        d.currselrow -= 1
+        if d.currsel < d.begin:
+            d.currsel = (d.page * 10) + 1
+        elif d.currsel == 0:
+            d.currsel = 1
+        else:
+            d.currselrow -= 1
     displaynewsel()
 
 def reload_items():
@@ -6506,23 +6861,19 @@ def reload_items():
             print(f"\033[{r};20H                                        ")
     item_pager()
 
-def inv_nextpage():
-    if d.length > 10 + (d.page * 10):
-        d.page += 1
-        d.begin += 10
-        d.end += 10
-        d.currsel = (d.page * 10) + 1
-        d.current = d.begin - 1
-        reload_items()
+def change_inventory_page(direction):
+    if direction > 0:
+        if d.length <= 10 + (d.page * 10):
+            return
+    elif d.page < 1:
+        return
 
-def inv_prevpage():
-    if d.page >= 1:
-        d.page -= 1
-        d.begin -= 10
-        d.end -= 10
-        d.currsel = (d.page * 10) + 1
-        d.current = d.begin - 1
-        reload_items()
+    d.page += direction
+    d.begin += 10 * direction
+    d.end += 10 * direction
+    d.currsel = (d.page * 10) + 1
+    d.current = d.begin - 1
+    reload_items()
 
 def item_pager():
     d.rowdisplay = 18
@@ -6546,23 +6897,14 @@ def render_items():
             break
 
         ityped = inv_type_icon(item)
+        number_marker = inv_item_number_marker(game.sel, d.current, item)
 
         print(f"\033[{d.rowdisplay};20H{x8}{" "*40}{xf}",end="")
         
         indicator = "↑"
         req_level = required_player_level_for_item(item.level, game.sel)
         colour = x7 if req_level <= int(player.level) else xlred
-        if getattr(item, "rarity", None) == "08":
-            itemcolour = xf
-        elif getattr(item, "rarity", None) == "02":
-            itemcolour = xa
-        elif getattr(item, "rarity", None) == "03":
-            itemcolour = xb
-        elif getattr(item, "rarity", None) == "0d":
-            itemcolour = xd
-        elif getattr(item, "rarity", None) == "0e":
-            itemcolour = xe
-        print(f"\033[{d.rowdisplay};20H\033[38;5;8m{bold}{d.current} {unbold}{x7}› {ityped} {x7}{item.name} {reset}\033[{d.rowdisplay};56H{colour}{indicator}{item.level}")
+        print(f"\033[{d.rowdisplay};20H\033[38;5;8m{bold}{d.current} {unbold}{x7}{number_marker} {ityped} {x7}{item.name} {reset}\033[{d.rowdisplay};56H{colour}{indicator}{item.level}")
         
         if d.current >= d.end:
             break
@@ -6591,36 +6933,29 @@ def displaynewsel():
     if not item: return
 
     ityped = inv_type_icon(item)
-    type_label = inv_type_label(item)
+    type_raw = getattr(item, "type_raw", None)
+    type_label = (
+        "None"
+        if not type_raw or type_raw == "None"
+        else str(type_raw).title()
+    )
+    number_marker = inv_item_number_marker(game.sel, d.currsel, item)
 
     # Write selection in list
     indicator = "↑"
     req_level = required_player_level_for_item(item.level, game.sel)
     colour = x7 if req_level <= int(player.level) else xlred
-    itemcolour = xf
-    itemcolour_rgb = (255, 255, 255)
-    if getattr(item, "rarity", None) == "08":
-        itemcolour = xf
-        itemcolour_rgb = (255, 255, 255)
-    elif getattr(item, "rarity", None) == "02":
-        itemcolour = xa
-        itemcolour_rgb = (70, 198, 107)
-    elif getattr(item, "rarity", None) == "03":
-        itemcolour = xb
-        itemcolour_rgb = (122, 195, 230)
-    elif getattr(item, "rarity", None) == "0d":
-        itemcolour = xd
-        itemcolour_rgb = (214, 138, 230)
-    elif getattr(item, "rarity", None) == "0e":
-        itemcolour = xe
-        itemcolour_rgb = (240, 232, 158)
+    itemcolour, itemcolour_rgb = INVENTORY_RARITY_STYLES.get(
+        getattr(item, "rarity", None),
+        (xf, (255, 255, 255)),
+    )
     req_level = required_player_level_for_item(item.level, game.sel)
     colour = x7 if req_level <= int(player.level) else xlred
     if not game.preserve_offset:
         d.offset = 0
     else:
         game.preserve_offset = False
-    print(f"\033[{d.currselrow};20H{bold}{itemcolour}{d.currsel} {unbold}› {ityped} {shine(text=item.name, color=itemcolour_rgb,bold=True,offset=d.offset)} {reset}\033[{d.currselrow};56H{colour}{indicator}{item.level}")
+    print(f"\033[{d.currselrow};20H{bold}{itemcolour}{d.currsel} {unbold}{number_marker} {ityped} {shine(text=item.name, color=itemcolour_rgb,bold=True,offset=d.offset)} {reset}\033[{d.currselrow};56H{colour}{indicator}{item.level}")
     #print(f"\033[{d.currselrow};20H{d.current} {unbold}{xa}› {ityped}{itemcolour}{bold} \033[0m{item.name} {reset}\033[{d.rowdisplay};56H{colour}{indicator}{item.level}")
     # Write Description UI
     blank(16,63, 16,110)
@@ -6672,26 +7007,52 @@ def displaynewsel():
             atkcrit = item.atkcrit
         print(f"\033[24;80H✴️ {xlyellow}{bold}{atkcrit}{unbold}% Crit")
         
-        print(f"\033[24;94H📶 {xf}Lv {bold}{item_level_display(item, game.sel)}{unbold}{x7}")
+        if item.level >= WEAPON_MAX_LEVEL:
+            print(
+                f"\033[24;94H{xd}✦ Ref. {bold}"
+                f"{int(getattr(item, 'refine', 0))}"
+                f"/{WEAPON_REFINEMENT_MAX}{reset}"
+            )
+        else:
+            print(
+                f"\033[24;94H📶 {xf}Lv {bold}"
+                f"{item_level_display(item, game.sel)}{unbold}{x7}"
+            )
         
         ability = item.ability if item.ability and item.ability.strip() else "None"
         print(f"\033[26;63H🍹 {bold}{xf}Combat ability:{reset}")
         print(f"\033[27;64H› {xf}{ability}")
         print(f"\033[31;63H📜{xlorange} {item.description}\033[0m")
     elif game.sel == "Fragments":
-        main_value = get_fragment_main_stat_value(item)
+        main_value = scale_fragment_stat(
+            item.main_stat,
+            get_fragment_main_stat_value(item),
+        )
         main_display = format_fragment_stat(item.main_stat, main_value, signed=True)
-        print(f"\033[24;66H✨ {xa}{bold}{main_display}{unbold}")
-        print(f"\033[24;94H📶 {xf}Lv {bold}{item_level_display(item, game.sel)}{unbold}{x7}")
-        print(f"\033[25;63H🧩 {xf}Set: {xlyellow}{bold}{item.set_name}{reset}")
+        main_icon = fragment_stat_icon(item.main_stat)
+        print(
+            f"\033[24;63H{main_icon} {xa}{bold}{main_display}{unbold}"
+            f"{reset}{x7}  ↑ Lv {xf}{item_level_display(item, game.sel)}"
+            f"{reset}{x7}  ◈ {xlyellow}{item.set_name}{reset}"
+        )
         substats = get_fragment_substats(item)
         print(f"\033[26;63H✦ {bold}{xf}Substats:{reset}")
-        if substats:
-            for row, (stat_name, value) in enumerate(substats, start=27):
-                stat_display = format_fragment_stat(stat_name, value, signed=True)
-                print(f"\033[{row};64H› {xf}{stat_display}{reset}")
-        else:
-            print(f"\033[27;64H› {x7}Unlocks at levels 5, 10 and 15.{reset}")
+        for index, unlock_level in enumerate((5, 10, 15)):
+            row = 27 + index
+            if index < len(substats):
+                stat_name, value = substats[index]
+                effective_value = scale_fragment_stat(stat_name, value)
+                stat_display = format_fragment_stat(
+                    stat_name,
+                    effective_value,
+                    signed=True,
+                )
+                stat_icon = fragment_stat_icon(stat_name)
+                print(f"\033[{row};64H{stat_icon} {xf}{stat_display}{reset}")
+            else:
+                print(
+                    f"\033[{row};64H◇ {x7}Unlocks at Lv {unlock_level}{reset}"
+                )
         print(f"\033[31;63H📜{xlorange} {item.description}\033[0m")
     else:
         item.actual_defense = get_actual_defense(item)
@@ -6704,82 +7065,6 @@ def displaynewsel():
         print(f"\033[31;63H📜{xlorange} {description}\033[0m")
     # finally, call function to display item ability specials, if applicable
     get_specials(item.name)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""

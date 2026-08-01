@@ -90,8 +90,14 @@ you're welcome to.
 ### Requirements
 
 * Python 3.10+
+* Windows, macOS, or Linux
+* A modern UTF-8 terminal with ANSI/VT escape-sequence support
 * Install the Python packages with `pip install -r requirements.txt`
 * If you are using a fresh environment, run the install command before launching `main.py`
+
+Windows Terminal, Terminal.app, and the common modern Linux terminal emulators
+provide the required terminal features. Mouse controls depend on the terminal
+emulator supporting SGR mouse reporting; keyboard controls remain available.
 
 ### Run
 

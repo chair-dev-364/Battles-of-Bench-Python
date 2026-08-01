@@ -4,7 +4,14 @@ The renderer owns layout, the data objects own persistence, and this module
 owns only the short-lived state of an edit (focused value, save, or cancel).
 """
 
+from Settings.keybinds import SETTINGS as KEYBIND_SETTINGS
+
+
 RESERVED_KEYBINDS = {"esc", "up", "down", "left", "right"}
+KEYBIND_CONFLICT_GROUPS = {
+    item["attr"]: item.get("conflict_group", "default")
+    for item in KEYBIND_SETTINGS
+}
 
 
 def setting_index_at(x, y, count, col, row, width, height):
@@ -167,6 +174,10 @@ class SettingEditor:
 
     def _keybind_conflict(self, candidate):
         current_attr = self.item["attr"]
+        current_group = self.item.get(
+            "conflict_group",
+            KEYBIND_CONFLICT_GROUPS.get(current_attr, "default"),
+        )
         fields = getattr(
             self.owner,
             "_keybind_fields",
@@ -174,6 +185,8 @@ class SettingEditor:
         )
         for attr in fields:
             if attr == current_attr:
+                continue
+            if KEYBIND_CONFLICT_GROUPS.get(attr, "default") != current_group:
                 continue
             existing = str(getattr(self.owner, attr, "")).lower()
             if existing == candidate:

@@ -28,7 +28,7 @@ SETTINGS = [
         "attr": "double_tap_confirmation",
         "type": "bool",
         "default": False,
-        "description": "Use a second key press instead of holding a key to confirm important actions.",
+        "description": "Double-tap instead of holding to confirm important stuff.",
         "accepted": ["Off", "On"],
     },
     {
