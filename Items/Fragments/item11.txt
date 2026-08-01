@@ -1,1 +1,1 @@
-Bracelet;;Bulwark Bracelet;;1;;DEF;;10;;Guardian;;0
+Bracelet;;Bracelet of Dreams;;1;;Speed;;2;;Warrior;;0

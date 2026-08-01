@@ -1,1 +1,1 @@
-Bracelet;;Bracelet of Dreams;;15;;ATK;;174;;Warrior;;0;;ATK %;;2;;HP;;45;;DEF;;10
+Necklace;;Warcry Necklace;;15;;HP;;120.0;;Warrior;;0;;HP %;;1;;Crit Rate;;2;;ATK;;9

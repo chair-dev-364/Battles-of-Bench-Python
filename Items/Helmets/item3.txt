@@ -1,1 +1,2 @@
-helmet;;0c;;Adventurer's Insane Helmet;;20;;24.0;;None;;None;;0;;0.037
+helmet;;02;;Linux Helmet;;2;;14;;None;;None;;0;;0.035
+

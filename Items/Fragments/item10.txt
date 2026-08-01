@@ -1,1 +1,1 @@
-Ring;;Conqueror's Ring;;15;;DEF;;8.0;;Warrior;;0;;ATK;;10;;Crit Damage;;7;;HP %;;3
+Bracelet;;Ironpulse Bracelet;;6;;ATK;;22.0;;Warrior;;0;;DEF;;5

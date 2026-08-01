@@ -1,1 +1,1 @@
-book;;0d;;Krita User Manual;;25;;161;;75.8;;Regeneration;;2;;The mental health destroyer.;;0.045;;ab;;0;;3
+wand;;03;;Magic Wand Pro Max;;8;;70;;35.0;;Strength;;5;;a;;0.04;;No ability.;;0;;0

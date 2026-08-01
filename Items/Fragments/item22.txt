@@ -1,1 +1,1 @@
-Bracelet;;Shade Bracelet;;15;;Speed;;4.0;;Assassin;;0;;ATK %;;3;;DEF;;3;;Crit Damage;;2
+Ring;;Watchtower Ring;;1;;Crit Damage;;6;;Guardian;;0

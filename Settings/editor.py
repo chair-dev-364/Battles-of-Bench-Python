@@ -49,15 +49,24 @@ def back_button_contains(x, y):
     return 2 <= x <= 21 and 31 <= y <= 34
 
 
+def slider_step_count(item):
+    """Return the number of intervals represented by a stepped slider."""
+    minimum = item.get("min", 0)
+    maximum = item.get("max", 10)
+    step = item.get("step", 1)
+    return max(1, round((maximum - minimum) / step))
+
+
 def volume_slider_parts(item, value):
-    """Return the track segments and label for a fixed-width volume slider."""
+    """Return the track segments and label for a stepped slider."""
     minimum = item.get("min", 0)
     maximum = item.get("max", 10)
     span = max(1, maximum - minimum)
-    position = round((value - minimum) * 10 / span)
-    position = max(0, min(10, position))
+    steps = slider_step_count(item)
+    position = round((value - minimum) * steps / span)
+    position = max(0, min(steps, position))
     label = "Off" if value <= minimum else f"{round((value - minimum) * 100 / span)}%"
-    return "─" * position, "●", "─" * (10 - position), label
+    return "─" * position, "●", "─" * (steps - position), label
 
 
 def boolean_slider_parts(value):
@@ -78,16 +87,21 @@ def setting_is_off(item, value):
 
 def volume_value_at_mouse(x, item, col, box_width, clamp=False):
     """Map a zero-based mouse column onto the rendered volume track."""
-    display_width = 16
+    label_width = {
+        "volume": 4,
+        "duration": 5,
+    }.get(item.get("display"), 7)
+    steps = slider_step_count(item)
+    display_width = steps + 1 + 1 + label_width
     track_start = col + box_width - display_width - 1
-    track_end = track_start + 10
+    track_end = track_start + steps
     if not clamp and not track_start <= x <= track_end:
         return None
 
-    position = max(0, min(10, x - track_start))
+    position = max(0, min(steps, x - track_start))
     minimum = item.get("min", 0)
     maximum = item.get("max", 10)
-    raw_value = minimum + (maximum - minimum) * position / 10
+    raw_value = minimum + (maximum - minimum) * position / steps
     step = item.get("step", 1)
     stepped = round((raw_value - minimum) / step) * step + minimum
     stepped = max(minimum, min(maximum, stepped))
@@ -111,11 +125,25 @@ def format_setting_value(item, value):
         return "On" if value else "Off"
     if item["type"] == "keybind":
         return str(value).capitalize()
+    if value in item.get("value_labels", {}):
+        return item["value_labels"][value]
+    if item.get("display") == "animation_speed":
+        if value >= item.get("max", 10):
+            return "Instant"
+        if value <= item.get("min", 0):
+            return "Normal"
+        return f"{1 + value / 10:.1f}×"
+    if item.get("display") == "difficulty":
+        return ("Easy", "Normal", "Hard")[max(0, min(2, int(value)))]
+    if item.get("display") == "victory_celebration":
+        return ("Minimal", "Small", "Regular", "Extreme")[
+            max(0, min(3, int(value)))
+        ]
     if item.get("display") == "volume":
         return volume_slider_parts(item, value)[3]
     if isinstance(value, float):
-        return f"{value:g}"
-    return str(value)
+        return f"{value:g}{item.get('suffix', '')}"
+    return f"{value}{item.get('suffix', '')}"
 
 
 class SettingEditor:
@@ -140,7 +168,11 @@ class SettingEditor:
             self.message = "This option is not implemented yet."
             return "disabled"
         if getattr(owner, "setting_is_locked", lambda attr: False)(item["attr"]):
-            self.message = "Turn Reduce Motion off to edit this setting."
+            self.message = getattr(
+                owner,
+                "setting_lock_message",
+                lambda attr: "This setting is currently locked.",
+            )(item["attr"])
             return "locked"
 
         self.active = True
@@ -256,9 +288,7 @@ class SettingEditor:
                 current_index = choices.index(self.value)
             except ValueError:
                 current_index = 0
-            new_index = max(0, min(len(choices) - 1, current_index + direction))
-            if new_index == current_index:
-                return "ignored"
+            new_index = (current_index + direction) % len(choices)
             self.value = choices[new_index]
             self.message = "Press Enter to save or Escape to cancel."
             return "changed"
@@ -282,6 +312,8 @@ class SettingEditor:
             if isinstance(step, float):
                 decimals = max(0, len(str(step).partition(".")[2]))
                 new_value = round(new_value, decimals)
+            if new_value == self.value:
+                return "ignored"
             self.value = new_value
             self.message = "Press Enter to save or Escape to cancel."
             return "changed"

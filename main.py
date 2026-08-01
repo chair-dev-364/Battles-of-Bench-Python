@@ -30,6 +30,7 @@ from Settings.editor import (
     format_setting_value,
     setting_is_off,
     setting_index_at,
+    slider_step_count,
     volume_slider_parts,
     volume_value_at_mouse,
 )
@@ -39,6 +40,7 @@ from Settings.schema import (
     SETTINGS_BY_ATTR,
     SETTINGS_PAGES,
 )
+from sort import sort_inventory
 import atexit, os, time, sys, ctypes, ast, math, operator as op, subprocess, json, re, random, shlex, shutil, tempfile, stat, urllib.request  # noqa: E401, E402
 from pathlib import Path  # noqa: E402
 from typing import Literal  # noqa: E402
@@ -61,7 +63,7 @@ from console_input import key
 
 version=2
 subversion=0
-subberversion="0-pre2"
+subberversion="0-pre3"
 
 CHARACTER_MAX_LEVEL = 100
 WEAPON_MAX_LEVEL = 25
@@ -389,7 +391,7 @@ ANSI_PATTERN = re.compile(r'\x1b\[[0-9;?]*[A-Za-z]') # what this does, I have no
 def visible_len(text):
     return len(ANSI_PATTERN.sub('', text))
 
-# FINALLY, getx(). Basically input(), but actually good.
+# FINALLY, getx(). Line input, but actually good.
 def getx(
     row, # where the input starts (row)
     col, # same as row but col.
@@ -656,10 +658,12 @@ enemy = EnemyData()
 
 # Load settings.
 class SettingsData:
-    _REDUCE_MOTION_LOCKED_FIELDS = {
-        "animation_speed",
-        "menu_transitions",
+    _REDUCE_MOTION_OVERRIDES = {
+        "animation_speed": 10,
+        "menu_transitions": False,
+        "disable_startup_animation": True,
     }
+    _REDUCE_MOTION_LOCKED_FIELDS = set(_REDUCE_MOTION_OVERRIDES)
 
     def __init__(self):
         base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -682,6 +686,8 @@ class SettingsData:
             "skipboot": False,
             "skiplevelanim": False,
             "soon": False,
+            "_animation_slider_reversed": True,
+            "inventory_last_selections": {},
         }
         self._persistent_fields = {
             **legacy_defaults,
@@ -703,6 +709,31 @@ class SettingsData:
         item = self._settings_by_attr.get(key)
         setting_type = item.get("type") if item else None
 
+        # Migrate values from the former choice-based animation setting.
+        if key == "animation_speed" and isinstance(value, str):
+            value = {
+                "instant": 10,
+                "fast": 5,
+                "normal": 0,
+            }.get(value.casefold(), value)
+
+        if key == "battle_difficulty" and isinstance(value, str):
+            value = {
+                "very easy": 0,
+                "easy": 0,
+                "normal": 1,
+                "hard": 2,
+                "very hard": 2,
+            }.get(value.casefold(), value)
+
+        # Preserve the old health-display choice under its clearer label.
+        if key == "battle_health_display" and isinstance(value, str):
+            value = {
+                "hp": "Number",
+                "both": "Both number and bar",
+                "both bar and hp": "Both number and bar",
+            }.get(value.casefold(), value)
+
         if setting_type == "bool":
             return value if isinstance(value, bool) else default
         if setting_type == "keybind":
@@ -712,7 +743,13 @@ class SettingsData:
             allowed_keys = item.get("allowed_keys")
             return value if not allowed_keys or value in allowed_keys else default
         if setting_type == "choice":
-            return value if value in item.get("choices", ()) else default
+            if value in item.get("choices", ()):
+                return value
+            if isinstance(value, str):
+                for choice in item.get("choices", ()):
+                    if value.casefold() == choice.casefold():
+                        return choice
+            return default
         if setting_type == "slider":
             if not isinstance(value, (int, float)) or isinstance(value, bool):
                 return default
@@ -734,6 +771,18 @@ class SettingsData:
 
     def load(self):
         data = self._read_json(self._path)
+        if (
+            data.get("inventory_sorting") == "Off"
+            and "sort_items_automatically" not in data
+        ):
+            data["sort_items_automatically"] = False
+            data["inventory_sorting"] = "Name"
+        if (
+            "_animation_slider_reversed" not in data
+            and isinstance(data.get("animation_speed"), (int, float))
+            and not isinstance(data.get("animation_speed"), bool)
+        ):
+            data["animation_speed"] = 10 - data["animation_speed"]
         legacy_keybinds = self._read_json(self._legacy_keybind_path)
         needs_sync = set(self._persistent_fields) - set(data)
 
@@ -747,14 +796,11 @@ class SettingsData:
             value = self._validated_value(key, value, default)
             setattr(self, key, value)
 
-        reduced_values_changed = self._enforce_reduce_motion()
-
         # Migrate legacy keybinds and add newly declared settings immediately.
-        if needs_sync or reduced_values_changed or not os.path.exists(self._path):
+        if needs_sync or not os.path.exists(self._path):
             self.save()
 
     def save(self):
-        self._enforce_reduce_motion()
         for key, default in self._persistent_fields.items():
             value = getattr(self, key, default)
             setattr(self, key, self._validated_value(key, value, default))
@@ -778,21 +824,58 @@ class SettingsData:
         self.save()
 
     def setting_is_locked(self, attr):
-        return (
+        reduce_motion_lock = (
             bool(getattr(self, "reduce_motion", False))
             and attr in self._REDUCE_MOTION_LOCKED_FIELDS
         )
-
-    def _enforce_reduce_motion(self):
-        if not getattr(self, "reduce_motion", False):
-            return False
-        changed = (
-            getattr(self, "animation_speed", None) != "Instant"
-            or getattr(self, "menu_transitions", None) is not False
+        sorting_lock = (
+            attr in {"inventory_sorting", "inventory_sort_order"}
+            and not getattr(self, "sort_items_automatically", True)
         )
-        self.animation_speed = "Instant"
-        self.menu_transitions = False
-        return changed
+        audio_lock = (
+            attr in {"master", "sound", "ambient", "sfx", "dialogue", "music"}
+            and getattr(self, "disable_audio_completely", False)
+        )
+        return reduce_motion_lock or sorting_lock or audio_lock
+
+    def setting_lock_reason(self, attr):
+        if (
+            attr in {"master", "sound", "ambient", "sfx", "dialogue", "music"}
+            and getattr(self, "disable_audio_completely", False)
+        ):
+            return "audio disabled"
+        if (
+            attr in {"inventory_sorting", "inventory_sort_order"}
+            and not getattr(self, "sort_items_automatically", True)
+        ):
+            return "sorting disabled"
+        if (
+            bool(getattr(self, "reduce_motion", False))
+            and attr in self._REDUCE_MOTION_LOCKED_FIELDS
+        ):
+            return "reduce motion"
+        return ""
+
+    def setting_lock_message(self, attr):
+        if self.setting_lock_reason(attr) == "audio disabled":
+            return "Turn Mute all audio off to edit this setting."
+        if self.setting_lock_reason(attr) == "sorting disabled":
+            return "Turn Sort items automatically on to edit this setting."
+        return "Turn Reduce motion off to edit this setting."
+
+    def effective_setting(self, attr):
+        """Return a motion-safe value without overwriting the user's choice."""
+        if (
+            attr in {"master", "sound", "ambient", "sfx", "dialogue", "music"}
+            and getattr(self, "disable_audio_completely", False)
+        ):
+            return 0
+        if (
+            bool(getattr(self, "reduce_motion", False))
+            and attr in self._REDUCE_MOTION_OVERRIDES
+        ):
+            return self._REDUCE_MOTION_OVERRIDES[attr]
+        return getattr(self, attr)
 
 # Create global instance
 setting = SettingsData()
@@ -927,13 +1010,15 @@ def cls():
 # animation configs!! for accessibility settings.
 
 def animation_speed_name():
-    if getattr(setting, "reduce_motion", False):
-        return "Instant"
-    return getattr(setting, "animation_speed", "Normal")
+    return format_setting_value(
+        SETTINGS_BY_ATTR["animation_speed"],
+        setting.effective_setting("animation_speed"),
+    )
 
 
 def animation_rate():
-    return 1.5 if animation_speed_name() == "Fast" else 1.0
+    value = setting.effective_setting("animation_speed")
+    return 1.0 if value >= 10 else 1.0 + value / 10
 
 
 def animations_enabled():
@@ -949,7 +1034,7 @@ def animation_sleep(seconds):
 
 # cls but another cls.
 def screen_wipe(mode, delay_ms):
-    transitions_enabled = getattr(setting, "menu_transitions", True)
+    transitions_enabled = setting.effective_setting("menu_transitions")
     if (
         getattr(setting, "reduce_motion", False)
         or not transitions_enabled
@@ -998,7 +1083,7 @@ def open_text_file(path):
 
 # INTERACTIVITY TIME! Sound() plays a sound effect. It does this by writing the command to a text file, which is then read by the sound player.
 def sound(cmd, channel="sound", pan=0.0):
-    if channel not in ("sound", "sfx", "music"): # set your type!
+    if channel not in ("sound", "ambient", "sfx", "dialogue", "music"): # set your type!
         raise ValueError(f"Unknown audio channel: {channel}")
     pan = max(-1.0, min(1.0, float(pan)))
     command = str(cmd)
@@ -2339,6 +2424,10 @@ def levelup():
 
 
 def startup_animation():
+    if setting.effective_setting("disable_startup_animation"):
+        game.goto = mainmenu
+        return
+
     # Quick fade in.
     cls()
     fade_duration = 1.25
@@ -2495,22 +2584,28 @@ def testsounds():
     while True:
         # enter sound
         cls()
-        # ask for sound and pitch with input
-        print("Enter sound name:")
-        name = input().strip()
+        name = (getx(1, 1, prompt="Enter sound name: ", allow_none=True) or "").strip()
         # if name is back, go back to main menu
         if name.lower() == "back":
             game.goto = mainmenu
             return
-        print("Enter pitch:")
-        try:
-            pitch = float(input().strip())
-        except ValueError:
+        pitch = getx(
+            2,
+            1,
+            prompt="Enter pitch: ",
+            expect="float",
+            allow_none=True,
+        )
+        if pitch is None:
             pitch = 1.0
         sound(f"{name} {pitch}")
 
 
 def internal_modify():
+    def pause(message):
+        print(message, end="", flush=True)
+        getx(0, 0, expect="key")
+
     def parse_override_value(raw):
         text = raw.strip()
         lowered = text.lower()
@@ -2757,30 +2852,30 @@ def internal_modify():
 
                     if adv_choice == "c":
                         if not confirm_destructive("Delete General/screensetup.txt?"):
-                            input(f"{x8}Cancelled.{xf} Press Enter to continue...")
+                            pause(f"{x8}Cancelled.{xf} Press any key to continue...")
                             continue
                         if os.path.exists(delete_screen_path):
                             os.remove(delete_screen_path)
-                            input(f"{xa}Deleted.{xf} Press Enter to continue...")
+                            pause(f"{xa}Deleted.{xf} Press any key to continue...")
                         else:
-                            input(f"{x8}File not found, nothing to delete.{xf} Press Enter to continue...")
+                            pause(f"{x8}File not found, nothing to delete.{xf} Press any key to continue...")
                         continue
 
                     if adv_choice == "u":
                         if not confirm_destructive("Delete General/setup.txt?"):
-                            input(f"{x8}Cancelled.{xf} Press Enter to continue...")
+                            pause(f"{x8}Cancelled.{xf} Press any key to continue...")
                             continue
                         if os.path.exists(delete_setup_path):
                             os.remove(delete_setup_path)
-                            input(f"{xa}Deleted.{xf} Press Enter to continue...")
+                            pause(f"{xa}Deleted.{xf} Press any key to continue...")
                         else:
-                            input(f"{x8}File not found, nothing to delete.{xf} Press Enter to continue...")
+                            pause(f"{x8}File not found, nothing to delete.{xf} Press any key to continue...")
                         continue
 
                     target_idx = int(adv_choice) - 1
                     target_label, target_obj = reset_targets[target_idx]
                     if not confirm_destructive(f"Reset {target_label}?"):
-                        input(f"{x8}Cancelled.{xf} Press Enter to continue...")
+                        pause(f"{x8}Cancelled.{xf} Press any key to continue...")
                         continue
 
                     try:
@@ -2791,9 +2886,9 @@ def internal_modify():
                             setting.load()
                         if target_obj is player:
                             player.load()
-                        input(f"{xa}Reset complete:{xf} {target_label}. Press Enter to continue...")
+                        pause(f"{xa}Reset complete:{xf} {target_label}. Press any key to continue...")
                     except Exception as exc:
-                        input(f"{xlred}Reset failed:{xf} {exc}. Press Enter to continue...")
+                        pause(f"{xlred}Reset failed:{xf} {exc}. Press any key to continue...")
                 continue
 
             if choice == "n":
@@ -2807,16 +2902,19 @@ def internal_modify():
 {xc}Type [B] to cancel.{xf}
 {reset}
 """)
-                new_name = input(f"{x3}New name{xf}: ").strip()
+                new_name = (
+                    getx(10, 1, prompt=f"{x3}New name{xf}: ", allow_none=True)
+                    or ""
+                ).strip()
                 if new_name.lower() == "b":
                     continue
                 if len(new_name) < 2 or len(new_name) > 15:
-                    input(f"{xlred}Name must be between 2 and 15 characters.{xf} Press Enter to continue...")
+                    pause(f"{xlred}Name must be between 2 and 15 characters.{xf} Press any key to continue...")
                     continue
 
                 update("General/playername", new_name)
                 player.name = new_name
-                input(f"{xa}Saved{xf} player name as {new_name!r}. Press Enter to continue...")
+                pause(f"{xa}Saved{xf} player name as {new_name!r}. Press any key to continue...")
                 continue
 
             if choice == "e":
@@ -2849,7 +2947,15 @@ def internal_modify():
                         break
 
                     slot_name, slot_path = slot_paths[slot_choice]
-                    raw_id = input(f"{x3}New item ID for {slot_name}{xf} ({xc}B{xf}=back, Enter=none): ").strip()
+                    raw_id = (
+                        getx(
+                            25,
+                            1,
+                            prompt=f"{x3}New item ID for {slot_name}{xf} ({xc}B{xf}=back, Enter=none): ",
+                            allow_none=True,
+                        )
+                        or ""
+                    ).strip()
                     if raw_id.lower() == "b":
                         continue
 
@@ -2860,7 +2966,7 @@ def internal_modify():
                             msg = f"{x2}Updated{xf} {slot_name} slot to {xa}'none'{xf}."
                         except Exception as exc:
                             msg = f"{xlorange}Updated file to 'none', but loading failed:{xf} {exc}"
-                        input(msg + " Press Enter to continue...")
+                        pause(msg + " Press any key to continue...")
                         continue
 
                     try:
@@ -2868,7 +2974,7 @@ def internal_modify():
                         if new_id < 0:
                             raise ValueError()
                     except ValueError:
-                        input(f"{xlred}Please enter a valid non-negative number.{xf} Press Enter to continue...")
+                        pause(f"{xlred}Please enter a valid non-negative number.{xf} Press any key to continue...")
                         continue
 
                     update(slot_path, new_id)
@@ -2877,7 +2983,7 @@ def internal_modify():
                         msg = f"{x2}Updated{xf} {slot_name} slot to item ID {new_id}."
                     except Exception as exc:
                         msg = f"{xlorange}Updated file, but loading failed:{xf} {exc}"
-                    input(msg + " Press Enter to continue...")
+                    pause(msg + " Press any key to continue...")
                 continue
 
             if choice == "k":
@@ -2896,24 +3002,35 @@ def internal_modify():
 {reset}
 """)
 
-                    field = input(f"{x3}Keybind{xf}: ").strip().lower()
+                    field = (
+                        getx(17, 1, prompt=f"{x3}Keybind{xf}: ", allow_none=True)
+                        or ""
+                    ).strip().lower()
                     if field == "b":
                         break
                     if field not in bind._persistent_fields:
-                        input(f"{xlred}Unknown keybind.{xf} Press Enter to continue...")
+                        pause(f"{xlred}Unknown keybind.{xf} Press any key to continue...")
                         continue
 
-                    raw_value = input(f"{x3}New value for {field}{xf} (current={getattr(bind, field)!r}) [{xc}B{xf}=back]: ").strip()
+                    raw_value = (
+                        getx(
+                            18,
+                            1,
+                            prompt=f"{x3}New value for {field}{xf} (current={getattr(bind, field)!r}) [{xc}B{xf}=back]: ",
+                            allow_none=True,
+                        )
+                        or ""
+                    ).strip()
                     if raw_value.lower() == "b":
                         continue
                     if raw_value == "":
-                        input(f"{xlred}Keybind cannot be empty.{xf} Press Enter to continue...")
+                        pause(f"{xlred}Keybind cannot be empty.{xf} Press any key to continue...")
                         continue
 
                     setattr(bind, field, raw_value.lower())
                     bind.save()
                     load_binds()
-                    input(f"{x2}Saved{xf} keybind {field} = {raw_value.lower()!r}. Press Enter to continue...")
+                    pause(f"{x2}Saved{xf} keybind {field} = {raw_value.lower()!r}. Press any key to continue...")
                 continue
 
             if choice == "f":
@@ -2934,7 +3051,7 @@ def internal_modify():
                 target_obj = FRAGMENT_EQUIPPED_OBJECTS[slot]
             else:
                 if choice not in targets:
-                    input(f"{xlred}Invalid option.{xf} Press Enter to continue...")
+                    pause(f"{xlred}Invalid option.{xf} Press any key to continue...")
                     continue
                 target_name, target_obj = targets[choice]
 
@@ -2953,13 +3070,25 @@ Type an attribute name to override.
 {reset}
 """)
 
-                field = input(f"{x3}Attribute{xf}: ").strip()
+                prompt_row = 10 + len(preview.splitlines())
+                field = (
+                    getx(prompt_row, 1, prompt=f"{x3}Attribute{xf}: ", allow_none=True)
+                    or ""
+                ).strip()
 
                 if field.lower() == "b":
                     break
 
                 current_value = getattr(target_obj, field, "<missing>")
-                raw_value = input(f"{x3}New value for {field}{xf} (current={current_value!r}) [{xc}B{xf}=back]: ").strip()
+                raw_value = (
+                    getx(
+                        prompt_row + 1,
+                        1,
+                        prompt=f"{x3}New value for {field}{xf} (current={current_value!r}) [{xc}B{xf}=back]: ",
+                        allow_none=True,
+                    )
+                    or ""
+                ).strip()
 
                 if raw_value.lower() == "b":
                     continue
@@ -3019,7 +3148,7 @@ Type an attribute name to override.
                     save_note = ""
 
                 print(f"{xa}Set{xf} {target_name}.{field} = {new_value!r}{save_note}")
-                input("Press Enter to continue...")
+                pause("Press any key to continue...")
     finally:
         cursor(False)
 
@@ -3429,7 +3558,7 @@ def house():
         if k.lower() == "x":
             # move to 1;1 and ask how much xp you wanna earn
             move(1, 1)
-            x = int(input("Enter XP to earn: "))
+            x = getx(1, 1, prompt="Enter XP to earn: ", expect="int")
             player.xp += x
             player.save()
             blank(1,1,1,30)
@@ -4142,6 +4271,7 @@ def settings():
     d.settings_category = 1
     d.settings_edit_flash = False
     d.settings_slider_dragging = False
+    d.settings_scroll = 0
     settings_editor.clear()
     cls()
     move(1,1)
@@ -4216,7 +4346,7 @@ def settings2():
         print(f"{RGB}186;243;219m{bold}│                   │{reset}" if d.settings_selection == "category" and d.settings_category == 5 else f"{x7}│                   │")
         print(f"{RGB}186;243;219m{bold}├───────────────────┤{reset}" if d.settings_selection == "category" and d.settings_category in [5,6] else f"{x7}├───────────────────┤")          
         print(f"{RGB}186;243;219m{bold}│                   │{reset}" if d.settings_selection == "category" and d.settings_category == 6 else f"{x7}│                   │")
-        print(f"{RGB}186;243;219m{bold}│    ۵ Developer    │{reset}" if d.settings_selection == "category" and d.settings_category == 6 else f"{x7}│    ۵ Developer    │")
+        print(f"{RGB}186;243;219m{bold}│    ▦ Inventory    │{reset}" if d.settings_selection == "category" and d.settings_category == 6 else f"{x7}│    ▦ Inventory    │")
         print(f"{RGB}186;243;219m{bold}│                   │{reset}" if d.settings_selection == "category" and d.settings_category == 6 else f"{x7}│                   │")
         print(f"{RGB}186;243;219m{bold}├───────────────────┼{reset}" if d.settings_selection == "category" and d.settings_category in [6] else f"{x7}├───────────────────┼")         
 
@@ -4243,11 +4373,12 @@ def settings2():
         print(f"{x3}{bold}│                   │{reset}" if d.settings_selection == "setting" and d.settings_category == 5 else f"{x7}│                   │")
         print(f"{x3}{bold}├───────────────────┤{reset}" if d.settings_selection == "setting" and d.settings_category in [5,6] else f"{x7}├───────────────────┤")          
         print(f"{x3}{bold}│                   │{reset}" if d.settings_selection == "setting" and d.settings_category == 6 else f"{x7}│                   │")
-        print(f"{x3}{bold}│    ۵ Developer    │{reset}" if d.settings_selection == "setting" and d.settings_category == 6 else f"{x7}│    ۵ Developer    │")
+        print(f"{x3}{bold}│    ▦ Inventory    │{reset}" if d.settings_selection == "setting" and d.settings_category == 6 else f"{x7}│    ▦ Inventory    │")
         print(f"{x3}{bold}│                   │{reset}" if d.settings_selection == "setting" and d.settings_category == 6 else f"{x7}│                   │")
         print(f"{x3}{bold}├───────────────────┼{reset}" if d.settings_selection == "setting" and d.settings_category in [6] else f"{x7}├───────────────────┼")      
     page_list = SETTINGS_PAGES
     max_settings = [len(p) for p in page_list] # max settings per category
+    max_settings[2] += 1  # Test audio is a button, but participates in navigation.
 
     
 
@@ -4257,25 +4388,78 @@ def settings2():
     SETTINGS_ROW = 8
     BOX_WIDTH = 100
     BOX_HEIGHT = 3
+    SETTINGS_VIEW_SIZE = 7
+    SETTINGS_SCROLLBAR_COL = SETTINGS_COL + BOX_WIDTH + 3
+    SLIDER_DISPLAYS = (
+        "volume",
+        "animation_speed",
+        "duration",
+        "difficulty",
+        "victory_celebration",
+    )
     CATEGORY_LABELS = [
         "     ◆ Battles     ",
         "   ◐ Look & feel   ",
         "  ◇ Sound & music  ",
         "    ⬙ Key binds    ",
         "  ∴ Accessibility  ",
-        "    ۵ Developer    ",
+        "    ▦ Inventory    ",
     ]
     CATEGORY_SELECTED_RGB = (186, 243, 219)
+    scroll_item_count = len(page) + (1 if d.settings_category == 3 else 0)
+    max_scroll = max(0, scroll_item_count - SETTINGS_VIEW_SIZE)
+    d.settings_scroll = max(0, min(getattr(d, "settings_scroll", 0), max_scroll))
+    if d.settings_selection == "setting":
+        cursor_index = d.settings_cursor - 1
+        if cursor_index < d.settings_scroll:
+            d.settings_scroll = cursor_index
+        elif cursor_index >= d.settings_scroll + SETTINGS_VIEW_SIZE:
+            d.settings_scroll = cursor_index - SETTINGS_VIEW_SIZE + 1
+    visible_page = page[
+        d.settings_scroll:d.settings_scroll + SETTINGS_VIEW_SIZE
+    ]
+    test_audio_visible = (
+        d.settings_category == 3
+        and d.settings_scroll == max_scroll
+        and len(visible_page) < SETTINGS_VIEW_SIZE
+    )
+    test_audio_row = SETTINGS_ROW + len(visible_page) * BOX_HEIGHT
     category_focused = d.settings_selection == "category"
     visually_editing = (
         settings_editor.active
         and not getattr(d, "settings_slider_dragging", False)
     )
 
-    def draw_volume_setting_value(item, raw_value, row, selected, flash=False):
-        before_dot, dot, after_dot, label = volume_slider_parts(item, raw_value)
-        label = f"{label:>4}"
-        slider_width = 11 + 1 + 4
+    def inventory_sort_order_label(value):
+        sorting = getattr(setting, "inventory_sorting", "Name")
+        if not getattr(setting, "sort_items_automatically", True):
+            return "Sorting off"
+        labels = {
+            "Level": {
+                "Ascending": "Lowest first",
+                "Descending": "Highest first",
+            },
+            "Name": {
+                "Ascending": "A to Z",
+                "Descending": "Z to A",
+            },
+            "Rarity": {
+                "Ascending": "Common first",
+                "Descending": "Divine first",
+            },
+        }
+        return labels.get(sorting, {}).get(value, str(value))
+
+    def draw_slider_setting_value(item, raw_value, row, selected, flash=False):
+        before_dot, dot, after_dot, _ = volume_slider_parts(item, raw_value)
+        label_width = {
+            "volume": 4,
+            "duration": 5,
+            "victory_celebration": 7,
+        }.get(item.get("display"), 7)
+        formatted_value = format_setting_value(item, raw_value)
+        label = f"{formatted_value:>{label_width}}"
+        slider_width = slider_step_count(item) + 1 + 1 + label_width
         move(row + 1, SETTINGS_COL + BOX_WIDTH - slider_width)
         state_color = (
             xlred
@@ -4307,10 +4491,28 @@ def settings2():
     def play_boolean_toggle_sound(value):
         sound("map_switch2" if value else "map_switch1")
 
+    def setting_value_contains(x, item, value):
+        if item.get("display") in SLIDER_DISPLAYS:
+            label_width = {
+                "volume": 4,
+                "duration": 5,
+                "victory_celebration": 7,
+            }.get(item.get("display"), 7)
+            width = slider_step_count(item) + 2 + label_width
+        elif item["type"] == "bool":
+            return boolean_control_contains(x, SETTINGS_COL, BOX_WIDTH)
+        else:
+            display_value = format_setting_value(item, value)
+            if item["attr"] == "inventory_sort_order":
+                display_value = inventory_sort_order_label(value)
+            width = max(3, len(str(display_value)))
+        return x >= SETTINGS_COL + BOX_WIDTH - width - 1
+
     # blanks from top left to bottom right (row, col style)
     blank(SETTINGS_ROW, SETTINGS_COL,  30, SETTINGS_COL + BOX_WIDTH + 2)
     
-    for i, item in enumerate(page):
+    for visible_index, item in enumerate(visible_page):
+        item_index = d.settings_scroll + visible_index
 
         try:
             obj = setting
@@ -4323,17 +4525,26 @@ def settings2():
 
         if (
             settings_editor.active
-            and i == d.settings_cursor - 1
+            and item_index == d.settings_cursor - 1
             and settings_editor.item is item
         ):
             value = settings_editor.value
+        is_locked = setting.setting_is_locked(item["attr"])
+        if is_locked:
+            value = setting.effective_setting(item["attr"])
         raw_value = value
         value = format_setting_value(item, value)
-        is_locked = setting.setting_is_locked(item["attr"])
+        if (
+            is_locked
+            and item["attr"] in {"inventory_sorting", "inventory_sort_order"}
+        ):
+            value = "Sorting off"
+        if item["attr"] == "inventory_sort_order":
+            value = inventory_sort_order_label(raw_value)
 
-        row = SETTINGS_ROW + i * BOX_HEIGHT
+        row = SETTINGS_ROW + visible_index * BOX_HEIGHT
         is_selected = (
-            i == d.settings_cursor - 1
+            item_index == d.settings_cursor - 1
             and d.settings_selection == "setting"
         )
         is_editing = is_selected and visually_editing
@@ -4378,13 +4589,13 @@ def settings2():
         value = str(value)
         if is_locked:
             value = f"🔒 {value}"
-            move(row + 1, SETTINGS_COL + BOX_WIDTH - len(value))
+            move(row + 1, SETTINGS_COL + BOX_WIDTH - len(value) - 1)
             print(f"{x7}{bold if is_selected else ''}{value}{reset}", end="")
         elif item.get("disabled"):
             move(row + 1, SETTINGS_COL + BOX_WIDTH - len(value))
             print(f"{x7}{bold if is_selected else ''}{value}{reset}", end="")
-        elif item.get("display") == "volume":
-            draw_volume_setting_value(
+        elif item.get("display") in SLIDER_DISPLAYS:
+            draw_slider_setting_value(
                 item,
                 raw_value,
                 row,
@@ -4431,7 +4642,7 @@ def settings2():
             print("│", end="")
 
         # Bottom
-        if i != 7:
+        if visible_index != 7:
             move(row + 2, SETTINGS_COL)
             if is_editing:
                 print(f"{edit_border_color}{bold}╚" + "═" * BOX_WIDTH + f"╝{reset}", end="")
@@ -4439,11 +4650,24 @@ def settings2():
                 print(f"{RGB}186;243;219m╰" + "─" * BOX_WIDTH + "╯", end="")
             else:
                 print("╰" + "─" * BOX_WIDTH + "╯", end="")
-        if i != len(page) - 1:
+        if visible_index != len(visible_page) - 1:
             continue
 
-        current = page[d.settings_cursor - 1]
-        current_is_locked = setting.setting_is_locked(current["attr"])
+        current_is_test_audio = (
+            d.settings_category == 3
+            and d.settings_cursor == len(page) + 1
+        )
+        if current_is_test_audio:
+            current = {
+                "name": "Test audio",
+                "attr": "test_audio",
+                "description": "Play the configured audio test sound.",
+                "accepted": ["Enter", "Click"],
+            }
+            current_is_locked = False
+        else:
+            current = page[d.settings_cursor - 1]
+            current_is_locked = setting.setting_is_locked(current["attr"])
         # Description
         print(reset, end="")
         # blank description window
@@ -4458,32 +4682,48 @@ def settings2():
                 print(f"{xlorange}🔎 {underline}{bold}Currently selected: {current["name"]}{reset}")
                 move(33, 23)
                 if current_is_locked:
-                    message = "Locked by Reduce Motion. Turn Reduce Motion off to edit."
-                else:
-                    message = settings_editor.message or (
-                        "Press Enter or click to edit. Ctrl+R resets all keybinds."
-                        if d.settings_category == 4
-                        else "Press Enter or click to edit."
+                    reason = setting.setting_lock_reason(current["attr"])
+                    message = (
+                        f"Locked: {reason}. "
+                        f"{setting.setting_lock_message(current['attr'])}"
                     )
+                else:
+                    if current_is_test_audio:
+                        message = "Press Enter or click to play."
+                    else:
+                        message = settings_editor.message or (
+                            "Press Enter or click to edit. Ctrl+R resets all keybinds."
+                            if d.settings_category == 4
+                            else "Press Enter or click to edit."
+                        )
                 print(f"✏️ {xf}{message}{reset}")
             move(34, 23)
             print(f"📜 {xf}{current["description"]}", end="")
 
             move(35, 23)
             accepted = current["accepted"]
+            if current["attr"] == "inventory_sort_order":
+                accepted = (
+                    ["Sorting off"]
+                    if not getattr(setting, "sort_items_automatically", True)
+                    else [
+                        inventory_sort_order_label("Ascending"),
+                        inventory_sort_order_label("Descending"),
+                    ]
+                )
             if isinstance(accepted, list):
                 accepted = " / ".join(accepted)
             print(f"{xa}{reset}{xf}✅ {bold}Accepted values: {xa}{unbold}{accepted}", end="")
         else:
             move(32,23)
-            settings_category = ["Battles", "Look & feel", "Sound & music", "Key binds", "Accessibility", "Developer"]
+            settings_category = ["Battles", "Look & feel", "Sound & music", "Key binds", "Accessibility", "Inventory"]
             settings_category_descriptions = [
                 "⚔️ Change battles' fates with these settings!",
                 "🎨 Configure how animations and text effects appear!",
                 "🥁 How loud do you want your audio? Here you go!",
                 "⌨️ Wanna control your game differently? Set them here!",
                 "♿ Have trouble with understanding some game parts? Check here.",
-                "🛠️ Just don't. Please don't."]
+                "🎒 Configure how items are sorted and upgraded."]
 
             print(f"{xlorange}🔍 {underline}{bold}Currently selected: {settings_category[d.settings_category - 1]}{reset}")
             move(33, 23)
@@ -4492,6 +4732,57 @@ def settings2():
             print(settings_category_descriptions[d.settings_category - 1], end="")
 
     
+
+    if test_audio_visible:
+        test_audio_selected = (
+            d.settings_selection == "setting"
+            and d.settings_cursor == len(page) + 1
+        )
+        move(test_audio_row, SETTINGS_COL)
+        if test_audio_selected:
+            print(f"{RGB}186;243;219m╭" + "─" * BOX_WIDTH + "╮", end="")
+        else:
+            print(f"{xf}╭" + "─" * BOX_WIDTH + "╮", end="")
+        move(test_audio_row + 1, SETTINGS_COL)
+        print("│", end="")
+        move(test_audio_row + 1, SETTINGS_COL + 2)
+        if test_audio_selected:
+            print(f"{xa}{bold}Test audio{reset}", end="")
+        else:
+            print(f"{xf}Test audio{reset}", end="")
+        move(test_audio_row + 1, SETTINGS_COL + BOX_WIDTH - 5)
+        print(f"{xf}Click{reset}", end="")
+        move(test_audio_row + 1, SETTINGS_COL + BOX_WIDTH + 1)
+        print(f"{RGB + '186;243;219m' if test_audio_selected else xf}│", end="")
+        move(test_audio_row + 2, SETTINGS_COL)
+        if test_audio_selected:
+            print(f"{RGB}186;243;219m╰" + "─" * BOX_WIDTH + f"╯{reset}", end="")
+        else:
+            print(f"{xf}╰" + "─" * BOX_WIDTH + f"╯{reset}", end="")
+
+    if scroll_item_count > SETTINGS_VIEW_SIZE:
+        track_height = SETTINGS_VIEW_SIZE * BOX_HEIGHT + 2
+        thumb_height = max(
+            2,
+            round(track_height * SETTINGS_VIEW_SIZE / scroll_item_count),
+        )
+        thumb_offset = round(
+            (track_height - thumb_height)
+            * d.settings_scroll
+            / max(1, max_scroll)
+        )
+        scrollbar_col = SETTINGS_SCROLLBAR_COL
+        for track_index in range(track_height):
+            move(SETTINGS_ROW + track_index, scrollbar_col)
+            if thumb_offset <= track_index < thumb_offset + thumb_height:
+                print(f"{xlorange}{bold}┃{reset}", end="")
+            else:
+                print(f"{x8}│{reset}", end="")
+    else:
+        track_height = SETTINGS_VIEW_SIZE * BOX_HEIGHT + 2
+        for track_index in range(track_height):
+            move(SETTINGS_ROW + track_index, SETTINGS_SCROLLBAR_COL)
+            print(f"{x7}│{reset}", end="")
 
     if d.settings_selection == "setting":
         move(32,108-12)
@@ -4532,7 +4823,11 @@ def settings2():
         print(f"{x7}│ {xlyellow}← {bold}left{reset} - change category   {x7} │")
         move(34,108-12)
         if current_is_locked:
-            print(f"{x7}│ {x7}🔒 {bold}locked{reset} - reduce motion    {x7}│")
+            reason = setting.setting_lock_reason(current["attr"])
+            print(
+                f"{x7}│ {x7}🔒 {bold}locked{reset} - "
+                f"{reason:<16}{x7}│"
+            )
         else:
             print(f"{x7}│ {xlyellow}⏎ {bold}enter {reset}- modify setting    {x7}│")
         move(35,108-12)
@@ -4569,7 +4864,8 @@ def settings2():
                 if visually_editing:
                     focused_item = page[d.settings_cursor - 1]
                     focused_row = (
-                        SETTINGS_ROW + (d.settings_cursor - 1) * BOX_HEIGHT
+                        SETTINGS_ROW
+                        + (d.settings_cursor - 1 - d.settings_scroll) * BOX_HEIGHT
                     )
                     draw_editing_setting_name(focused_item, focused_row)
                     continue
@@ -4591,12 +4887,158 @@ def settings2():
                 if (
                     mouse_event == "down"
                     and k.get("button") == "left"
+                    and test_audio_visible
+                    and SETTINGS_COL - 1 <= k.get("x", -1) <= SETTINGS_COL + BOX_WIDTH
+                    and test_audio_row - 1 <= k.get("y", -1) <= test_audio_row + 1
+                ):
+                    settings_editor.clear()
+                    d.settings_selection = "setting"
+                    d.settings_cursor = len(page) + 1
+                    sound("sound_test")
+                    game.goto = settings2
+                    return
+                if (
+                    mouse_event == "down"
+                    and k.get("button") == "left"
                     and back_button_contains(k["x"], k["y"])
                 ):
                     settings_editor.clear()
                     d.settings_slider_dragging = False
                     sound("map_left")
                     game.goto = house
+                    return
+
+                if mouse_event == "wheel":
+                    local_hovered_index = setting_index_at(
+                        k["x"],
+                        k["y"],
+                        len(visible_page),
+                        SETTINGS_COL,
+                        SETTINGS_ROW,
+                        BOX_WIDTH,
+                        BOX_HEIGHT,
+                    )
+                    on_scrollbar = (
+                        len(page) > SETTINGS_VIEW_SIZE
+                        and SETTINGS_SCROLLBAR_COL - 2
+                        <= k.get("x", -1)
+                        <= SETTINGS_SCROLLBAR_COL
+                        and SETTINGS_ROW - 1
+                        <= k.get("y", -1)
+                        < SETTINGS_ROW - 1 + SETTINGS_VIEW_SIZE * BOX_HEIGHT
+                    )
+                    wheel_up = k.get("delta", 0) > 0
+                    hovered_index = None
+                    hovered = None
+                    current_value = None
+                    over_value = False
+                    if local_hovered_index is not None:
+                        hovered_index = d.settings_scroll + local_hovered_index
+                        hovered = page[hovered_index]
+                        current_value = getattr(setting, hovered["attr"])
+                        over_value = (
+                            k.get("y")
+                            == SETTINGS_ROW
+                            + local_hovered_index * BOX_HEIGHT
+                            and setting_value_contains(
+                                k.get("x", -1),
+                                hovered,
+                                current_value,
+                            )
+                        )
+
+                    inside_settings_area = (
+                        SETTINGS_COL - 1
+                        <= k.get("x", -1)
+                        <= SETTINGS_SCROLLBAR_COL
+                        and SETTINGS_ROW - 1 <= k.get("y", -1) < 31
+                    )
+
+                    if on_scrollbar or (inside_settings_area and not over_value):
+                        scroll_direction = -1 if wheel_up else 1
+                        new_scroll = max(
+                            0,
+                            min(max_scroll, d.settings_scroll + scroll_direction),
+                        )
+                        if new_scroll != d.settings_scroll:
+                            if settings_editor.active:
+                                settings_editor.commit()
+                                if d.settings_category == 3:
+                                    sound("REFRESH_AUDIO")
+                            d.settings_scroll = new_scroll
+                            d.settings_cursor = max(
+                                new_scroll + 1,
+                                min(
+                                    d.settings_cursor,
+                                    new_scroll + SETTINGS_VIEW_SIZE,
+                                ),
+                            )
+                            settings_editor.clear()
+                            sound("map_switch1" if wheel_up else "map_switch2")
+                            game.goto = settings2
+                            return
+                        continue
+
+                    if hovered is None:
+                        continue
+
+                    if (
+                        hovered.get("disabled")
+                        or setting.setting_is_locked(hovered["attr"])
+                        or hovered["type"] == "keybind"
+                    ):
+                        sound("error2")
+                        continue
+
+                    if settings_editor.active:
+                        settings_editor.commit()
+                    direction = 1 if wheel_up else -1
+
+                    if hovered["type"] == "bool":
+                        new_value = not current_value
+                    elif hovered["type"] == "choice":
+                        choices = hovered.get("choices", ())
+                        if not choices:
+                            continue
+                        try:
+                            current_index = choices.index(current_value)
+                        except ValueError:
+                            current_index = 0
+                        new_value = choices[
+                            (current_index + direction) % len(choices)
+                        ]
+                    elif hovered["type"] == "slider":
+                        step = hovered.get("step", 1)
+                        new_value = max(
+                            hovered.get("min", current_value),
+                            min(
+                                hovered.get("max", current_value),
+                                current_value + direction * step,
+                            ),
+                        )
+                        if isinstance(step, float):
+                            decimals = max(
+                                0,
+                                len(str(step).partition(".")[2]),
+                            )
+                            new_value = round(new_value, decimals)
+                    else:
+                        continue
+
+                    if new_value == current_value:
+                        continue
+                    setattr(setting, hovered["attr"], new_value)
+                    setting.save()
+                    settings_editor.clear()
+                    d.settings_selection = "setting"
+                    d.settings_cursor = hovered_index + 1
+                    if d.settings_category == 3:
+                        sound("REFRESH_AUDIO")
+                    if hovered["type"] == "bool":
+                        play_boolean_toggle_sound(new_value)
+                    else:
+                        sound("map_switch2" if direction > 0 else "map_switch1")
+                    game.goto = settings2
                     return
 
                 if (
@@ -4607,12 +5049,45 @@ def settings2():
                     d.settings_slider_dragging = False
                     if (
                         settings_editor.active
-                        and settings_editor.item.get("display") == "volume"
+                        and settings_editor.item.get("display")
+                        in SLIDER_DISPLAYS
                     ):
                         settings_editor.commit()
                         if d.settings_category == 3:
                             sound("REFRESH_AUDIO")
                         sound("map_switch1")
+                        game.goto = settings2
+                        return
+                    continue
+
+                if mouse_event == "down" and k.get("button") == "right":
+                    if (
+                        test_audio_visible
+                        and SETTINGS_COL - 1 <= k.get("x", -1) <= SETTINGS_COL + BOX_WIDTH
+                        and test_audio_row - 1 <= k.get("y", -1) <= test_audio_row + 1
+                    ):
+                        if settings_editor.active:
+                            settings_editor.commit()
+                            sound("REFRESH_AUDIO")
+                        d.settings_slider_dragging = False
+                        d.settings_selection = "setting"
+                        d.settings_cursor = len(page) + 1
+                        sound("map_switch2")
+                        game.goto = settings2
+                        return
+                    right_clicked_index = setting_index_at(
+                        k["x"], k["y"], len(visible_page),
+                        SETTINGS_COL, SETTINGS_ROW, BOX_WIDTH, BOX_HEIGHT,
+                    )
+                    if right_clicked_index is not None:
+                        if settings_editor.active:
+                            settings_editor.commit()
+                            if d.settings_category == 3:
+                                sound("REFRESH_AUDIO")
+                        d.settings_slider_dragging = False
+                        d.settings_selection = "setting"
+                        d.settings_cursor = d.settings_scroll + right_clicked_index + 1
+                        sound("map_switch2")
                         game.goto = settings2
                         return
                     continue
@@ -4623,7 +5098,7 @@ def settings2():
                     clicked_index = setting_index_at(
                         k["x"],
                         k["y"],
-                        len(page),
+                        len(visible_page),
                         SETTINGS_COL,
                         SETTINGS_ROW,
                         BOX_WIDTH,
@@ -4631,6 +5106,8 @@ def settings2():
                     )
 
                     if clicked_index is not None:
+                        local_clicked_index = clicked_index
+                        clicked_index = d.settings_scroll + local_clicked_index
                         clicked = page[clicked_index]
                         owner = setting
                         same_active_setting = (
@@ -4638,10 +5115,13 @@ def settings2():
                             and clicked_index == d.settings_cursor - 1
                             and settings_editor.item is clicked
                         )
-                        value_row = SETTINGS_ROW + clicked_index * BOX_HEIGHT
+                        value_row = SETTINGS_ROW + local_clicked_index * BOX_HEIGHT
                         over_value_row = k["y"] == value_row
 
-                        if clicked.get("display") == "volume" and over_value_row:
+                        if (
+                            clicked.get("display") in SLIDER_DISPLAYS
+                            and over_value_row
+                        ):
                             clicked_value = volume_value_at_mouse(
                                 k["x"],
                                 clicked,
@@ -4669,7 +5149,7 @@ def settings2():
                                 if mouse_event == "down":
                                     sound("map_switch2")
                                 if was_same_active_setting and not visually_editing:
-                                    draw_volume_setting_value(
+                                    draw_slider_setting_value(
                                         clicked,
                                         clicked_value,
                                         value_row,
@@ -4684,10 +5164,6 @@ def settings2():
                             and clicked["type"] == "bool"
                             and not clicked.get("disabled")
                             and not owner.setting_is_locked(clicked["attr"])
-                            and over_value_row
-                            and boolean_control_contains(
-                                k["x"], SETTINGS_COL, BOX_WIDTH
-                            )
                         ):
                             settings_editor.message = ""
                             if settings_editor.active:
@@ -4750,6 +5226,7 @@ def settings2():
                             d.settings_category = clicked_category + 1
                             d.settings_selection = "category"
                             d.settings_cursor = 1
+                            d.settings_scroll = 0
                             settings_editor.clear()
                             sounds_list = [
                                 "setting_battles",
@@ -4821,12 +5298,13 @@ def settings2():
                         sound("error2")
                     elif result == "changed":
                         sound("map_switch2")
-                        if settings_editor.item.get("display") == "volume":
+                        if settings_editor.item.get("display") in SLIDER_DISPLAYS:
                             focused_row = (
                                 SETTINGS_ROW
-                                + (d.settings_cursor - 1) * BOX_HEIGHT
+                                + (d.settings_cursor - 1 - d.settings_scroll)
+                                * BOX_HEIGHT
                             )
-                            draw_volume_setting_value(
+                            draw_slider_setting_value(
                                 settings_editor.item,
                                 settings_editor.value,
                                 focused_row,
@@ -4841,6 +5319,7 @@ def settings2():
                     settings_editor.message = ""
                     if d.settings_selection == "category":
                         d.settings_category += 1
+                        d.settings_scroll = 0
                         if d.settings_category > 6:
                             d.settings_category = 6
                             sound("map_switch2_end")
@@ -4852,7 +5331,14 @@ def settings2():
                         d.settings_cursor += 1
                         if d.settings_cursor > max_settings[d.settings_category - 1]:
                             d.settings_cursor = max_settings[d.settings_category - 1]
-                            sound("map_switch2_end")
+                            if (
+                                d.settings_category == 3
+                                and d.settings_scroll < max_scroll
+                            ):
+                                d.settings_scroll = max_scroll
+                                sound("map_switch2")
+                            else:
+                                sound("map_switch2_end")
                         else:
                             sound("map_switch2")
                     game.goto = settings2
@@ -4861,6 +5347,7 @@ def settings2():
                     settings_editor.message = ""
                     if d.settings_selection == "category":
                         d.settings_category -= 1
+                        d.settings_scroll = 0
                         if d.settings_category < 1:
                             d.settings_category = 1
                             sound("map_switch1_end")
@@ -4882,13 +5369,20 @@ def settings2():
                 ):
                     settings_editor.message = ""
                     d.settings_selection = "setting"
-                    d.settings_cursor = 1
+                    d.settings_cursor = d.settings_scroll + 1
                     sound("map_right")
                     game.goto = settings2
                     return
                 if d.settings_selection == "setting" and k.lower() in (
                     "enter", bind.confirm.lower()
                 ):
+                    if (
+                        d.settings_category == 3
+                        and d.settings_cursor == len(page) + 1
+                    ):
+                        sound("sound_test")
+                        game.goto = settings2
+                        return
                     current = page[d.settings_cursor - 1]
                     owner = setting
                     result = settings_editor.begin(current, owner)
@@ -4965,6 +5459,12 @@ def settings_old():
             return
             
 def inventory():
+    if getattr(setting, "sort_items_automatically", True):
+        sort_inventory(
+            PROJECT_ROOT / "Items",
+            setting.inventory_sorting,
+            setting.inventory_sort_order,
+        )
     cls()
     print(f"""
 {reset}
@@ -5527,7 +6027,11 @@ def startup():
         game.goto = first_time_setup
         return
     sound(random.choice(["music_default"]))
-    game.goto = startup_animation
+    game.goto = (
+        mainmenu
+        if setting.effective_setting("disable_startup_animation")
+        else startup_animation
+    )
     return
 
 
@@ -6203,7 +6707,7 @@ def _upgrade_selected_item_flow():
                     )
         else:
             levels = max(1, min(levels, available_levels))
-            if getattr(setting, "item_level_up_mode", "One at a Time") == "All":
+            if getattr(setting, "item_level_up_mode", "One at a time") == "All":
                 affordable_levels = max_affordable_upgrade_levels(
                     item_obj,
                     game.sel,
@@ -6484,9 +6988,17 @@ def inventory_prep():
     print(f"\033#4                  {xlorange}╰───────────────────────{xlorange}╯")
 
     d.moving_progress = 0
-    d.page = 0
-    d.begin = 1
-    d.end = 10
+    remembered = 1
+    if getattr(setting, "remember_last_inventory_selection", False):
+        remembered = getattr(setting, "inventory_last_selections", {}).get(
+            game.sel,
+            1,
+        )
+    d.currsel = max(1, min(int(remembered), d.length))
+    d.page = (d.currsel - 1) // 10
+    d.begin = d.page * 10 + 1
+    d.end = d.begin + 9
+    d.current = d.begin - 1
 
     # border & character
     print(f"{x8}",end="")
@@ -6514,7 +7026,6 @@ def inventory_prep():
     print(f"{reset}\033[16;19H🔱 {bold}{xlorange}{category_title} {xlyellow}{unbold}→ {xlorange}{bold}Page {bold}{d.page + 1} {unbold}{x7}(items: {xf}{bold}{d.length}{x7}{unbold}){reset}")
     print(f"\033[31;19H{xlorange}Move {xlyellow}{bold}W/S A/D {reset}{xlorange}| Upgrade {xlyellow}{bold}U {reset}{xlorange}| Delete {xlyellow}{bold}⌫{reset}")
 
-    d.currsel = 1
     game.preserve_offset = False
     
     # make comparison array empty
@@ -6596,6 +7107,13 @@ def inventory_waitkey():
         elif k == "d" or k == "right":
             change_inventory_page(1)
         elif k in (bind.back, "esc"):
+            if getattr(setting, "remember_last_inventory_selection", False):
+                selections = dict(
+                    getattr(setting, "inventory_last_selections", {})
+                )
+                selections[game.sel] = d.currsel
+                setting.inventory_last_selections = selections
+                setting.save()
             game.goto = inventory
             return
         elif k in ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]:
@@ -6877,7 +7395,7 @@ def change_inventory_page(direction):
 
 def item_pager():
     d.rowdisplay = 18
-    d.currselrow = 19
+    d.currselrow = 19 + (d.currsel - d.begin)
 
     for a in range(d.begin, d.end + 1):
         render_items()

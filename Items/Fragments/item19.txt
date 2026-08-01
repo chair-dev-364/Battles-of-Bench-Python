@@ -1,1 +1,1 @@
-Ring;;Watchtower Ring;;1;;Crit Damage;;6;;Guardian;;0
+Necklace;;Rampart Necklace;;1;;Crit Rate;;2;;Guardian;;0

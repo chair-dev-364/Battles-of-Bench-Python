@@ -1,1 +1,1 @@
-wand;;0e;;Wand of Galanb III.;;25;;173;;97.5;;Health;;149;;Government drones... ACTION!;;0.05;;3 pigeons will aid you in battle!;;0;;3
+book;;0e;;Befriend a Shark in 30 Days;;19;;178;;148.3;;Regeneration;;19;;Filled with shark facts and... fanfics?!;;0.05;;A shark will attack after you do! (30% DMG);;0;;0

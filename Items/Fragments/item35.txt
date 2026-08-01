@@ -1,1 +1,1 @@
-Ring;;Atlas Ring;;1;;DEF;;10;;Titan;;0
+Necklace;;Endurance Necklace;;1;;HP %;;7;;Titan;;0

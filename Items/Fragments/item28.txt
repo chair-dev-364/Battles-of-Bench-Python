@@ -1,1 +1,1 @@
-Ring;;Executioner's Ring;;1;;ATK;;24;;Assassin;;0
+Ring;;Blackstar Ring;;1;;Crit Rate;;4;;Assassin;;0

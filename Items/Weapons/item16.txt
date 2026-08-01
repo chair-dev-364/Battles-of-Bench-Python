@@ -1,1 +1,1 @@
-book;;0e;;Befriend a Shark in 30 Days;;19;;178;;148.3;;Regeneration;;19;;Filled with shark facts and... fanfics?!;;0.05;;A shark will attack after you do! (30% DMG);;0;;0
+dagger;;03;;The Slightly Bent Ruler;;7;;72;;39.5;;Strength;;6;;Measures twice. Misses anyway.;;0.035;;No ability.;;0;;0

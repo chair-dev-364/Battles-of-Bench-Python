@@ -1,1 +1,1 @@
-Bracelet;;Razor Bracelet;;1;;ATK;;23;;Assassin;;0
+Ring;;Aegis Ring;;1;;ATK %;;4;;Guardian;;0

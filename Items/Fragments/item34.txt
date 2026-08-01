@@ -1,1 +1,1 @@
-Necklace;;Earthsong Necklace;;15;;Speed;;2.0;;Titan;;0;;HP;;36;;Crit Rate;;1;;ATK;;10
+Necklace;;Worldroot Necklace;;1;;HP;;155;;Titan;;0

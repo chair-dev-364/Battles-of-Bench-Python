@@ -1,1 +1,1 @@
-Necklace;;Silent Oath Necklace;;1;;Crit Damage;;10;;Assassin;;0
+Bracelet;;Nightwire Bracelet;;1;;Crit Rate;;4;;Assassin;;0

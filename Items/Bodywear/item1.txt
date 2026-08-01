@@ -1,1 +1,1 @@
-bodywear;;02;;Linux Socks;;6;;7.0;;None;;None;;0;;0.035
+bodywear;;0e;;Adventurer's Insane Bodywear;;20;;10;;None;;None;;0;;0.035

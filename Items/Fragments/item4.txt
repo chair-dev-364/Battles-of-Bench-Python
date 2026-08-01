@@ -1,1 +1,1 @@
-Bracelet;;Vanguard Bracelet;;1;;ATK %;;5;;Warrior;;0
+Ring;;Duelist's Ring;;15;;Speed;;4.0;;Warrior;;0;;DEF;;5;;HP %;;1;;ATK;;10

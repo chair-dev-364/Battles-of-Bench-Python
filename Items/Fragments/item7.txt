@@ -1,1 +1,1 @@
-Necklace;;Bannerchain Necklace;;15;;ATK;;20.0;;Warrior;;0;;HP;;32;;ATK %;;3;;HP %;;4
+Bracelet;;Shade Bracelet;;15;;Speed;;4.0;;Assassin;;0;;ATK %;;3;;DEF;;3;;Crit Damage;;2

@@ -1,1 +1,1 @@
-Bracelet;;Mountain Bracelet;;1;;DEF;;10;;Titan;;0
+Ring;;Executioner's Ring;;1;;ATK;;24;;Assassin;;0

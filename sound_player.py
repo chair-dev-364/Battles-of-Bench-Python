@@ -422,12 +422,19 @@ def get_volume(key="sound"):
             return default_volume
             
         settings_dict = {}
-        for k in ["sound", "sfx", "music"]:
-            if k in settings:
+        audio_disabled = settings.get("disable_audio_completely") is True
+        for k in ["master", "sound", "ambient", "sfx", "dialogue", "music"]:
+            if audio_disabled:
+                settings_dict[k] = 0.0
+            elif k in settings:
                 val = int(settings[k])
                 settings_dict[k] = perceptual_volume_gain(val)
             else:
                 settings_dict[k] = default_volume
+
+        master_gain = settings_dict["master"]
+        for k in ("sound", "ambient", "sfx", "dialogue", "music"):
+            settings_dict[k] *= master_gain
 
         _volume_cache = settings_dict
         _volume_file_mtime = current_mtime
@@ -507,7 +514,7 @@ def parse_play_request(command):
     prefix, separator, remainder = command.partition("|")
     if separator and prefix.startswith("@"):
         channel_text, _, pan_text = prefix[1:].partition(",")
-        if channel_text in ("sound", "sfx", "music"):
+        if channel_text in ("sound", "ambient", "sfx", "dialogue", "music"):
             volume_key = channel_text
             payload = remainder
             try:

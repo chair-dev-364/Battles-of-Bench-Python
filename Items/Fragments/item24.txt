@@ -1,1 +1,1 @@
-Necklace;;Venom Necklace;;1;;ATK %;;6;;Assassin;;0
+Bracelet;;Razor Bracelet;;1;;ATK;;23;;Assassin;;0

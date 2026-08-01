@@ -1,1 +1,1 @@
-Necklace;;Moonveil Necklace;;1;;HP %;;4;;Assassin;;0
+Necklace;;Silent Oath Necklace;;1;;Crit Damage;;10;;Assassin;;0

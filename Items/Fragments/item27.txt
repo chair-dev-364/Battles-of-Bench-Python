@@ -1,1 +1,1 @@
-Ring;;Phantom Ring;;1;;DEF;;5;;Assassin;;0
+Necklace;;Moonveil Necklace;;1;;HP %;;4;;Assassin;;0

@@ -1,1 +1,1 @@
-Bracelet;;Colossus Bracelet;;1;;HP;;160;;Titan;;0
+Ring;;Phantom Ring;;1;;DEF;;5;;Assassin;;0

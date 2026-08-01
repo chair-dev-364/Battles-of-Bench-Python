@@ -1,1 +1,1 @@
-Bracelet;;Nightwire Bracelet;;1;;Crit Rate;;4;;Assassin;;0
+Ring;;Citadel Ring;;1;;HP;;140;;Guardian;;0

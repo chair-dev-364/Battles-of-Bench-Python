@@ -2,7 +2,7 @@
     "dust": 97792,
     "gems": 0,
     "level": 100,
-    "money": 82227,
+    "money": 81797,
     "skill_main": 1,
     "skill_skill": 1,
     "skill_ult": 1,

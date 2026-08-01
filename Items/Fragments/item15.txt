@@ -1,1 +1,1 @@
-Necklace;;Oathchain Necklace;;1;;Speed;;3;;Guardian;;0
+Bracelet;;Stoneward Bracelet;;1;;HP;;150;;Guardian;;0

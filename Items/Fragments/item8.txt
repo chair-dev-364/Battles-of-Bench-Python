@@ -1,1 +1,1 @@
-Ring;;Duelist's Ring;;15;;Speed;;4.0;;Warrior;;0;;DEF;;5;;HP %;;1;;ATK;;10
+Necklace;;Earthsong Necklace;;15;;Speed;;2.0;;Titan;;0;;HP;;36;;Crit Rate;;1;;ATK;;10
