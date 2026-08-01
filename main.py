@@ -4747,7 +4747,7 @@ def settings2():
         print("│", end="")
         move(test_audio_row + 1, SETTINGS_COL + 2)
         if test_audio_selected:
-            print(f"{xa}{bold}Test audio{reset}", end="")
+            print(f"{reset}→ {xa}{bold}Test audio{reset}", end="")
         else:
             print(f"{xf}Test audio{reset}", end="")
         move(test_audio_row + 1, SETTINGS_COL + BOX_WIDTH - 5)
