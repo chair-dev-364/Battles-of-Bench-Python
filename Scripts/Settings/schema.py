@@ -1,11 +1,11 @@
 """Declarative settings schema shared by persistence and the settings screen."""
 
-from Settings.accessibility import SETTINGS as ACCESSIBILITY_SETTINGS
-from Settings.appearance import SETTINGS as APPEARANCE_SETTINGS
-from Settings.battles import SETTINGS as BATTLE_SETTINGS
-from Settings.inventory import SETTINGS as INVENTORY_SETTINGS
-from Settings.keybinds import SETTINGS as KEYBIND_SETTINGS
-from Settings.sound import SETTINGS as SOUND_SETTINGS
+from Scripts.Settings.accessibility import SETTINGS as ACCESSIBILITY_SETTINGS
+from Scripts.Settings.appearance import SETTINGS as APPEARANCE_SETTINGS
+from Scripts.Settings.battles import SETTINGS as BATTLE_SETTINGS
+from Scripts.Settings.inventory import SETTINGS as INVENTORY_SETTINGS
+from Scripts.Settings.keybinds import SETTINGS as KEYBIND_SETTINGS
+from Scripts.Settings.sound import SETTINGS as SOUND_SETTINGS
 
 
 SETTINGS_PAGES = [

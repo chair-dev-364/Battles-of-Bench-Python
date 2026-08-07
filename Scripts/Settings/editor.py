@@ -4,7 +4,7 @@ The renderer owns layout, the data objects own persistence, and this module
 owns only the short-lived state of an edit (focused value, save, or cancel).
 """
 
-from Settings.keybinds import SETTINGS as KEYBIND_SETTINGS
+from Scripts.Settings.keybinds import SETTINGS as KEYBIND_SETTINGS
 
 
 RESERVED_KEYBINDS = {"esc", "up", "down", "left", "right"}

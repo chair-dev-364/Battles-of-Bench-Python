@@ -40,12 +40,12 @@ VOLUME_FILE = 'settings.txt'
 BUFFER_SIZE = 1024 # For socket communication
 
 # --- Global Variables ---
-# Get the directory where the script is located
+# Get the project directory above Scripts, where assets and settings live.
 try:
     # PyInstaller creates a temp folder and stores path in _MEIPASS
     BASE_DIR = sys._MEIPASS
 except AttributeError:
-    BASE_DIR = os.path.abspath(os.path.dirname(__file__))
+    BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
 
 SOUNDS_DIR = os.path.join(BASE_DIR, SOUNDS_FOLDER)
 SETTINGS_DIR = os.path.join(BASE_DIR, SETTINGS_FOLDER)
@@ -357,21 +357,8 @@ def preload_sounds():
                         print(f"[Preload] Error caching {f}: {e}")
         print(f"[Preload] Done. Cached: {cached}/{total}, errors: {errors}.")
 
-        # Play a short 'startup completed' sound if available (respect volume/mute)
-        try:
-            login_mp3 = os.path.join(SOUNDS_DIR, 'login_newss.mp3')
-            login_wav = os.path.join(SOUNDS_DIR, 'login_newss.wav')
-            if os.path.isfile(login_mp3) or os.path.isfile(login_wav):
-                vol = get_volume()
-                if vol > 0:
-                    threading.Thread(target=play_sound_thread, args=("login_newss",), daemon=True).start()
-                    print("[Preload] Played 'login_newss' to signal preload completion.")
-                else:
-                    print("[Preload] Skipping 'login_newss' because volume == 0 (muted).")
-            else:
-                print("[Preload] No 'login_newss' sound found to play on completion.")
-        except Exception as e:
-            print(f"[Preload] Error attempting to play 'login_newss': {e}")
+        # Keep preload silent; startup audio should only come from explicit gameplay events.
+        print("[Preload] Sound cache warmup finished silently.")
 
     except Exception as e:
         print(f"[Preload] Unexpected error during preload: {e}")

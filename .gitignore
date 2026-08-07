@@ -29,3 +29,6 @@ General/setup.txt
 Docs/
 desktop.ini
 tests/
+run.command
+!Scripts/tests/
+!Scripts/tests/*.py

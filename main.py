@@ -20,8 +20,8 @@
 *   However, don't blame yourself if it doesn't work.                            *
 *                                                                                *                                                                                
 *******************************************************************************"""
-from console_input import key
-from Settings.editor import (
+from Scripts.console_input import key
+from Scripts.Settings.editor import (
     SettingEditor,
     back_button_contains,
     boolean_control_contains,
@@ -34,13 +34,13 @@ from Settings.editor import (
     volume_slider_parts,
     volume_value_at_mouse,
 )
-from Settings.schema import (
+from Scripts.Settings.schema import (
     KEYBIND_DEFAULTS,
     PERSISTENT_DEFAULTS,
     SETTINGS_BY_ATTR,
     SETTINGS_PAGES,
 )
-from sort import sort_inventory
+from Scripts.sort import sort_inventory
 import atexit, os, time, sys, ctypes, ast, math, operator as op, subprocess, json, re, random, shlex, shutil, tempfile, stat, urllib.request  # noqa: E401, E402
 from pathlib import Path  # noqa: E402
 from typing import Literal  # noqa: E402
@@ -55,7 +55,7 @@ os.chdir(PROJECT_ROOT)
 
 import time
 import sys
-from console_input import key
+from Scripts.console_input import key
 
 
 
@@ -263,7 +263,7 @@ _enable_virtual_terminal_output()
 _set_terminal_title(TITLE)
 
 sound_process = subprocess.Popen(
-    [sys.executable, str(PROJECT_ROOT / "sound_player.py")],
+    [sys.executable, str(PROJECT_ROOT / "Scripts" / "sound_player.py")],
     cwd=str(PROJECT_ROOT),
     stdout=subprocess.DEVNULL,
     stderr=subprocess.DEVNULL,
@@ -662,6 +662,7 @@ class SettingsData:
         "animation_speed": 10,
         "menu_transitions": False,
         "disable_startup_animation": True,
+        "victory_celebration": 0,
     }
     _REDUCE_MOTION_LOCKED_FIELDS = set(_REDUCE_MOTION_OVERRIDES)
 
@@ -1043,7 +1044,7 @@ def screen_wipe(mode, delay_ms):
         cls()
         return
 
-    wipe_path = PROJECT_ROOT / "wipe.py"
+    wipe_path = PROJECT_ROOT / "Scripts" / "wipe.py"
     subprocess.run([sys.executable, str(wipe_path), mode, str(delay_ms)])
 
 
@@ -5940,7 +5941,7 @@ def first_time_setup():
     with open("General/setup.txt", "w") as f:
         f.write("okay")
     sound("payment_success")
-    # wipe screen with animation (using wipe.py)
+    # wipe screen with animation (using Scripts/wipe.py)
     screen_wipe("normal", 20)
     game.goto = startup
     return

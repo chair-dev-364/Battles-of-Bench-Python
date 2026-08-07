@@ -8,7 +8,7 @@ SETTINGS = [
         "accepted": ["Off", "On"],
     },
     {
-        "name": "Disable ALL animations",
+        "name": "Reduce motion",
         "attr": "reduce_motion",
         "type": "bool",
         "default": False,

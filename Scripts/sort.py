@@ -6,7 +6,7 @@ from pathlib import Path
 from uuid import uuid4
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ITEM_CATEGORIES = ("Weapons", "Bodywear", "Helmets", "Fragments")
 RARITY_TIERS = ("08", "02", "03", "0d", "0e")
 ACTIVE_ITEM_FILES = {

@@ -204,7 +204,7 @@ def play_sound_effect():
 def main():
     parser = argparse.ArgumentParser(
         description="Terminal wipe engine",
-        usage="wipe.py <mode> <delay_ms> [--reverse] [--color] [--noise] [--cycles N] [--sound]"
+        usage="Scripts/wipe.py <mode> <delay_ms> [--reverse] [--color] [--noise] [--cycles N] [--sound]"
     )
     parser.add_argument("mode", help="Wipe mode. Options: " + ", ".join(MODES.keys()))
     parser.add_argument("delay_ms", type=int, nargs="?", default=50, help="Delay between steps in ms (default: 50)")
