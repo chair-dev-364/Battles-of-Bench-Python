@@ -29,7 +29,10 @@ import os
 import sys
 import time
 import json
-import pygame # Requires: pip install pygame
+try:
+    import pygame # Requires: pip install pygame
+except ImportError:
+    pygame = None
 
 # --- Configuration ---
 HOST = '127.0.0.1'  # Listen only on the local machine
@@ -52,6 +55,25 @@ SETTINGS_DIR = os.path.join(BASE_DIR, SETTINGS_FOLDER)
 VOLUME_FILE_PATH = os.path.join(SETTINGS_DIR, VOLUME_FILE)
 
 shutdown_flag = threading.Event() # Used to signal shutdown
+
+# Some current macOS Python builds can import pygame but do not include its
+# SDL_mixer extension.  Keep audio working in that case by using the system
+# player that ships with macOS instead of letting the helper exit at startup.
+if pygame is not None:
+    try:
+        import pygame.mixer
+        MIXER_AVAILABLE = True
+    except (ImportError, ModuleNotFoundError, NotImplementedError):
+        MIXER_AVAILABLE = False
+else:
+    MIXER_AVAILABLE = False
+AFPLAY = "/usr/bin/afplay" if sys.platform == "darwin" and os.path.isfile("/usr/bin/afplay") else None
+native_audio_lock = threading.Lock()
+native_sound_processes = set()
+native_music_process = None
+native_music_file = None
+native_music_volume = 0.0
+native_music_generation = 0
 
 # --- In-memory sound cache (prevents reloading files each play) ---
 sound_cache = {}  # path -> pygame.mixer.Sound
@@ -92,6 +114,87 @@ def suppress_stderr():
             os.close(saved_stderr)
         except Exception:
             pass
+
+
+def _native_play(file_path, volume):
+    """Play one sound with macOS's built-in player when SDL_mixer is absent."""
+    if not AFPLAY:
+        print("Audio is unavailable: pygame.mixer is missing and no macOS audio fallback was found.")
+        return None
+    try:
+        process = subprocess.Popen(
+            [AFPLAY, "-v", f"{max(0.0, min(1.0, volume)):.3f}", file_path],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        with native_audio_lock:
+            native_sound_processes.add(process)
+        return process
+    except OSError as e:
+        print(f"Error starting macOS audio playback for {file_path}: {e}")
+        return None
+
+
+def _native_music_loop(file_path, generation):
+    """Loop music with afplay; afplay itself only plays a file once."""
+    global native_music_process
+    while not shutdown_flag.is_set():
+        with native_audio_lock:
+            if native_music_file != file_path or native_music_generation != generation:
+                return
+            current_volume = native_music_volume
+        process = _native_play(file_path, current_volume)
+        with native_audio_lock:
+            if native_music_file != file_path or native_music_generation != generation:
+                if process is not None and process.poll() is None:
+                    process.terminate()
+                return
+            native_music_process = process
+        if process is None:
+            return
+        process.wait()
+        with native_audio_lock:
+            native_sound_processes.discard(process)
+            if native_music_process is process:
+                native_music_process = None
+
+
+def _native_start_music(file_path, volume):
+    global native_music_file, native_music_volume, native_music_process, native_music_generation
+    _native_stop_music()
+    with native_audio_lock:
+        native_music_generation += 1
+        generation = native_music_generation
+        native_music_file = file_path
+        native_music_volume = volume
+        native_music_process = None
+    threading.Thread(target=_native_music_loop, args=(file_path, generation), daemon=True).start()
+
+
+def _native_stop_music():
+    global native_music_file, native_music_process, native_music_generation
+    with native_audio_lock:
+        native_music_generation += 1
+        native_music_file = None
+        process = native_music_process
+        native_music_process = None
+    if process is not None and process.poll() is None:
+        process.terminate()
+
+
+def stop_all_audio():
+    """Stop every active sound on either the SDL or native macOS backend."""
+    if MIXER_AVAILABLE:
+        pygame.mixer.stop()
+        pygame.mixer.music.stop()
+        return
+    _native_stop_music()
+    with native_audio_lock:
+        processes = list(native_sound_processes)
+        native_sound_processes.clear()
+    for process in processes:
+        if process.poll() is None:
+            process.terminate()
 
 # --- Helper Functions ---
 
@@ -193,6 +296,12 @@ import subprocess
 def stop_specific_sound(sound_name):
     """Stops all playing instances of a specific sound file (or streaming music)."""
     try:
+        if not MIXER_AVAILABLE:
+            # afplay cannot target an individual effect process by filename, but
+            # it can reliably stop the one looping music stream.
+            if native_music_file and os.path.splitext(os.path.basename(native_music_file))[0] == sound_name:
+                _native_stop_music()
+            return
         # Check if the currently streaming music matches the sound_name
         # Note: Pygame doesn't provide an easy way to get the *name* of the currently playing stream.
         # But stopping music is safe to do if the user requested to stop a known music track.
@@ -448,10 +557,15 @@ def refresh_audio_settings():
     global _volume_cache, _volume_file_mtime
     _volume_cache = {}
     _volume_file_mtime = 0
-    try:
-        pygame.mixer.music.set_volume(get_volume("music"))
-    except Exception:
-        pass
+    if MIXER_AVAILABLE:
+        try:
+            pygame.mixer.music.set_volume(get_volume("music"))
+        except Exception:
+            pass
+    elif native_music_file:
+        # afplay has no runtime volume control, so restart the loop at the
+        # newly selected volume.
+        _native_start_music(native_music_file, get_volume("music"))
 
 
 def parse_sound_and_pitch(command):
@@ -647,6 +761,9 @@ def play_sound_thread(sound_name, pitch=1.0, volume_key=None, pan=0.0):
                 f"Streaming music '{sound_name}' at volume {display_volume}% "
                 f"(mixer gain {volume:.3f})"
             )
+            if not MIXER_AVAILABLE:
+                _native_start_music(sound_file, volume)
+                return
             try:
                 with suppress_stderr():
                     pygame.mixer.music.load(sound_file)
@@ -654,6 +771,12 @@ def play_sound_thread(sound_name, pitch=1.0, volume_key=None, pan=0.0):
                 pygame.mixer.music.play(loops=-1)
             except Exception as e:
                 print(f"Error streaming music {sound_name}: {e}")
+            return
+
+        if not MIXER_AVAILABLE:
+            # afplay handles MP3 and WAV directly. Pitch and spatial panning
+            # remain best-effort features of the SDL backend.
+            _native_play(sound_file, get_volume(key=vol_key))
             return
 
         # Load or get cached Sound (may be trimmed on load)
@@ -692,8 +815,6 @@ def play_sound_thread(sound_name, pitch=1.0, volume_key=None, pan=0.0):
             except Exception:
                 pass
 
-    except pygame.error as e:
-        print(f"Error playing sound {sound_name}: {e}")
     except Exception as e:
         print(f"An unexpected error occurred in play_sound_thread for {sound_name}: {e}")
 
@@ -746,20 +867,17 @@ def handle_client(conn, addr):
                 if command.upper() == "STOP":
                     print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Received STOP command from {addr}. Stopping all sounds.")
                     try:
-                        pygame.mixer.stop() # Stop all currently playing sounds
-                        try:
-                            pygame.mixer.music.stop() # Also stop music streams
-                        except Exception:
-                            pass
+                        stop_all_audio()
                         print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] All sounds stopped.")
-                    except pygame.error as e:
-                         print(f"Error executing pygame.mixer.stop(): {e}")
                     except Exception as e:
                          print(f"Unexpected error during STOP command execution: {e}")
                 elif command.upper() == "STOP MUSIC":
                     print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Received STOP MUSIC command from {addr}. Stopping music streams.")
                     try:
-                        pygame.mixer.music.stop()
+                        if MIXER_AVAILABLE:
+                            pygame.mixer.music.stop()
+                        else:
+                            _native_stop_music()
                     except Exception as e:
                          print(f"Error executing pygame.mixer.music.stop(): {e}")
                 elif command.upper().startswith("STOP "):
@@ -835,18 +953,17 @@ def handle_udp_command(command, addr=None, sock=None):
         if cmd_up == "STOP":
             print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Received STOP command from {addr}. Stopping all sounds.")
             try:
-                pygame.mixer.stop()
-                try:
-                    pygame.mixer.music.stop()
-                except Exception:
-                    pass
+                stop_all_audio()
                 print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] All sounds stopped.")
             except Exception as e:
                 print(f"Error executing STOP: {e}")
         elif cmd_up == "STOP MUSIC":
             print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Received STOP MUSIC command from {addr}. Stopping music.")
             try:
-                pygame.mixer.music.stop()
+                if MIXER_AVAILABLE:
+                    pygame.mixer.music.stop()
+                else:
+                    _native_stop_music()
             except Exception:
                 pass
         elif cmd_up.startswith("STOP "):
@@ -985,43 +1102,46 @@ def main():
     # Ensure Settings directory and volume file exist (get_volume handles this now)
     _ = get_volume() # Call once to initialize/check volume file
 
-    # Initialize Pygame Mixer
+    # Initialize the preferred SDL mixer, or macOS's native fallback.
     try:
+        if not MIXER_AVAILABLE:
+            if not AFPLAY:
+                raise RuntimeError("pygame.mixer is unavailable and afplay was not found")
+            print("pygame.mixer is unavailable; using macOS afplay for audio.")
+        else:
         # Using pre_init with smaller buffer (512) for near-instant (11ms) playback latency
-        pygame.mixer.pre_init(frequency=44100, size=-16, channels=2, buffer=512)
-        pygame.init() # Initializes all Pygame modules needed
+            pygame.mixer.pre_init(frequency=44100, size=-16, channels=2, buffer=512)
+            pygame.init() # Initializes all Pygame modules needed
         # pygame.mixer.init() # Explicitly init mixer (good practice) - redundant if pygame.init() called
-        print(f"Pygame Mixer initialized successfully.")
-        print(f"Mixer settings: {pygame.mixer.get_init()}") # Print actual settings
+            print(f"Pygame Mixer initialized successfully.")
+            print(f"Mixer settings: {pygame.mixer.get_init()}") # Print actual settings
         # Clear any in-memory cache on startup to avoid stale entries
-        try:
-            with sound_cache_lock:
-                sound_cache.clear()
-            print("[Cache] Cleared sound cache on startup.")
-        except Exception as e:
-            print(f"[Cache] Warning: Could not clear sound cache: {e}")
+            try:
+                with sound_cache_lock:
+                    sound_cache.clear()
+                print("[Cache] Cleared sound cache on startup.")
+            except Exception as e:
+                print(f"[Cache] Warning: Could not clear sound cache: {e}")
         # Reserve additional mixer channels to reduce "no channel" race conditions
-        try:
-            pygame.mixer.set_num_channels(32)
-            print("Mixer channels set to 32.")
-        except Exception:
-            pass
+            try:
+                pygame.mixer.set_num_channels(32)
+                print("Mixer channels set to 32.")
+            except Exception:
+                pass
         # Start UDP listener for fast fire-and-forget commands
         threading.Thread(target=udp_listener, daemon=True).start()
         print("UDP listener thread started.")
         # Start file-queue listener (zero-launch fast path)
         threading.Thread(target=file_queue_listener, daemon=True).start()
         print("File-queue listener thread started.")
-        # Start background preloading of all sounds for instant playback
-        threading.Thread(target=preload_sounds, daemon=True).start()
-        print("Preload thread started (caching all sounds in background).")
-    except pygame.error as e:
+        # Start background preloading only for the mixer cache.
+        if MIXER_AVAILABLE:
+            threading.Thread(target=preload_sounds, daemon=True).start()
+            print("Preload thread started (caching all sounds in background).")
+    except Exception as e:
         print(f"Fatal Error: Failed to initialize Pygame Mixer: {e}")
         print("Ensure you have sound drivers installed and configured.")
         print("Also check if another application is exclusively using the sound device.")
-        sys.exit(1)
-    except Exception as e:
-        print(f"Fatal Error during Pygame initialization: {e}")
         sys.exit(1)
 
     # --- Setup Server Socket ---
@@ -1061,7 +1181,8 @@ def main():
         print(f"Fatal Error: Could not start server socket on {HOST}:{PORT}. Error: {e}")
         print("Check if the port is already in use or if you have network permissions.")
         if server_socket: server_socket.close()
-        pygame.quit()
+        if MIXER_AVAILABLE:
+            pygame.quit()
         sys.exit(1)
     except Exception as e:
          print(f"Fatal Error in main server loop: {e}")
@@ -1075,8 +1196,10 @@ def main():
         # Wait briefly for client handlers to potentially finish nicely
         time.sleep(0.5)
 
-        pygame.mixer.quit()
-        pygame.quit() # Cleanly uninitialize all Pygame modules
+        stop_all_audio()
+        if MIXER_AVAILABLE:
+            pygame.mixer.quit()
+            pygame.quit() # Cleanly uninitialize all Pygame modules
         print("Pygame Mixer quit.")
         print("Shutdown complete.")
         # Force exit if any non-daemon threads are stuck (shouldn't happen with daemon=True)

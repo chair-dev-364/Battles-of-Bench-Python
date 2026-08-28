@@ -262,6 +262,12 @@ def _stop_sound_process():
 _enable_virtual_terminal_output()
 _set_terminal_title(TITLE)
 
+# Never replay sound commands persisted by an earlier session. Cache warmup is
+# silent; this stale queue was what made every queued effect fire at startup.
+sound_queue_path = PROJECT_ROOT / "General" / "Temp" / "sound_cmd_queue.txt"
+sound_queue_path.parent.mkdir(parents=True, exist_ok=True)
+sound_queue_path.write_text("", encoding="utf-8")
+
 sound_process = subprocess.Popen(
     [sys.executable, str(PROJECT_ROOT / "Scripts" / "sound_player.py")],
     cwd=str(PROJECT_ROOT),
