@@ -3523,7 +3523,21 @@ def player_turn():
     d.latest_action += f"\n  {xf}→ Your turn, waiting for key..."
     battle_show_data()
     k = key()
-    if k.lower() == bind.attack:
+    if k == "2":
+        player.hp = max(1, round(player.total_hp * 0.2))
+        d.latest_action = f"{xlyellow}⚙  HP set to 20%{reset}"
+        battle_show_data()
+        return
+    elif k == "6":
+        player.hp = max(1, round(player.total_hp * 0.6))
+        d.latest_action = f"{xlyellow}⚙  HP set to 60%{reset}"
+        battle_show_data()
+        return
+    elif k == "0":
+        enemy.hp = 0
+        game.goto = battle_win
+        return
+    elif k.lower() == bind.attack:
         game.goto = battle_attack
         return
     elif k.lower() == bind.skill:
@@ -3725,6 +3739,7 @@ def battle_win():
     """,flush=False)
     if remaining_hp_pct >= 0:
         extra_xp = 0
+        bonus_label = ""
         rowinfo = " "
         move(1,1)
         print(f"""
@@ -3742,7 +3757,8 @@ def battle_win():
         time.sleep(0.3)
         move(1,1)
         extra_xp = 10
-        rowinfo = f"{reset}{bold}+{extra_xp} {xf}- great!{reset}"
+        bonus_label = f"[+{extra_xp} XP - great!]"
+        rowinfo = f"{reset}{bold}{xf}{bonus_label}{reset}"
         art = bignumber(str(totalxp + extra_xp))
         print(f"""
 #5{x7}                                {xlyellow}                 {x6}          ██          {xlyellow}                {x7}                
@@ -3758,7 +3774,8 @@ def battle_win():
     if remaining_hp_pct >= 80:
         time.sleep(0.4)
         extra_xp = 20
-        rowinfo = f"{reset}{bold}+{extra_xp} {xf}- excellent!{reset}"
+        bonus_label = f"[+{extra_xp} XP - excellent!]"
+        rowinfo = f"{reset}{bold}{xf}{bonus_label}{reset}"
         move(1,1)
         print(f"""
 #5{xe}                                {xlyellow}                 {x6}          ██          {xlyellow}                {xe}                
@@ -3777,9 +3794,9 @@ def battle_win():
         1,
         os.get_terminal_size().columns // 2 - (length // 2) - 3,
     )
+    clear_rows(text_row, text_row + 4)
     print(f"""
-[{text_row-1};{text_column}H#5{xb}{bold}{" "*(length+10)}
-[{text_row};{text_column}H#5{art[0]:<{length}}
+[{text_row};{text_column}H#5{xb}{bold}{art[0]:<{length}}
 [{text_row+1};{text_column}H#5{art[1]:<{length}}
 [{text_row+2};{text_column}H#5{art[2]:<{length}}
 [{text_row+3};{text_column}H#5{art[3]:<{length}}
@@ -3799,10 +3816,9 @@ def battle_win():
 [{text_row+10};1H#5{xlyellow}{" "*33}{x0}██{bar}{x0}██{reset}
 [{text_row+11};1H#5{xlyellow}{" "*33}{f"{x0}█"*(xp_bar_length+4)}{reset}
 """,flush=False)
-        delay = 0.03
+        delay = 0.048
         time.sleep(delay)
         print(f"""
-[{text_row-1};{text_column}H#5{xb}{bold}{" "*(length+10)}
 [{text_row};{text_column}H{xf}#5{art[0]:<{length}}
 [{text_row+1};{text_column}H{xb}#5{art[1]:<{length}}
 [{text_row+2};{text_column}H{xb}#5{art[2]:<{length}}
@@ -3811,7 +3827,6 @@ def battle_win():
 """,flush=False)
         time.sleep(delay)
         print(f"""
-[{text_row-1};{text_column}H#5{xb}{bold}{" "*(length+10)}
 [{text_row};{text_column}H{xf}#5{art[0]:<{length}}
 [{text_row+1};{text_column}H{xf}#5{art[1]:<{length}}
 [{text_row+2};{text_column}H{xb}#5{art[2]:<{length}}
@@ -3820,7 +3835,6 @@ def battle_win():
 """,flush=False)
         time.sleep(delay)
         print(f"""
-[{text_row-1};{text_column}H#5{xb}{bold}{" "*(length+10)}
 [{text_row};{text_column}H{xb}#5{art[0]:<{length}}
 [{text_row+1};{text_column}H{xf}#5{art[1]:<{length}}
 [{text_row+2};{text_column}H{xf}#5{art[2]:<{length}}
@@ -3829,7 +3843,6 @@ def battle_win():
 """,flush=False)
         time.sleep(delay)
         print(f"""
-[{text_row-1};{text_column}H#5{xb}{bold}{" "*(length+10)}
 [{text_row};{text_column}H{xb}#5{art[0]:<{length}}
 [{text_row+1};{text_column}H{xb}#5{art[1]:<{length}}
 [{text_row+2};{text_column}H{xf}#5{art[2]:<{length}}
@@ -3839,7 +3852,6 @@ def battle_win():
 
         time.sleep(delay)
         print(f"""
-[{text_row-1};{text_column}H#5{xb}{bold}{" "*(length+10)}
 [{text_row};{text_column}H{xb}#5{art[0]:<{length}}
 [{text_row+1};{text_column}H{xb}#5{art[1]:<{length}}
 [{text_row+2};{text_column}H{xb}#5{art[2]:<{length}}
@@ -3849,7 +3861,6 @@ def battle_win():
 
         time.sleep(delay)
         print(f"""
-[{text_row-1};{text_column}H#5{xb}{bold}{" "*(length+10)}
 [{text_row};{text_column}H{xb}#5{art[0]:<{length}}
 [{text_row+1};{text_column}H{xb}#5{art[1]:<{length}}
 [{text_row+2};{text_column}H{xb}#5{art[2]:<{length}}
@@ -3859,13 +3870,32 @@ def battle_win():
 
         time.sleep(delay)
         print(f"""
-[{text_row-1};{text_column}H#5{xb}{bold}{" "*(length+10)}
 [{text_row};{text_column}H{xb}#5{art[0]:<{length}}
 [{text_row+1};{text_column}H{xb}#5{art[1]:<{length}}
 [{text_row+2};{text_column}H{xb}#5{art[2]:<{length}}
 [{text_row+3};{text_column}H{xb}#5{art[3]:<{length}}
 [{text_row+4};{text_column}H{xb}#5{art[4]:<{length}} {rowinfo}{reset}
 """,flush=False)
+
+        bonus_column = text_column + length + 1
+        fade_duration = 0.5
+        fade_steps = 10
+        for fade_step in range(1, fade_steps + 1):
+            fade_progress = fade_step / fade_steps
+            shade = round(242 + (55 - 242) * fade_progress)
+            print(
+                f"[{text_row+4};{bonus_column}H#5"
+                f"{rgb(shade, shade, shade)}{unbold}{bonus_label}{reset}",
+                end="",
+                flush=True,
+            )
+            time.sleep(fade_duration / fade_steps)
+        print(
+            f"[{text_row+4};{bonus_column}H#5"
+            f"{' ' * len(bonus_label)}{reset}",
+            end="",
+            flush=True,
+        )
 
     player.xp += (enemy.xp_reward + health_xp_bonus + extra_xp)
     player.money += enemy.gold_reward
@@ -4010,6 +4040,7 @@ def battle_show_data():
 
     print(f"{bold}{xb}⚙️ Keybinds you can use:{reset}")
     print(f"  {xf}{bind.attack.upper()}{reset} {x7}Attack{reset}  •  {xf}{bind.skill.upper()}{reset} {x7}Skill{reset}  •  {xf}{bind.ult.upper()}{reset} {x7}Ultimate{reset}  •  {xf}{bind.heal.upper()}{reset} {x7}Heal{reset}  •  {xf}{bind.forfeit.upper()}{reset} {x7}Forfeit{reset}")
+    print(f"  {xf}2{reset} {x7}Set HP to 20%{reset}  •  {xf}6{reset} {x7}Set HP to 60%{reset}  •  {xf}0{reset} {x7}Win battle{reset}")
     print()
     # if it's your turn or not,
     if player.av > enemy.av:
