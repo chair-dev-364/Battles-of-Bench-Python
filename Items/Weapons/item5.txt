@@ -1,1 +1,1 @@
-wand;;0e;;Wand of Galanb III.;;25;;173;;97.5;;Health;;149;;Government drones... ACTION!;;0.05;;3 pigeons will aid you in battle!;;0;;3
+bow;;0e;;The En Passanter;;20;;220;;150.0;;Defence;;9;;The chess player's ultimate trick.;;0.05;;+30 percent skill DMG.;;0;;0

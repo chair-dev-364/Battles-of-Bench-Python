@@ -1,1 +1,1 @@
-Ring;;Phantom Ring;;1;;DEF;;5;;Assassin;;0
+Ring;;Citadel Ring;;1;;HP;;140;;Guardian;;0

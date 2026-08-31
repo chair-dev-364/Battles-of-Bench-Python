@@ -1,1 +1,1 @@
-Ring;;Conqueror's Ring;;15;;DEF;;8.0;;Warrior;;0;;ATK;;10;;Crit Damage;;7;;HP %;;3
+Bracelet;;Vanguard Bracelet;;15;;ATK %;;5.0;;Warrior;;0;;HP %;;5;;DEF;;6;;HP;;63

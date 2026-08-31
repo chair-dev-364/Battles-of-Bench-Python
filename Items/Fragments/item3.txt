@@ -1,1 +1,1 @@
-Necklace;;Bannerchain Necklace;;15;;ATK;;20.0;;Warrior;;0;;HP;;32;;ATK %;;3;;HP %;;4
+Necklace;;Warrior Necklace;;1;;Speed;;4;;Warrior;;0

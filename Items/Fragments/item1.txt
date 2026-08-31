@@ -1,1 +1,1 @@
-Bracelet;;Bracelet of Dreams;;15;;ATK;;174;;Warrior;;0;;ATK %;;2;;HP;;45;;DEF;;10
+Necklace;;Worldroot Necklace;;1;;HP;;155;;Titan;;0

@@ -1,3 +1,1 @@
-helmet;;07;;Adventurer's Weird Helm;;1;;48;;None;;None;;0;;0.042
-
-
+helmet;;0c;;Adventurer's Insane Helmet;;20;;24.0;;None;;None;;0;;0.037

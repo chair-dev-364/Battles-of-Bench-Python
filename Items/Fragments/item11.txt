@@ -1,1 +1,1 @@
-Bracelet;;Bracelet of Dreams;;1;;Speed;;2;;Warrior;;0
+Bracelet;;Razor Bracelet;;15;;ATK;;23.0;;Assassin;;0;;Crit Rate;;3;;ATK %;;4;;HP %;;3

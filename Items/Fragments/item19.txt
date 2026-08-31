@@ -1,1 +1,1 @@
-Necklace;;Rampart Necklace;;1;;Crit Rate;;2;;Guardian;;0
+Bracelet;;Ironpulse Bracelet;;6;;ATK;;22.0;;Warrior;;0;;DEF;;5

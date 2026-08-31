@@ -1,1 +1,1 @@
-Necklace;;Warrior Necklace;;1;;Speed;;4;;Warrior;;0
+Ring;;Aegis Ring;;1;;ATK %;;4;;Guardian;;0

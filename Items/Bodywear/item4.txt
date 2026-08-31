@@ -1,1 +1,1 @@
-bodywear;;03;;Adventurer's Weird Bodywear;;4;;48.0;;None;;None;;0;;0.042
+bodywear;;0e;;Adventurer's Insane Bodywear;;20;;10;;None;;None;;0;;0.035

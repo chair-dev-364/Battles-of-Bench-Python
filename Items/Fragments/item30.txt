@@ -1,1 +1,1 @@
-Ring;;Executioner's Ring;;1;;ATK;;24;;Assassin;;0
+Bracelet;;Bulwark Bracelet;;1;;DEF;;10;;Guardian;;0

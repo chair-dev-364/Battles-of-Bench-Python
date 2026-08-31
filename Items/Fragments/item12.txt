@@ -1,1 +1,1 @@
-Bracelet;;Vanguard Bracelet;;1;;ATK %;;5;;Warrior;;0
+Necklace;;Rampart Necklace;;1;;Crit Rate;;2;;Guardian;;0

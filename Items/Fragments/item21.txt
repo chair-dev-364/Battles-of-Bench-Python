@@ -1,1 +1,1 @@
-Ring;;Aegis Ring;;1;;ATK %;;4;;Guardian;;0
+Ring;;Executioner's Ring;;1;;ATK;;24;;Assassin;;0

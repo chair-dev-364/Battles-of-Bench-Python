@@ -78,6 +78,9 @@ native_music_generation = 0
 # --- In-memory sound cache (prevents reloading files each play) ---
 sound_cache = {}  # path -> pygame.mixer.Sound
 sound_cache_lock = threading.Lock()
+# SDL_mixer's load and sample-conversion APIs are not safe to call concurrently
+# on every supported backend, especially the macOS SDL build.
+mixer_lock = threading.RLock()
 
 # Cache for pitch-shifted sounds to avoid rebuilding every request.
 pitched_sound_cache = {}  # (path, pitch_key) -> pygame.mixer.Sound
@@ -185,8 +188,9 @@ def _native_stop_music():
 def stop_all_audio():
     """Stop every active sound on either the SDL or native macOS backend."""
     if MIXER_AVAILABLE:
-        pygame.mixer.stop()
-        pygame.mixer.music.stop()
+        with mixer_lock:
+            pygame.mixer.stop()
+            pygame.mixer.music.stop()
         return
     _native_stop_music()
     with native_audio_lock:
@@ -198,7 +202,7 @@ def stop_all_audio():
 
 # --- Helper Functions ---
 
-def load_cached_sound(sound_file):
+def _load_cached_sound(sound_file):
     """Load and cache a pygame Sound object for given file path.
 
     Attempts to trim leading silence using numpy + pygame.sndarray if available.
@@ -289,6 +293,12 @@ def load_cached_sound(sound_file):
         return sound
 
 
+def load_cached_sound(sound_file):
+    """Load a sound while keeping SDL_mixer operations single-threaded."""
+    with mixer_lock:
+        return _load_cached_sound(sound_file)
+
+
 # --- ID3 tag fixer (attempt to repair or strip malformed ID3 tags) ---
 import shutil
 import subprocess
@@ -313,17 +323,18 @@ def stop_specific_sound(sound_name):
         music_file_wav = os.path.join(SOUNDS_DIR, 'Music', f"{sound_name}.wav")
 
         stopped_something = False
-        with sound_cache_lock:
-            for path in [sound_file_mp3, sound_file_wav, music_file_mp3, music_file_wav]:
-                if path in sound_cache:
-                    sound_cache[path].stop()
-                    stopped_something = True
+        with mixer_lock:
+            with sound_cache_lock:
+                for path in [sound_file_mp3, sound_file_wav, music_file_mp3, music_file_wav]:
+                    if path in sound_cache:
+                        sound_cache[path].stop()
+                        stopped_something = True
 
-        # If it wasn't in cache, it might be the streaming track (which bypasses cache).
-        # We'll just issue a mixer.music.stop() if we didn't find it in the cache,
-        # assuming it might be the active stream.
-        if not stopped_something:
-             pygame.mixer.music.stop()
+            # If it wasn't in cache, it might be the streaming track (which bypasses cache).
+            # We'll just issue a mixer.music.stop() if we didn't find it in the cache,
+            # assuming it might be the active stream.
+            if not stopped_something:
+                pygame.mixer.music.stop()
              
         print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Stopped specific sound: {sound_name}")
     except Exception as e:
@@ -452,18 +463,18 @@ def preload_sounds():
         print(f"[Preload] Caching {total} sound files in background (threaded)...")
         cached = 0
         errors = 0
-        # Use a thread pool to cache sounds in parallel, suppressing stderr globally for the phase
-        with suppress_stderr():
-            with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, os.cpu_count() or 4)) as executor:
-                future_to_file = {executor.submit(load_cached_sound, f): f for f in files}
-                for idx, future in enumerate(concurrent.futures.as_completed(future_to_file), start=1):
-                    f = future_to_file[future]
-                    try:
-                        if future.result() is not None:
-                            cached += 1
-                    except Exception as e:
-                        errors += 1
-                        print(f"[Preload] Error caching {f}: {e}")
+        # Keep the executor for background startup, but load one file at a time:
+        # SDL_mixer can crash when several decoder calls run concurrently.
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future_to_file = {executor.submit(load_cached_sound, f): f for f in files}
+            for idx, future in enumerate(concurrent.futures.as_completed(future_to_file), start=1):
+                f = future_to_file[future]
+                try:
+                    if future.result() is not None:
+                        cached += 1
+                except Exception as e:
+                    errors += 1
+                    print(f"[Preload] Error caching {f}: {e}")
         print(f"[Preload] Done. Cached: {cached}/{total}, errors: {errors}.")
 
         # Keep preload silent; startup audio should only come from explicit gameplay events.
@@ -559,7 +570,8 @@ def refresh_audio_settings():
     _volume_file_mtime = 0
     if MIXER_AVAILABLE:
         try:
-            pygame.mixer.music.set_volume(get_volume("music"))
+            with mixer_lock:
+                pygame.mixer.music.set_volume(get_volume("music"))
         except Exception:
             pass
     elif native_music_file:
@@ -627,7 +639,7 @@ def parse_play_request(command):
     return sound_name, pitch, volume_key, pan
 
 
-def get_pitched_sound(sound_file, base_sound, pitch):
+def _get_pitched_sound(sound_file, base_sound, pitch):
     """Return a pitch-shifted Sound object using sample-rate style resampling."""
     if abs(pitch - 1.0) < 1e-9:
         return base_sound
@@ -709,6 +721,13 @@ def get_pitched_sound(sound_file, base_sound, pitch):
         print(f"Warning: Failed to apply pitch {pitch} for {os.path.basename(sound_file)}: {e}")
         return base_sound
 
+
+def get_pitched_sound(sound_file, base_sound, pitch):
+    """Create pitch-shifted mixer sounds without concurrent SDL access."""
+    with mixer_lock:
+        return _get_pitched_sound(sound_file, base_sound, pitch)
+
+
 def play_sound_thread(sound_name, pitch=1.0, volume_key=None, pan=0.0):
     """Plays a single sound file in a separate thread using cached Sound objects.
 
@@ -724,20 +743,18 @@ def play_sound_thread(sound_name, pitch=1.0, volume_key=None, pan=0.0):
     vol_key = volume_key or "sound"
 
     if os.path.isfile(sound_file_mp3):
-        # Clean ID3 tags before loading
-        try:
-            clean_id3_tags(sound_file_mp3)
-        except Exception:
-            pass
+        # _load_cached_sound performs the serialized ID3 cleanup before load.
         sound_file = sound_file_mp3
     elif os.path.isfile(sound_file_wav):
         sound_file = sound_file_wav
     # Fallback to Music folder
     elif os.path.isfile(music_file_mp3):
-        try:
-            clean_id3_tags(music_file_mp3)
-        except Exception:
-            pass
+        # Music bypasses the cache, so keep its metadata cleanup serialized.
+        with mixer_lock:
+            try:
+                clean_id3_tags(music_file_mp3)
+            except Exception:
+                pass
         sound_file = music_file_mp3
         vol_key = "music"
     elif os.path.isfile(music_file_wav):
@@ -765,10 +782,11 @@ def play_sound_thread(sound_name, pitch=1.0, volume_key=None, pan=0.0):
                 _native_start_music(sound_file, volume)
                 return
             try:
-                with suppress_stderr():
-                    pygame.mixer.music.load(sound_file)
-                pygame.mixer.music.set_volume(volume)
-                pygame.mixer.music.play(loops=-1)
+                with mixer_lock:
+                    with suppress_stderr():
+                        pygame.mixer.music.load(sound_file)
+                    pygame.mixer.music.set_volume(volume)
+                    pygame.mixer.music.play(loops=-1)
             except Exception as e:
                 print(f"Error streaming music {sound_name}: {e}")
             return
@@ -796,24 +814,25 @@ def play_sound_thread(sound_name, pitch=1.0, volume_key=None, pan=0.0):
             f"(mixer gain {volume:.3f}, pitch {pitch:.3f}x)"
         )
 
-        # Play and set volume per-channel (avoids mutating cached Sound object)
-        ch = play_obj.play()
-        if ch is None:
-            print(f"Warning: No available channel to play {sound_name}.")
-            return
-        try:
-            if vol_key == "sfx" and spatial_audio_enabled() and pan:
-                left = 1.0 if pan <= 0 else 1.0 - pan
-                right = 1.0 if pan >= 0 else 1.0 + pan
-                ch.set_volume(volume * left, volume * right)
-            else:
-                ch.set_volume(volume)
-        except Exception:
-            # Older pygame versions may not support set_volume on channel
+        # Play and set volume per-channel (avoids mutating the cached Sound object)
+        with mixer_lock:
+            ch = play_obj.play()
+            if ch is None:
+                print(f"Warning: No available channel to play {sound_name}.")
+                return
             try:
-                play_obj.set_volume(volume)
+                if vol_key == "sfx" and spatial_audio_enabled() and pan:
+                    left = 1.0 if pan <= 0 else 1.0 - pan
+                    right = 1.0 if pan >= 0 else 1.0 + pan
+                    ch.set_volume(volume * left, volume * right)
+                else:
+                    ch.set_volume(volume)
             except Exception:
-                pass
+                # Older pygame versions may not support set_volume on channel
+                try:
+                    play_obj.set_volume(volume)
+                except Exception:
+                    pass
 
     except Exception as e:
         print(f"An unexpected error occurred in play_sound_thread for {sound_name}: {e}")
@@ -875,7 +894,8 @@ def handle_client(conn, addr):
                     print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Received STOP MUSIC command from {addr}. Stopping music streams.")
                     try:
                         if MIXER_AVAILABLE:
-                            pygame.mixer.music.stop()
+                            with mixer_lock:
+                                pygame.mixer.music.stop()
                         else:
                             _native_stop_music()
                     except Exception as e:
@@ -961,7 +981,8 @@ def handle_udp_command(command, addr=None, sock=None):
             print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Received STOP MUSIC command from {addr}. Stopping music.")
             try:
                 if MIXER_AVAILABLE:
-                    pygame.mixer.music.stop()
+                    with mixer_lock:
+                        pygame.mixer.music.stop()
                 else:
                     _native_stop_music()
             except Exception:
@@ -1198,8 +1219,9 @@ def main():
 
         stop_all_audio()
         if MIXER_AVAILABLE:
-            pygame.mixer.quit()
-            pygame.quit() # Cleanly uninitialize all Pygame modules
+            with mixer_lock:
+                pygame.mixer.quit()
+                pygame.quit() # Cleanly uninitialize all Pygame modules
         print("Pygame Mixer quit.")
         print("Shutdown complete.")
         # Force exit if any non-daemon threads are stuck (shouldn't happen with daemon=True)

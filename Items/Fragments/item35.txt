@@ -1,1 +1,1 @@
-Necklace;;Endurance Necklace;;1;;HP %;;7;;Titan;;0
+Necklace;;Bastion Necklace;;1;;DEF;;9;;Guardian;;0

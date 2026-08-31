@@ -1,1 +1,1 @@
-Necklace;;Bastion Necklace;;1;;DEF;;9;;Guardian;;0
+Necklace;;Moonveil Necklace;;1;;HP %;;4;;Assassin;;0

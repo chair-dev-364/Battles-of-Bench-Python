@@ -1,1 +1,1 @@
-Ring;;Citadel Ring;;1;;HP;;140;;Guardian;;0
+Ring;;Heartstone Ring;;15;;ATK %;;3.0;;Titan;;0;;Crit Damage;;5;;ATK;;15;;DEF;;3

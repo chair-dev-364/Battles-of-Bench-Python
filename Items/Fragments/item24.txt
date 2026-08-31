@@ -1,1 +1,1 @@
-Bracelet;;Razor Bracelet;;1;;ATK;;23;;Assassin;;0
+Bracelet;;Embercord Bracelet;;1;;Crit Damage;;8;;Warrior;;0

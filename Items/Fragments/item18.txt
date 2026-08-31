@@ -1,1 +1,1 @@
-Necklace;;Oathchain Necklace;;1;;Speed;;3;;Guardian;;0
+Bracelet;;Lifeblood Bracelet;;1;;HP %;;7;;Titan;;0

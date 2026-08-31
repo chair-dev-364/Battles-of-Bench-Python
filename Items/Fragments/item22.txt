@@ -1,1 +1,1 @@
-Ring;;Watchtower Ring;;1;;Crit Damage;;6;;Guardian;;0
+Ring;;Everliving Ring;;1;;Crit Damage;;5;;Titan;;0

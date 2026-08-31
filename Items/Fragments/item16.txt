@@ -1,1 +1,1 @@
-Bracelet;;Sentinel Bracelet;;1;;HP %;;6;;Guardian;;0
+Bracelet;;Mountain Bracelet;;1;;DEF;;10;;Titan;;0

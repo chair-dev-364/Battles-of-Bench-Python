@@ -1,1 +1,1 @@
-Bracelet;;Lifeblood Bracelet;;1;;HP %;;7;;Titan;;0
+Ring;;Bloodmark Ring;;15;;HP %;;5.0;;Warrior;;0;;HP;;75;;Crit Damage;;8;;Crit Rate;;2

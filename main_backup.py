@@ -2339,11 +2339,11 @@ def bignumber_db(digit):
             "  ████  "
         ],
         '1': [
-            "  ██  ",
-            "████  ",
-            "  ██  ",
-            "  ██  ",
-            "██████"
+            "    ██  ",
+            "  ████  ",
+            "██  ██  ",
+            "    ██  ",
+            "  ██████"
         ],
         '2': [
             "  ████  ",
@@ -2413,7 +2413,7 @@ def bignumber(number_str, display=False):
     result_lines = []
     for line_idx in range(5):
         line_parts = [art[line_idx] for art in digit_arts]
-        result_lines.append("  ".join(line_parts))
+        result_lines.append(" ".join(line_parts))
 
     if display:
         print("\n".join(result_lines))
@@ -2727,15 +2727,79 @@ def testsounds():
 
 
 
-def internal_modify_beta():
-    console_height = 31
-    terminal_row = 34
-    statusbar_row = 36
-    lines = [""] * 36
-    rendered_console = [None] * console_height
-    autocomplete_rows = {}
-    command_input = ""
+def internal_modify():
+    cls()
+    console_lines = 31
+    break_lines = 1
+    terminal_lines = 3
+    statusbar_lines = 1
+    lines = []
+    for i in range(console_lines):
+        lines.append("")
+    for i in range(break_lines):
+        lines.append("")
+    for i in range(terminal_lines):
+        lines.append(f"{xb8}{xf}{" "*(os.get_terminal_size().columns - 1)}{reset}")
+    for i in range(statusbar_lines):
+        lines.append(f"{xf}{" "*(os.get_terminal_size().columns - 1)}{reset}")
+    input = f""
+    lines[33] = f"{xb8}{xlyellow}› {xf}{input}{reset}"
+    lines[35] = f"{xe}Battles of Bench {xf}· {x7}v{version}.{subversion}.{subberversion} {xf}·{xb} {unbold}{os.getcwd()}{reset}"
+    
+    for i, line in enumerate(lines, start=1):
+        print(f"\x1b[{i};1H{line}", end="", flush=True)
+            
 
+
+    def redraw_console():
+        for i in range(31):
+            print(
+                f"\033[{i + 1};1H{reset}\033[2K{lines[i]}{" "*((os.get_terminal_size().columns - 1) - visible_len(lines[i]))}{reset}",
+                end="",
+                flush=True
+            )
+                    
+    def redraw_statusbar():
+       print(f"[36;1H{xf}{lines[35]}{" "*((os.get_terminal_size().columns - 1) - 1 - visible_len(lines[35]))}", end=f"{reset}", flush=True)
+    
+    def redraw_terminal():
+        terminal_width = os.get_terminal_size().columns
+        padding = max(0, terminal_width - 1 - visible_len(lines[33]))
+        print(f"[34;1H{lines[33]}{xb8}{' ' * padding}{reset}", end="", flush=True)
+    
+    # line scrolling system for commands
+    def add_line(line):
+        for i in range(30):
+            lines[i] = lines[i + 1]
+
+        lines[30] = line
+    
+    stylized_input = f"{xf}E{xb8}{xf}nter a command"
+    lines[33] = f"{xb8}{xlyellow}› {xf}{xb8}{stylized_input}"
+    
+    redraw_console()
+    redraw_statusbar()
+    redraw_terminal()
+    
+    # command output
+    def execute(command):
+        lines[35] = f"{xe}Battles of Bench {xf}· {x7}v{version}.{subversion}.{subberversion} {xf}·{xb} {unbold}{os.getcwd()}{reset}"
+        add_line("")
+        if command in ["exit", "quit"]:
+            game.goto = mainmenu
+            return
+        elif command in ["help", "?", "commands"]:
+            add_line(f"{xa}{bold}· {reset}{xf}{bold}Executed {xa}{command}{reset}")
+            add_line(f"{xa}╰{xf} Available commands: exit, quit, help, ?, commands")
+        else:
+            check_closest_match = difflib.get_close_matches(command, command_colors.keys(), n=1, cutoff=0.6)
+            if check_closest_match:
+                add_line(f"{xc}{bold}· {reset}{xf}{command} - command not found! Did you mean to type '{check_closest_match[0]}'?{reset}")
+            else:
+                add_line(f"{xc}{bold}· {reset}{xf}{command} - command not found! Type 'help' for a list of available commands.{reset}")
+
+
+    
     command_colors = {
         "exit": xlred,
         "experience": xlyellow,
@@ -2745,7 +2809,7 @@ def internal_modify_beta():
         "?": xlyellow,
         "commands": xlyellow,
     }
-
+    
     command_descriptions = {
         "exit": "Exit the console and return to the main menu.",
         "quit": "Exit the console and return to the main menu.",
@@ -2755,205 +2819,172 @@ def internal_modify_beta():
         "experience": "Modify your in-game XP.",
         "xp": "Modify your in-game XP.",
     }
-
-    def terminal_width():
-        return max(20, shutil.get_terminal_size(fallback=(80, 36)).columns)
-
-    def fit_line(line, width=None, background=""):
-        width = width or terminal_width()
-        line_width = width if background else width - 1
-        padding = " " * max(0, line_width - visible_len(line))
-        return f"{line}{background}{padding}{reset}"
-
-    def write_frame(*parts):
-        sys.stdout.write("".join(parts))
-        sys.stdout.flush()
-
-    def redraw_console(force=False):
-        """Redraw only console rows whose visible content has changed."""
-        width = terminal_width()
-        frame = []
-        for index in range(console_height):
-            is_autocomplete_row = index in autocomplete_rows
-            line = autocomplete_rows.get(index, lines[index])
-            background = xb8 if is_autocomplete_row else ""
-            rendered = fit_line(line, width, background)
-            if force or rendered != rendered_console[index]:
-                frame.append(f"\x1b[{index + 1};1H\x1b[2K{rendered}")
-                rendered_console[index] = rendered
-        if frame:
-            write_frame(*frame)
-
-    def redraw_statusbar():
-        write_frame(f"\x1b[{statusbar_row};1H{xf}{fit_line(lines[35])}")
-
-    def redraw_terminal():
-        write_frame(f"\x1b[{terminal_row};1H{fit_line(lines[33])}")
-
-    def add_line(line):
-        lines[:30] = lines[1:31]
-        lines[30] = line
-
+    
     def autocomplete(command):
-        """Build a lightweight autocomplete overlay without changing history."""
-        nonlocal autocomplete_rows
-        matches = sorted(
-            name for name in command_colors
-            if command and name.startswith(command)
-        )
-        overlay = {}
+        if input in [None, ""]:
+            return
+        matches = [cmd for cmd in command_colors if cmd.startswith(command)]
+        # sort alpabetically
+        matches = sorted(matches)
+        longest_match = max(len(match) for match in matches) if matches else 0
+        # count it
+        matchcount = len(matches)
+        
         if matches:
-            longest = max(map(len, matches))
-            overlay[0] = ""
-            for index, match in enumerate(matches, start=1):
-                spacing = " " * (longest + 2 - len(match))
-                overlay[index] = (
-                    f"{xb8}  {xe}· {bold}{match}{unbold}{spacing}"
-                    f"{xf}- {italic}{command_descriptions[match]}{reset}"
-                )
-            overlay[len(matches) + 1] = ""
-
-        if overlay != autocomplete_rows:
-            changed_rows = set(autocomplete_rows) | set(overlay)
-            for index in changed_rows:
-                rendered_console[index] = None
-            autocomplete_rows = overlay
+            temp= [""]*(len(matches)+6)
+            temp[0] = lines[0]
+            lines[0] = f"{xb8} "*(os.get_terminal_size().columns)
+            for i, match in enumerate(matches):
+                temp[i + 1] = lines[i + 1]
+                lines[i + 1] = f"{xb8}  {xe}· {bold}{match}{unbold} {" "*(longest_match+2-len(match))}{xf}- {italic}{command_descriptions[match]}{" "*((os.get_terminal_size().columns - 2) - visible_len(f"{xb8}  {xe}· {bold}{match}{unbold} {xf}· {italic}{command_descriptions[match]}"))}{reset}"
+            lines[len(matches) + 1] = f"{xb8} "*(os.get_terminal_size().columns)
+            temp[len(matches) + 1] = lines[len(matches) + 1]
             redraw_console()
-
+            for i in range(len(matches) + 6):
+                lines[i] = temp[i]
+            del temp
+        else:
+            try:
+                if temp:
+                    for i in range(len(temp)):
+                        lines[i] = temp[i]
+                    del temp
+            except:
+                pass
+            redraw_console()
+    
     def check_command_validity(command):
         exact_match = command in command_colors
-        possible_match = any(name.startswith(command) for name in command_colors)
-        lines[35] = default_statusbar
-        if exact_match:
-            lines[33] = f"{xb8}{xa}› {xf}{command}{reset}"
-            lines[35] = f"{xa}✓ {default_statusbar}"
-        elif possible_match:
-            lines[33] = f"{xb8}{xlyellow}› {xf}{command}{reset}"
-        else:
-            lines[33] = f"{xb8}{xc}› {xf}{command}{reset}"
-            lines[35] = (
-                f"{xc}⚠ {xlred}{bold}syntax error{reset} · {default_statusbar}"
-            )
-
-    def stylize_command(command, cursor_character="|"):
-        if not command:
-            hint = shine(
-                text="type your command...",
-                offset=time.time() / 4,
-                color=(148, 148, 148),
-                bold=False,
-            )
-            return f"{xb8}{xlyellow}› {xf}{xb8}{hint}"
-
-        match = re.match(r"^(\S+)(.*)$", command.replace("\t", "    "))
-        stylized = command
-        if match:
-            name, arguments = match.groups()
-            if name in command_colors:
-                stylized = f"{command_colors[name]}{bold}{name}{xf}{arguments}"
-        return (
-            f"{xb8}{xlyellow}› {xf}{xb8}{stylized}{reset}"
-            f"{xlyellow}{xb8}{cursor_character}{reset}{xb8}"
+        possible_match = any(
+            cmd.startswith(command)
+            for cmd in command_colors
         )
-
-    def execute(command):
-        lines[35] = default_statusbar
-        add_line("")
-        if command in {"exit", "quit"}:
-            game.goto = mainmenu
-        elif command in {"help", "?", "commands"}:
-            add_line(f"{xa}{bold}· {reset}{xf}{bold}Executed {xa}{command}{reset}")
-            add_line(f"{xa}╰{xf} Available commands: {', '.join(command_colors)}")
-        else:
-            closest = difflib.get_close_matches(
-                command,
-                command_colors,
-                n=1,
-                cutoff=0.6,
-            )
-            if closest:
-                message = f"Did you mean to type '{closest[0]}'?"
-            else:
-                message = "Type 'help' for a list of available commands."
-            add_line(
-                f"{xc}{bold}· {reset}{xf}{command} - command not found! "
-                f"{message}{reset}"
-            )
-
-    default_statusbar = (
-        f"{xe}Battles of Bench {xf}· {x7}"
-        f"v{version}.{subversion}.{subberversion} {xf}·{xb} "
-        f"{unbold}{os.getcwd()}{reset}"
-    )
-    lines[35] = default_statusbar
-    lines[33] = stylize_command(command_input)
-
-    cls()
-    redraw_console(force=True)
-    redraw_statusbar()
-    redraw_terminal()
-
-    cursor_character = "|"
-    last_cursor_change = time.monotonic()
-    last_hint_frame = last_cursor_change
-
-    while game.goto != mainmenu:
-        pressed = key(timeout=0.05)
-        now = time.monotonic()
-
-        if pressed.lower() == "timeout":
-            needs_redraw = False
-            if command_input and now - last_cursor_change >= 0.5:
-                cursor_character = " " if cursor_character == "|" else "|"
-                last_cursor_change = now
-                needs_redraw = True
-            elif not command_input and now - last_hint_frame >= 0.1:
-                last_hint_frame = now
-                needs_redraw = True
-            if needs_redraw:
-                lines[33] = stylize_command(command_input, cursor_character)
-                redraw_terminal()
-            continue
-
-        if pressed == "backspace":
-            command_input = command_input[:-1]
-        elif pressed == "space":
-            command_input += " "
-        elif pressed == "enter":
-            execute(command_input)
-            if game.goto == mainmenu:
-                return
-            command_input = ""
-            autocomplete(command_input)
+        
+        if possible_match:
+            autocomplete(command)
+            
+        elif exact_match:
             redraw_console()
-        elif pressed == "ctrl/c":
-            command_input = ""
-        elif pressed in {"esc", "escape"}:
-            if not command_input:
-                game.goto = mainmenu
-                return
-            command_input = ""
-            lines[35] = (
-                f"{xlred}{bold}Press esc again to exit{unbold} {xf}· "
-                f"{default_statusbar}"
-            )
-            autocomplete(command_input)
-            lines[33] = f"{xb8}{xc}› {xf}{reset}"
+        
+        else:
+            redraw_console()
+        
+        if command == "":
+            lines[33] = f"{xb8}{xlyellow}› {xf}{input}{reset}"
             redraw_terminal()
             redraw_statusbar()
-            continue
+            return
+        
+        if len(command) < 2:
+            lines[33] = f"{xb8}{xlyellow}› {xf}{input}{reset}"
+            redraw_statusbar()
+            redraw_terminal()
+            return
+
+        if exact_match:
+            lines[35] = f"{xa}✓ {lines[35]}"
+            redraw_statusbar()
+            lines[35] = lines[35].replace(f"{xa}✓ ", "")
+            lines[33] = f"{xb8}{xa}› {xf}{input}{reset}"
+            redraw_terminal()
+
+        elif possible_match:
+            # Still potentially valid — don't show an error
+            lines[33] = f"{xb8}{xlyellow}› {xf}{input}{reset}"
+            redraw_terminal()
+
         else:
-            command_input += pressed
+            temp = lines[35]
+            lines[33] = f"{xb8}{xc}› {xf}{input}{reset}"
+            lines[35] = f"{xc}⚠ {xlred}{bold}syntax error{reset} · {lines[35]}"
+            redraw_terminal()
+            redraw_statusbar()
+            lines[35] = temp
+    d.cursor = " "
+    def cursor_change():
+        if d.cursor == " ":
+            d.cursor = "|"
+            return
+        else:
+            d.cursor = " "
+            return
+    counter = 0
+    while True:
+        if input in [None, ""]:
+            lines[33] = f"{xb8}{xlyellow}› {xf}{input}{reset}"
+        if game.goto == mainmenu:
+            break
+        k = key(timeout=0.01)
+        if k.lower() == "timeout":
+            counter += 1
+            if counter % 50 == 0:
+                cursor_change()
+        if k == "backspace":
+            lines[33] = f"{xb8}{xlyellow}› {xf}{input}{reset}"
+            input = input[:-1]
+            check_command_validity(input)
+            autocomplete(input)
+        elif k == "space":
+            lines[33] = f"{xb8}{xlyellow}› {xf}{input}{reset}"
+            input = f"{input} "
+            check_command_validity(input)
+            autocomplete(input)
+        elif k == "enter":
+            check_command_validity(input)
+            execute(input)
+            input = ""
+            lines[33] = f"{xb8}{xlyellow}› {xf}{input}{reset}"
+            redraw_console()
+            redraw_terminal()
+            redraw_statusbar()
+            autocomplete(input)
+            continue
+        elif k == "ctrl/c":
+            input = ""
+            autocomplete(input)
+        elif k == "esc" or k == "escape":
+            if input == "":
+                game.goto = mainmenu
+                return
+            else:
+                input = ""
+                lines[35] = f"{xlred}{bold}Press esc again to exit{unbold} {xf}· {xa}Battles of Bench {xf}· {x7}v{version}.{subversion}.{subberversion} {xf}·{xb} {unbold}{os.getcwd()}{reset}"
+                redraw_statusbar()
+                lines[33] = f"{xb8}{xc}› {xf}{input}{reset}"
+                redraw_terminal()
+                autocomplete(input)
+        else:
+            if k.lower() != "timeout":
+                lines[33] = f"{xb8}{xlyellow}› {xf}{input}{reset}"
+                input = f"{input}{k}"
+                check_command_validity(input)
+                autocomplete(input)
+        if not input in [None, ""]:
+            import re
 
-        cursor_character = "|"
-        last_cursor_change = now
-        check_command_validity(command_input)
-        autocomplete(command_input)
-        lines[33] = stylize_command(command_input, cursor_character)
+            stylized_input = input.replace("\t", "    ")
+
+            match = re.match(r"^(\S+)(.*)$", stylized_input)
+
+            if match:
+                command, arguments = match.groups()
+
+                if command in command_colors:
+                    stylized_input = (
+                        f"{command_colors[command]}{bold}{command}{xf}"
+                        f"{arguments}"
+                    )
+            lines[33] = f"{xb8}{xlyellow}› {xf}{xb8}{stylized_input}{reset}{xlyellow}{xb8}{d.cursor}{reset}{xb8}"
+            autocomplete(input)
+        else:
+            d.cursor = "|"
+            stylized_input = f"{shine(text="type your command...",offset=time.time()/4,color=(148, 148, 148),bold=False)}"
+            lines[33] = f"{xb8}{xlyellow}› {xf}{xb8}{stylized_input}"
+            autocomplete(input)
+        autocomplete(input)
         redraw_terminal()
-        redraw_statusbar()
 
-def internal_modify():
+def internal_modify_2():
     def pause(message):
         print(message, end="", flush=True)
         getx(0, 0, expect="key")
@@ -3589,287 +3620,15 @@ def battle_lose():
     return
 
 def battle_win():
-    # check remaining hp percentage
-    remaining_hp_pct = (player.hp / player.total_hp) * 100
-    if remaining_hp_pct >= 80:
-        text = random.choice(["Excellent!", "Stellar performance!", "Outstanding!", "Perfect!", "Battle over!", "Well done!", "Nice work!", "You win!", "Victory!"])
-        sound("end_excellent")
-        atype = 1
-    elif remaining_hp_pct >= 50:
-        text = random.choice(["Great job!", "Quick victory!", "Well played!", "Great performance!", "Battle over!", "Well done!", "Nice work!", "You win!", "Victory!"])
-        sound("end_great")
-        atype = 2
-    else:
-        sound("end_good")
-        text = random.choice(["Battle over!", "Well done!", "Nice work!", "You win!", "Victory!"])
-        atype = 3
-    
-    health_xp_bonus = (
-    player.level
-    * remaining_hp_pct ** 0.75
-    / 50
-    )
-    health_xp_bonus = round(health_xp_bonus)
-    screen_wipe("normal",10)
-    
-    totalxp = round(enemy.xp_reward + health_xp_bonus)
-    totalgold = enemy.gold_reward
-    
-    move(4,1)
-
-    print(f"""
-#5{" "*120}
-#3{xlyellow}                 ╭────────────────────────╮
-#4{xlyellow}                 ╭────────────────────────╮
-#3{xlyellow}                 │{" " * ((24 - len(text)) // 2)}{xa}{bold}{shine(text=text,offset=time.time(),bold=True,color=(240, 232, 158))}{reset}{xlyellow}{" " * ((24 - len(text)) // 2)}│
-#4{xlyellow}                 │{" " * ((24 - len(text)) // 2)}{xa}{bold}{shine(text=text,offset=time.time(),bold=True,color=(240, 232, 158))}{reset}{xlyellow}{" " * ((24 - len(text)) // 2)}│
-#3{xlyellow}                 ╰────────────────────────╯
-#4{xlyellow}                 ╰────────────────────────╯
-""")
-    
-    move(15,30)
-
-    z = totalxp
-    y = 1.8
-
-    start = time.perf_counter()
-    start_row = 5
-    text_row = 13
-    milestone_shifts = 0
-    max_title_shifts = 5
-    max_number_shifts = 4
-    # get terminal columns
-    max_xp = player.xpneeded
-    xp_bar_length = 50
-    pt = f"{bold}XP earned{unbold} {xf}· {random.choice(["your progress to level", "your advancement to level", "here's your progress to level", "your journey to level", "your path to level", "your quest to level"])} {bold}{xb}{player.level + 1}:{reset}"
-    if player.level == 100:
-        max_xp = 1
-
-    def clear_rows(first_row, last_row):
-        print(
-            "".join(
-                f"[{row};1H#5[2K"
-                for row in range(first_row, last_row + 1)
-            ),
-            end="",
-        )
-
-    def clear_title_rows(first_row):
-        # Converting a populated DEC double-height row to #5 can leave its
-        # contents redrawn at half width. Overwrite each row while it is still
-        # in its original #3/#4 mode instead.
-        blank = " " * max(1, os.get_terminal_size().columns // 2 - 1)
-        print(
-            "".join(
-                f"[{first_row + offset};1H#{3 + offset % 2}{blank}"
-                for offset in range(6)
-            ),
-            end="",
-        )
-
-    ms = [round(z * pc) for pc in (0.8, 0.85, 0.9, 0.95, 0.98, 0.99, 1)]
-    for i in range(z + 1):
-        if i in ms and milestone_shifts < max_title_shifts:
-            clear_title_rows(start_row + 1)
-            start_row += 1
-            if milestone_shifts < max_number_shifts:
-                clear_rows(text_row, text_row + 11)
-                text_row += 1
-            milestone_shifts += 1
-
-        formatted_xp = f"{i:>{len(str(z))}}"
-        art = bignumber(str(i))
-        length = max(visible_len(art[0]), visible_len(art[1]), visible_len(art[2]), visible_len(art[3]), visible_len(art[4]))
-        text_column = max(
-            1,
-            os.get_terminal_size().columns // 2 - (length // 2) - 3,
-        )
-        print(f"""
-[{text_row};1H#5[2K[{text_row};{text_column}H{xb}{bold}{art[0]:<{length}}
-[{text_row+1};1H#5[2K[{text_row+1};{text_column}H{art[1]:<{length}}
-[{text_row+2};1H#5[2K[{text_row+2};{text_column}H{art[2]:<{length}}
-[{text_row+3};1H#5[2K[{text_row+3};{text_column}H{art[3]:<{length}}
-[{text_row+4};1H#5[2K[{text_row+4};{text_column}H{art[4]:<{length}}{reset}
-""",flush=False)
-        
-        print(f"""
-[{start_row+1};1H#3{xlyellow}                 ╭────────────────────────╮
-[{start_row+2};1H#4{xlyellow}                 ╭────────────────────────╮
-[{start_row+3};1H#3{xlyellow}                 │{" " * ((24 - len(text)) // 2)}{xa}{bold}{shine(text=text,offset=time.time(),bold=True,color=(240, 232, 158))}{reset}{xlyellow}{" " * ((24 - len(text)) // 2)}│
-[{start_row+4};1H#4{xlyellow}                 │{" " * ((24 - len(text)) // 2)}{xa}{bold}{shine(text=text,offset=time.time(),bold=True,color=(240, 232, 158))}{reset}{xlyellow}{" " * ((24 - len(text)) // 2)}│
-[{start_row+5};1H#3{xlyellow}                 ╰────────────────────────╯
-[{start_row+6};1H#4{xlyellow}                 ╰────────────────────────╯
-""",flush=False)
-        
-        # xp bar - fill in the bar based on the current xp
-        current_xp = player.xp + i
-        pc = max(0.0, min(current_xp / max_xp, 1.0))
-        bar = f"{reset}{xbb} " * round((pc) * xp_bar_length) + f"{xb1} " * (xp_bar_length - round((pc) * xp_bar_length)) + f"{reset}"
-        
-        print(f"""
-[{text_row+5};1H#5{xlyellow}{" "*(os.get_terminal_size().columns - 1)}
-[{text_row+6};1H#5{xlyellow}{" " * ((os.get_terminal_size().columns - visible_len(pt)) // 2 - 3)}{xb}{pt}
-[{text_row+7};1H#5{xlyellow}{" "*(os.get_terminal_size().columns - 1)}
-[{text_row+8};1H#5{xlyellow}{" "*33}{f"{x0}█"*(xp_bar_length+4)}{reset}
-[{text_row+9};1H#5{xlyellow}{" "*33}{x0}██{bar}{x0}██{reset}
-[{text_row+10};1H#5{xlyellow}{" "*33}{x0}██{bar}{x0}██{reset}
-[{text_row+11};1H#5{xlyellow}{" "*33}{f"{x0}█"*(xp_bar_length+4)}{reset}
-""",flush=True)
-        
-        
-        target = start + (i + 1) * y / z
-        time.sleep(max(0, target - time.perf_counter()))
-    print(f"""
-    [{start_row+3};1H#3{xlyellow}                 │{" " * ((24 - len(text)) // 2)}{xe}{bold}{text}{reset}{xlyellow}{" " * ((24 - len(text)) // 2)}│
-    [{start_row+4};1H#4{xlyellow}                 │{" " * ((24 - len(text)) // 2)}{xe}{bold}{text}{reset}{xlyellow}{" " * ((24 - len(text)) // 2)}│
-    """,flush=False)
-    if remaining_hp_pct >= 0:
-        extra_xp = 0
-        rowinfo = " "
-        move(1,1)
-        print(f"""
-#5{x7}                                {x7}                 {x6}          ██          {x7}                {x7}                
-#5{x7}                                {x7}       ██        {x6}        ██████        {x7}        ██      {x7}                
-#5{x7}                       ██       {x7}     ██████      {x6}      ██████████      {x7}      ██████    {x7}        ██      
-#5{x7}                     ██████     {x7}   ██████████    {x6}    ██████████████    {x7}    ██████████  {x7}      ██████    
-#5{x7}                   ██████████   {x7} ██████████████  {x6}  ██████████████████  {x7}  ██████████████{x7}    ██████████  
-#5{x7}                     ██████     {x7}   ██████████    {x6}    ██████████████    {x7}    ██████████  {x7}      ██████    
-#5{x7}                       ██       {x7}     ██████      {x6}      ██████████      {x7}      ██████    {x7}        ██      
-#5{x7}                                {x7}       ██        {x6}        ██████        {x7}        ██      {x7}                
-#5{x7}                                {x7}                 {x6}          ██          {x7}                {x7}                
-""",flush=True)
-    if remaining_hp_pct >= 50:
-        time.sleep(0.3)
-        move(1,1)
-        extra_xp = 10
-        rowinfo = f"{reset}{bold}+{extra_xp} {xf}- great!{reset}"
-        art = bignumber(str(totalxp + extra_xp))
-        print(f"""
-#5{x7}                                {xlyellow}                 {x6}          ██          {xlyellow}                {x7}                
-#5{x7}                                {xlyellow}       ██        {x6}        ██████        {xlyellow}        ██      {x7}                
-#5{x7}                       ██       {xlyellow}     ██████      {x6}      ██████████      {xlyellow}      ██████    {x7}        ██      
-#5{x7}                     ██████     {xlyellow}   ██████████    {x6}    ██████████████    {xlyellow}    ██████████  {x7}      ██████    
-#5{x7}                   ██████████   {xlyellow} ██████████████  {x6}  ██████████████████  {xlyellow}  ██████████████{x7}    ██████████  
-#5{x7}                     ██████     {xlyellow}   ██████████    {x6}    ██████████████    {xlyellow}    ██████████  {x7}      ██████    
-#5{x7}                       ██       {xlyellow}     ██████      {x6}      ██████████      {xlyellow}      ██████    {x7}        ██      
-#5{x7}                                {xlyellow}       ██        {x6}        ██████        {xlyellow}        ██      {x7}                
-#5{x7}                                {xlyellow}                 {x6}          ██          {xlyellow}                {x7}                
-""",flush=True)
-    if remaining_hp_pct >= 80:
-        time.sleep(0.4)
-        extra_xp = 20
-        rowinfo = f"{reset}{bold}+{extra_xp} {xf}- excellent!{reset}"
-        move(1,1)
-        print(f"""
-#5{xe}                                {xlyellow}                 {x6}          ██          {xlyellow}                {xe}                
-#5{xe}                                {xlyellow}       ██        {x6}        ██████        {xlyellow}        ██      {xe}                
-#5{xe}                       ██       {xlyellow}     ██████      {x6}      ██████████      {xlyellow}      ██████    {xe}        ██      
-#5{xe}                     ██████     {xlyellow}   ██████████    {x6}    ██████████████    {xlyellow}    ██████████  {xe}      ██████    
-#5{xe}                   ██████████   {xlyellow} ██████████████  {x6}  ██████████████████  {xlyellow}  ██████████████{xe}    ██████████  
-#5{xe}                     ██████     {xlyellow}   ██████████    {x6}    ██████████████    {xlyellow}    ██████████  {xe}      ██████    
-#5{xe}                       ██       {xlyellow}     ██████      {x6}      ██████████      {xlyellow}      ██████    {xe}        ██      
-#5{xe}                                {xlyellow}       ██        {x6}        ██████        {xlyellow}        ██      {xe}                
-#5{xe}                                {xlyellow}                 {x6}          ██          {xlyellow}                {xe}                
-""",flush=True)          
-    art = bignumber(str(totalxp + extra_xp))
-    length = max(visible_len(line) for line in art)
-    text_column = max(
-        1,
-        os.get_terminal_size().columns // 2 - (length // 2) - 3,
-    )
-    print(f"""
-[{text_row-1};{text_column}H#5{xb}{bold}{" "*(length+10)}
-[{text_row};{text_column}H#5{art[0]:<{length}}
-[{text_row+1};{text_column}H#5{art[1]:<{length}}
-[{text_row+2};{text_column}H#5{art[2]:<{length}}
-[{text_row+3};{text_column}H#5{art[3]:<{length}}
-[{text_row+4};{text_column}H#5{art[4]:<{length}} {rowinfo}{reset}
-""",flush=False)
-
-    current_xp = player.xp + totalxp + extra_xp
-    pc = max(0.0, min(current_xp / max_xp, 1.0))
-    bar = f"{reset}{xbb} " * round((pc) * xp_bar_length) + f"{xb1} " * (xp_bar_length - round((pc) * xp_bar_length)) + f"{reset}"
-    if remaining_hp_pct >= 50:        
-        print(f"""
-[{text_row+5};1H#5{xlyellow}{" "*(os.get_terminal_size().columns - 1)}
-[{text_row+6};1H#5{xlyellow}{" " * ((os.get_terminal_size().columns - visible_len(pt)) // 2 - 3)}{xb}{pt}
-[{text_row+7};1H#5{xlyellow}{" "*(os.get_terminal_size().columns - 1)}
-[{text_row+8};1H#5{xlyellow}{" "*33}{f"{x0}█"*(xp_bar_length+4)}{reset}
-[{text_row+9};1H#5{xlyellow}{" "*33}{x0}██{bar}{x0}██{reset}
-[{text_row+10};1H#5{xlyellow}{" "*33}{x0}██{bar}{x0}██{reset}
-[{text_row+11};1H#5{xlyellow}{" "*33}{f"{x0}█"*(xp_bar_length+4)}{reset}
-""",flush=False)
-        delay = 0.03
-        time.sleep(delay)
-        print(f"""
-[{text_row-1};{text_column}H#5{xb}{bold}{" "*(length+10)}
-[{text_row};{text_column}H{xf}#5{art[0]:<{length}}
-[{text_row+1};{text_column}H{xb}#5{art[1]:<{length}}
-[{text_row+2};{text_column}H{xb}#5{art[2]:<{length}}
-[{text_row+3};{text_column}H{xb}#5{art[3]:<{length}}
-[{text_row+4};{text_column}H{xb}#5{art[4]:<{length}} {rowinfo}{reset}
-""",flush=False)
-        time.sleep(delay)
-        print(f"""
-[{text_row-1};{text_column}H#5{xb}{bold}{" "*(length+10)}
-[{text_row};{text_column}H{xf}#5{art[0]:<{length}}
-[{text_row+1};{text_column}H{xf}#5{art[1]:<{length}}
-[{text_row+2};{text_column}H{xb}#5{art[2]:<{length}}
-[{text_row+3};{text_column}H{xb}#5{art[3]:<{length}}
-[{text_row+4};{text_column}H{xb}#5{art[4]:<{length}} {rowinfo}{reset}
-""",flush=False)
-        time.sleep(delay)
-        print(f"""
-[{text_row-1};{text_column}H#5{xb}{bold}{" "*(length+10)}
-[{text_row};{text_column}H{xb}#5{art[0]:<{length}}
-[{text_row+1};{text_column}H{xf}#5{art[1]:<{length}}
-[{text_row+2};{text_column}H{xf}#5{art[2]:<{length}}
-[{text_row+3};{text_column}H{xb}#5{art[3]:<{length}}
-[{text_row+4};{text_column}H{xb}#5{art[4]:<{length}} {rowinfo}{reset}
-""",flush=False)
-        time.sleep(delay)
-        print(f"""
-[{text_row-1};{text_column}H#5{xb}{bold}{" "*(length+10)}
-[{text_row};{text_column}H{xb}#5{art[0]:<{length}}
-[{text_row+1};{text_column}H{xb}#5{art[1]:<{length}}
-[{text_row+2};{text_column}H{xf}#5{art[2]:<{length}}
-[{text_row+3};{text_column}H{xf}#5{art[3]:<{length}}
-[{text_row+4};{text_column}H{xb}#5{art[4]:<{length}} {rowinfo}{reset}
-""",flush=False)
-
-        time.sleep(delay)
-        print(f"""
-[{text_row-1};{text_column}H#5{xb}{bold}{" "*(length+10)}
-[{text_row};{text_column}H{xb}#5{art[0]:<{length}}
-[{text_row+1};{text_column}H{xb}#5{art[1]:<{length}}
-[{text_row+2};{text_column}H{xb}#5{art[2]:<{length}}
-[{text_row+3};{text_column}H{xf}#5{art[3]:<{length}}
-[{text_row+4};{text_column}H{xf}#5{art[4]:<{length}} {rowinfo}{reset}
-""",flush=False)
-
-        time.sleep(delay)
-        print(f"""
-[{text_row-1};{text_column}H#5{xb}{bold}{" "*(length+10)}
-[{text_row};{text_column}H{xb}#5{art[0]:<{length}}
-[{text_row+1};{text_column}H{xb}#5{art[1]:<{length}}
-[{text_row+2};{text_column}H{xb}#5{art[2]:<{length}}
-[{text_row+3};{text_column}H{xb}#5{art[3]:<{length}}
-[{text_row+4};{text_column}H{xf}#5{art[4]:<{length}} {rowinfo}{reset}
-""",flush=False)
-
-        time.sleep(delay)
-        print(f"""
-[{text_row-1};{text_column}H#5{xb}{bold}{" "*(length+10)}
-[{text_row};{text_column}H{xb}#5{art[0]:<{length}}
-[{text_row+1};{text_column}H{xb}#5{art[1]:<{length}}
-[{text_row+2};{text_column}H{xb}#5{art[2]:<{length}}
-[{text_row+3};{text_column}H{xb}#5{art[3]:<{length}}
-[{text_row+4};{text_column}H{xb}#5{art[4]:<{length}} {rowinfo}{reset}
-""",flush=False)
-
-    player.xp += (enemy.xp_reward + health_xp_bonus + extra_xp)
+    cls()
+    print(f"{xb}{bold}=== YOU WIN ==={reset}")
+    print(f"{xf}You have defeated the {enemy.name}.")
+    print(f"{x2}+{enemy.xp_reward} XP{reset}")
+    print(f"{x2}+{enemy.gold_reward} Gold{reset}")
+    player.xp += enemy.xp_reward
     player.money += enemy.gold_reward
     player.save()
+    print(f"{x8}Press any key to return to the main menu.{reset}")
     key()
     game.goto = mainmenu
     return

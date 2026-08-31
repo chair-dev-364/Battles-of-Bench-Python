@@ -1,1 +1,1 @@
-book;;0e;;Befriend a Shark in 30 Days;;19;;178;;148.3;;Regeneration;;19;;Filled with shark facts and... fanfics?!;;0.05;;A shark will attack after you do! (30% DMG);;0;;0
+wand;;03;;Magic Wand Pro Max;;19;;70;;35.0;;Strength;;5;;a;;0.04;;No ability.;;0;;0

@@ -34,6 +34,53 @@ _posix_pressed_button = None
 _posix_last_click = None
 
 
+def _posix_modifier_prefix(parameter):
+    """Map terminal modifier bits to the public ctrl/alt names.
+
+    CSI modifiers are encoded as one plus a bitmask: Alt/Option is bit 2,
+    Ctrl is bit 4, and Super/Command is bit 8.  Command intentionally shares
+    the existing Ctrl output name on macOS.
+    """
+    try:
+        modifier_bits = int(parameter) - 1
+    except (TypeError, ValueError):
+        return ""
+    if modifier_bits & (4 | 8):
+        return "ctrl/"
+    if modifier_bits & 2:
+        return "alt/"
+    return ""
+
+
+def _posix_alt_character(buffer):
+    """Consume and return an ESC-prefixed printable character, if complete."""
+    if len(buffer) < 2:
+        return _NEED_MORE
+    first = buffer[1]
+    if 33 <= first <= 126:
+        del buffer[:2]
+        return "alt/" + chr(first)
+
+    if 0xC2 <= first <= 0xDF:
+        width = 2
+    elif 0xE0 <= first <= 0xEF:
+        width = 3
+    elif 0xF0 <= first <= 0xF4:
+        width = 4
+    else:
+        return _IGNORED
+    if len(buffer) < width + 1:
+        return _NEED_MORE
+    try:
+        character = bytes(buffer[1:width + 1]).decode("utf-8")
+    except UnicodeDecodeError:
+        return _IGNORED
+    if not character.isprintable():
+        return _IGNORED
+    del buffer[:width + 1]
+    return "alt/" + character
+
+
 def _posix_mouse_event(code, x, y, terminator):
     """Translate one SGR mouse report to the Win32-compatible public shape."""
     global _posix_last_click, _posix_pressed_button
@@ -159,13 +206,35 @@ def _extract_posix_event(buffer):
             if final_index is None:
                 return _NEED_MORE
             final = chr(buffer[final_index])
+            parameters = bytes(buffer[2:final_index]).decode("ascii", "ignore")
             del buffer[:final_index + 1]
-            return {
+
+            # Kitty/CSI-u enhanced keyboard reports expose modifiers that a
+            # terminal can distinguish, including macOS Option and Command.
+            if final == "u":
+                fields = parameters.split(";")
+                try:
+                    character = chr(int(fields[0].split(":", 1)[0]))
+                except (ValueError, OverflowError):
+                    return _IGNORED
+                prefix = _posix_modifier_prefix(
+                    fields[1].split(":", 1)[0] if len(fields) > 1 else 1
+                )
+                if prefix and character.isprintable():
+                    return prefix + character
+                return character if character.isprintable() else _IGNORED
+
+            key_name = {
                 "A": "up",
                 "B": "down",
                 "C": "right",
                 "D": "left",
-            }.get(final, _IGNORED)
+            }.get(final)
+            if key_name is None:
+                return _IGNORED
+            fields = parameters.split(";")
+            prefix = _posix_modifier_prefix(fields[-1]) if len(fields) > 1 else ""
+            return prefix + key_name
 
         if bytes(buffer).startswith(b"\x1bO"):
             if len(buffer) < 3:
@@ -181,6 +250,11 @@ def _extract_posix_event(buffer):
 
         if len(buffer) == 1:
             return _NEED_MORE
+        alt_character = _posix_alt_character(buffer)
+        if alt_character is _NEED_MORE:
+            return _NEED_MORE
+        if alt_character is not _IGNORED:
+            return alt_character
         del buffer[0]
         return "esc"
 
