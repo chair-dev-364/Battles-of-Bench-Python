@@ -9,20 +9,20 @@
     "soon": false,
     "_animation_slider_reversed": true,
     "inventory_last_selections": {
-        "Weapons": 15,
+        "Weapons": 12,
         "Bodywear": 3,
         "Fragments": 5,
         "Helmets": 1
     },
     "battle_difficulty": 1,
-    "battle_turn_delay": 0.8,
+    "battle_turn_delay": 0.7,
     "battle_short_action_log": false,
     "battle_preview_outcomes": true,
     "victory_celebration": 2,
-    "show_detailed_action_value": false,
+    "show_detailed_action_value": true,
     "animation_speed": 0,
     "menu_transitions": true,
-    "disable_startup_animation": true,
+    "disable_startup_animation": false,
     "battle_health_display": "Bar",
     "master": 10,
     "sound": 10,
@@ -48,6 +48,6 @@
     "sort_items_automatically": true,
     "remember_last_inventory_selection": true,
     "item_level_up_mode": "One at a time",
-    "inventory_sorting": "Name",
+    "inventory_sorting": "Level",
     "inventory_sort_order": "Descending"
 }

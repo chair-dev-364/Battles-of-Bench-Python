@@ -630,6 +630,42 @@ else:
     # macOS/Linux terminal backend
     # -----------------------------------------------------------------------
     _posix_mouse_enabled = None
+    _posix_terminal_descriptor = None
+    _posix_original_attributes = None
+
+    def _ensure_raw_mode(descriptor):
+        """Keep terminal input raw so bytes cannot be echoed between reads."""
+        global _posix_terminal_descriptor, _posix_original_attributes
+
+        if not os.isatty(descriptor):
+            return
+        if (
+            _posix_terminal_descriptor == descriptor
+            and _posix_original_attributes is not None
+        ):
+            return
+
+        # There should only be one stdin terminal, but restore a previous
+        # descriptor before switching if an embedding application replaces it.
+        if (
+            _posix_terminal_descriptor is not None
+            and _posix_original_attributes is not None
+        ):
+            try:
+                termios.tcsetattr(
+                    _posix_terminal_descriptor,
+                    termios.TCSANOW,
+                    _posix_original_attributes,
+                )
+            except (OSError, termios.error):
+                pass
+
+        _posix_terminal_descriptor = descriptor
+        _posix_original_attributes = termios.tcgetattr(descriptor)
+        # Cbreak mode provides immediate, no-echo input while preserving the
+        # output processing (notably ONLCR) that keeps printed newlines aligned
+        # on macOS terminals. Full raw mode disables that output translation.
+        tty.setcbreak(descriptor, termios.TCSANOW)
 
     def _set_mouse_mode(enable):
         """Toggle basic, drag, and SGR-coordinate mouse reporting."""
@@ -654,6 +690,18 @@ else:
     def _restore_console():
         if _posix_mouse_enabled:
             _set_mouse_mode(False)
+        if (
+            _posix_terminal_descriptor is not None
+            and _posix_original_attributes is not None
+        ):
+            try:
+                termios.tcsetattr(
+                    _posix_terminal_descriptor,
+                    termios.TCSANOW,
+                    _posix_original_attributes,
+                )
+            except (OSError, termios.error):
+                pass
 
     atexit.register(_restore_console)
 
@@ -667,21 +715,17 @@ else:
 
     def key(timeout=None, mouse=False):
         """Return one key/mouse event, or ``"TIMEOUT"`` when none arrives."""
-        _set_mouse_mode(mouse)
-
-        queued = _queued_event(mouse)
-        if queued is not None:
-            return queued
-
         try:
             descriptor = sys.stdin.fileno()
         except (AttributeError, OSError, ValueError) as error:
             raise OSError("Standard input does not expose a terminal handle") from error
 
-        saved_attributes = None
-        if os.isatty(descriptor):
-            saved_attributes = termios.tcgetattr(descriptor)
-            tty.setraw(descriptor, termios.TCSANOW)
+        _ensure_raw_mode(descriptor)
+        _set_mouse_mode(mouse)
+
+        queued = _queued_event(mouse)
+        if queued is not None:
+            return queued
 
         start = time.monotonic()
         deadline = None if timeout is None else start + max(0.0, float(timeout))
@@ -735,12 +779,7 @@ else:
                     return "TIMEOUT"
                 _posix_input_buffer.extend(incoming)
         finally:
-            if saved_attributes is not None:
-                try:
-                    termios.tcsetattr(
-                        descriptor,
-                        termios.TCSANOW,
-                        saved_attributes,
-                    )
-                except (OSError, termios.error):
-                    pass
+            # Raw/no-echo mode intentionally remains active between key()
+            # calls. Restoring it here creates a window where macOS echoes a
+            # key or mouse report at the current cursor position.
+            pass

@@ -486,32 +486,30 @@ def preload_sounds():
 
 _volume_cache = {}
 _volume_file_mtime = 0
-PERCEPTUAL_VOLUME_EXPONENT = 5.0 / 3.0
+# Kept for compatibility with callers that imported the old tuning constant;
+# an exponent of one is a linear slider.
+PERCEPTUAL_VOLUME_EXPONENT = 1.0
 
 
 def perceptual_volume_gain(value, maximum=10):
-    """Convert a user-facing volume value to an approximate loudness gain.
+    """Convert a user-facing volume value to a linear mixer gain.
 
-    The UI represents perceived loudness, while pygame expects linear
-    amplitude. A 5/3 power taper puts 50% near -10 dB, with exact endpoints
-    at silence and unity gain.
+    The setting is a simple 0-to-maximum slider, so each step changes the
+    mixer amplitude by the same amount.  The historical function name remains
+    as a compatibility shim for callers and saved settings.
     """
     maximum = max(1, maximum)
     normalized = max(0.0, min(1.0, float(value) / maximum))
-    if normalized == 0:
-        return 0.0
-    return normalized ** PERCEPTUAL_VOLUME_EXPONENT
+    return normalized
 
 
 def volume_percent_from_gain(gain):
-    """Convert mixer gain back to its user-facing percentage for logging."""
+    """Convert linear mixer gain back to a user-facing percentage."""
     gain = max(0.0, min(1.0, float(gain)))
-    if gain == 0:
-        return 0
-    return round((gain ** (1.0 / PERCEPTUAL_VOLUME_EXPONENT)) * 100)
+    return round(gain * 100)
 
 def get_volume(key="sound"):
-    """Read a 0-10 setting and return perceptually tapered mixer gain."""
+    """Read a 0-10 setting and return linear mixer gain."""
     global _volume_cache, _volume_file_mtime
     default_volume = 1.0 # Default to 100% if file is missing or invalid
     try:

@@ -399,6 +399,11 @@ ANSI_PATTERN = re.compile(r'\x1b\[[0-9;?]*[A-Za-z]') # what this does, I have no
 def visible_len(text):
     return len(ANSI_PATTERN.sub('', text))
 
+
+def pad_visible(text, width, fill=" "):
+    """Pad an ANSI-styled string to a visible terminal width."""
+    return text + fill * max(0, width - visible_len(text))
+
 # FINALLY, getx(). Line input, but actually good.
 def getx(
     row, # where the input starts (row)
@@ -2328,6 +2333,62 @@ def shine(text, offset=0, color=(255, 255, 0), bold=False):
         result += f"\033[38;2;{r};{g};{b}m{style}{char}"
     return result + "\033[0m"
 
+# Render the filled cells used by terminal art as background-coloured spaces.
+# A block glyph has a font-dependent shape and can leave hairline gaps between
+# adjacent cells.  A coloured space fills exactly one terminal cell instead.
+_SGR_PATTERN = re.compile(r"\x1b\[([0-9;]*)m")
+
+
+def background_blocks(text, default_background=None):
+    """Replace ``█`` cells with background-coloured spaces.
+
+    The current true-colour foreground is used as the matching background, so
+    existing art can keep its per-cell colour palette.  ``default_background``
+    is used for uncoloured art such as the large number renderer.
+    """
+    if not text or "█" not in text:
+        return text
+
+    result = []
+    foreground = None
+    cursor = 0
+
+    def append_cells(chunk):
+        for char in chunk:
+            if char != "█":
+                result.append(char)
+                continue
+            if foreground is None:
+                if default_background is None:
+                    result.append(" ")
+                else:
+                    result.extend((default_background, " ", unbg))
+            else:
+                result.extend((rgback(*foreground), " ", unbg))
+
+    for match in _SGR_PATTERN.finditer(text):
+        append_cells(text[cursor:match.start()])
+        sequence = match.group(0)
+        params = match.group(1)
+        values = [part for part in params.split(";") if part]
+        if params in ("0", "39") or "39" in values:
+            foreground = None
+        elif (
+            len(values) >= 5
+            and values[0] == "38"
+            and values[1] == "2"
+        ):
+            try:
+                foreground = tuple(int(value) for value in values[2:5])
+            except ValueError:
+                foreground = None
+        result.append(sequence)
+        cursor = match.end()
+
+    append_cells(text[cursor:])
+    return "".join(result)
+
+
 # big numbers for easier access!
 def bignumber_db(digit):
     art = {
@@ -2404,16 +2465,26 @@ def bignumber_db(digit):
     }
     return art.get(digit, ["        "] * 5)
 
-def bignumber(number_str, display=False):
+def bignumber(number_str, display=False, background=None):
+    """Return five rows of large digits, optionally using coloured spaces."""
     if not number_str.isdigit() or len(number_str) < 1 or len(number_str) > 3:
         return None
+
+    # White is the neutral/default number colour.  Callers such as level-up
+    # pass a blue background explicitly when that screen needs it.
+    if background is None:
+        background = globals().get(
+            "xbf",
+            "\x1b[48;2;242;242;242m",
+        )
 
     digit_arts = [bignumber_db(digit) for digit in number_str]
     
     result_lines = []
     for line_idx in range(5):
         line_parts = [art[line_idx] for art in digit_arts]
-        result_lines.append("  ".join(line_parts))
+        line = "  ".join(line_parts)
+        result_lines.append(background_blocks(line, background))
 
     if display:
         print("\n".join(result_lines))
@@ -2502,9 +2573,11 @@ def levelup():
     
     added_defense = levels_gained * 0.3
     
-    graph = bignumber(str(level), display=False)
+    # Level-up numbers are intentionally white even though the battle number
+    # renderer uses blue for its resting cells.
+    graph = bignumber(str(level), display=False, background=xbf)
 
-    print(f"""
+    print(background_blocks(f"""
 {player.color}[15;1H                                                  ██████
 {player.color}                                                ██      ██  
 {player.color}                                                ██ •  • ██  
@@ -2519,7 +2592,7 @@ def levelup():
 {player.color}                                                    ██      
 {player.color}                                                  ██  ██    
 {player.color}                                                ██      ██  
-""".strip(), end="")
+""").strip(), end="")
     center(f"{xf}› press any key to confirm ‹", 31)
     pause = key()
     game.goto = mainmenu
@@ -3617,21 +3690,44 @@ def battle_win():
         sound("end_good")
         text = random.choice(["Battle over!", "Well done!", "Nice work!", "You win!", "Victory!"])
         atype = 3
+
+    # Celebration levels: 0 = Minimal, 1 = Small, 2 = Regular, 3 = Extreme.
+    # Reduce-motion/instant animation settings intentionally collapse this to
+    # Minimal without changing the user's saved celebration preference.
+    celebration_mode = getattr(setting, "victory_celebration", 2)
+    effective_setting = getattr(setting, "effective_setting", None)
+    if callable(effective_setting):
+        celebration_mode = effective_setting("victory_celebration")
+    try:
+        celebration_mode = max(0, min(3, int(celebration_mode)))
+    except (TypeError, ValueError):
+        celebration_mode = 2
+    # Keep this guard local as well as in SettingsData.effective_setting so a
+    # reduced-motion session can never accidentally run a saved celebration.
+    if getattr(setting, "reduce_motion", False) or not animations_enabled():
+        celebration_mode = 0
     
-    health_xp_bonus = (
-    player.level
-    * remaining_hp_pct ** 0.75
-    / 50
-    )
-    health_xp_bonus = round(health_xp_bonus)
-    screen_wipe("normal",10)
+    # Full-health XP follows a gently accelerating level curve.  The anchors
+    # are intentionally easy to reason about: about 8 XP at level 1, 30 XP at
+    # level 50, and 150 XP at level 90.  Remaining health scales that award by
+    # a sub-linear power so partial-health wins still receive a meaningful
+    # bonus without overwhelming the level scaling.
+    level_progress = max(0.0, (float(player.level) - 1.0) / 89.0)
+    full_health_bonus = 8.0 * (150.0 / 8.0) ** (level_progress ** 1.33)
+    health_ratio = max(0.0, min(1.0, remaining_hp_pct / 100.0))
+    health_xp_bonus = round(full_health_bonus * health_ratio ** 0.75)
+    if celebration_mode == 0:
+        cls()
+    else:
+        screen_wipe("normal",10)
     
     totalxp = round(enemy.xp_reward + health_xp_bonus)
     totalgold = enemy.gold_reward
     
-    move(4,1)
+    if celebration_mode > 0:
+        move(4,1)
 
-    print(f"""
+        print(f"""
 #5{" "*120}
 #3{xlyellow}                 ╭────────────────────────╮
 #4{xlyellow}                 ╭────────────────────────╮
@@ -3647,13 +3743,19 @@ def battle_win():
     y = 1.8
 
     start = time.perf_counter()
+    # Minimal jumps straight to the same final layout used by the animated
+    # path.  The single draw below keeps the final screen identical without
+    # spending time counting through every XP value.
     start_row = 5
     text_row = 13
     milestone_shifts = 0
     max_title_shifts = 5
     max_number_shifts = 4
     # get terminal columns
-    max_xp = player.xpneeded
+    xp_required_for_next = max(0, int(getattr(player, "xpneeded", 0)))
+    if player.level >= CHARACTER_MAX_LEVEL:
+        xp_required_for_next = 0
+    max_xp = max(1, xp_required_for_next)
     xp_bar_length = 50
     pt = f"{bold}XP earned{unbold} {xf}· {random.choice(["your progress to level", "your advancement to level", "here's your progress to level", "your journey to level", "your path to level", "your quest to level"])} {bold}{xb}{player.level + 1}:{reset}"
     if player.level == 100:
@@ -3669,20 +3771,30 @@ def battle_win():
         )
 
     def clear_title_rows(first_row):
-        # Converting a populated DEC double-height row to #5 can leave its
-        # contents redrawn at half width. Overwrite each row while it is still
-        # in its original #3/#4 mode instead.
-        blank = " " * max(1, os.get_terminal_size().columns // 2 - 1)
+        # Erase the complete physical line before changing its DEC double-
+        # height mode.  Writing a fixed number of spaces while a row is in
+        # #3/#4 mode can leave the old border at the right edge (or redraw it
+        # at half width), which is the source of the stale yellow line.
         print(
             "".join(
-                f"[{first_row + offset};1H#{3 + offset % 2}{blank}"
+                f"[{first_row + offset};1H[2K#5"
                 for offset in range(6)
             ),
             end="",
         )
 
-    ms = [round(z * pc) for pc in (0.8, 0.85, 0.9, 0.95, 0.98, 0.99, 1)]
-    for i in range(z + 1):
+    milestone_values = [
+        round(z * pc) for pc in (0.8, 0.85, 0.9, 0.95, 0.98, 0.99, 1)
+    ]
+    ms = milestone_values if celebration_mode > 0 else []
+    if celebration_mode == 0:
+        # Pick the same resting coordinates the animated path would reach,
+        # even when a tiny reward collapses several milestones to one value.
+        milestone_count = min(max_title_shifts, len(set(milestone_values)))
+        start_row += milestone_count
+        text_row += min(max_number_shifts, milestone_count)
+    count_values = range(z + 1) if celebration_mode > 0 else (z,)
+    for i in count_values:
         if i in ms and milestone_shifts < max_title_shifts:
             clear_title_rows(start_row + 1)
             start_row += 1
@@ -3692,18 +3804,18 @@ def battle_win():
             milestone_shifts += 1
 
         formatted_xp = f"{i:>{len(str(z))}}"
-        art = bignumber(str(i))
+        art = bignumber(str(i), background=xbb)
         length = max(visible_len(art[0]), visible_len(art[1]), visible_len(art[2]), visible_len(art[3]), visible_len(art[4]))
         text_column = max(
             1,
             os.get_terminal_size().columns // 2 - (length // 2) - 3,
         )
         print(f"""
-[{text_row};1H#5[2K[{text_row};{text_column}H{xb}{bold}{art[0]:<{length}}
-[{text_row+1};1H#5[2K[{text_row+1};{text_column}H{art[1]:<{length}}
-[{text_row+2};1H#5[2K[{text_row+2};{text_column}H{art[2]:<{length}}
-[{text_row+3};1H#5[2K[{text_row+3};{text_column}H{art[3]:<{length}}
-[{text_row+4};1H#5[2K[{text_row+4};{text_column}H{art[4]:<{length}}{reset}
+[{text_row};1H#5[2K[{text_row};{text_column}H{pad_visible(art[0], length)}
+[{text_row+1};1H#5[2K[{text_row+1};{text_column}H{pad_visible(art[1], length)}
+[{text_row+2};1H#5[2K[{text_row+2};{text_column}H{pad_visible(art[2], length)}
+[{text_row+3};1H#5[2K[{text_row+3};{text_column}H{pad_visible(art[3], length)}
+[{text_row+4};1H#5[2K[{text_row+4};{text_column}H{pad_visible(art[4], length)}{reset}
 """,flush=False)
         
         print(f"""
@@ -3724,159 +3836,192 @@ def battle_win():
 [{text_row+5};1H#5{xlyellow}{" "*(os.get_terminal_size().columns - 1)}
 [{text_row+6};1H#5{xlyellow}{" " * ((os.get_terminal_size().columns - visible_len(pt)) // 2 - 3)}{xb}{pt}
 [{text_row+7};1H#5{xlyellow}{" "*(os.get_terminal_size().columns - 1)}
-[{text_row+8};1H#5{xlyellow}{" "*33}{f"{x0}█"*(xp_bar_length+4)}{reset}
-[{text_row+9};1H#5{xlyellow}{" "*33}{x0}██{bar}{x0}██{reset}
-[{text_row+10};1H#5{xlyellow}{" "*33}{x0}██{bar}{x0}██{reset}
-[{text_row+11};1H#5{xlyellow}{" "*33}{f"{x0}█"*(xp_bar_length+4)}{reset}
+[{text_row+8};1H#5{xlyellow}{" "*33}{f"{xb0} "*(xp_bar_length+4)}{reset}
+[{text_row+9};1H#5{xlyellow}{" "*33}{xb0}  {bar}{xb0}  {reset}
+[{text_row+10};1H#5{xlyellow}{" "*33}{xb0}  {bar}{xb0}  {reset}
+[{text_row+11};1H#5{xlyellow}{" "*33}{f"{xb0} "*(xp_bar_length+4)}{reset}
 """,flush=True)
         
         
-        target = start + (i + 1) * y / z
-        time.sleep(max(0, target - time.perf_counter()))
+        if celebration_mode > 0 and z > 0:
+            target = start + (i + 1) * y / z
+            time.sleep(max(0, target - time.perf_counter()))
     print(f"""
-    [{start_row+3};1H#3{xlyellow}                 │{" " * ((24 - len(text)) // 2)}{xe}{bold}{text}{reset}{xlyellow}{" " * ((24 - len(text)) // 2)}│
-    [{start_row+4};1H#4{xlyellow}                 │{" " * ((24 - len(text)) // 2)}{xe}{bold}{text}{reset}{xlyellow}{" " * ((24 - len(text)) // 2)}│
-    """,flush=False)
-    if remaining_hp_pct >= 0:
-        extra_xp = 0
-        bonus_label = ""
-        rowinfo = " "
-        move(1,1)
-        print(f"""
-#5{x7}                                {x7}                 {x6}          ██          {x7}                {x7}                
-#5{x7}                                {x7}       ██        {x6}        ██████        {x7}        ██      {x7}                
-#5{x7}                       ██       {x7}     ██████      {x6}      ██████████      {x7}      ██████    {x7}        ██      
-#5{x7}                     ██████     {x7}   ██████████    {x6}    ██████████████    {x7}    ██████████  {x7}      ██████    
-#5{x7}                   ██████████   {x7} ██████████████  {x6}  ██████████████████  {x7}  ██████████████{x7}    ██████████  
-#5{x7}                     ██████     {x7}   ██████████    {x6}    ██████████████    {x7}    ██████████  {x7}      ██████    
-#5{x7}                       ██       {x7}     ██████      {x6}      ██████████      {x7}      ██████    {x7}        ██      
-#5{x7}                                {x7}       ██        {x6}        ██████        {x7}        ██      {x7}                
-#5{x7}                                {x7}                 {x6}          ██          {x7}                {x7}                
-""",flush=True)
-    if remaining_hp_pct >= 50:
-        time.sleep(0.3)
-        move(1,1)
-        extra_xp = 10
-        bonus_label = f"[+{extra_xp} XP - great!]"
-        rowinfo = f"{reset}{bold}{xf}{bonus_label}{reset}"
-        art = bignumber(str(totalxp + extra_xp))
-        print(f"""
-#5{x7}                                {xlyellow}                 {x6}          ██          {xlyellow}                {x7}                
-#5{x7}                                {xlyellow}       ██        {x6}        ██████        {xlyellow}        ██      {x7}                
-#5{x7}                       ██       {xlyellow}     ██████      {x6}      ██████████      {xlyellow}      ██████    {x7}        ██      
-#5{x7}                     ██████     {xlyellow}   ██████████    {x6}    ██████████████    {xlyellow}    ██████████  {x7}      ██████    
-#5{x7}                   ██████████   {xlyellow} ██████████████  {x6}  ██████████████████  {xlyellow}  ██████████████{x7}    ██████████  
-#5{x7}                     ██████     {xlyellow}   ██████████    {x6}    ██████████████    {xlyellow}    ██████████  {x7}      ██████    
-#5{x7}                       ██       {xlyellow}     ██████      {x6}      ██████████      {xlyellow}      ██████    {x7}        ██      
-#5{x7}                                {xlyellow}       ██        {x6}        ██████        {xlyellow}        ██      {x7}                
-#5{x7}                                {xlyellow}                 {x6}          ██          {xlyellow}                {x7}                
-""",flush=True)
+    [{start_row+3};1H#3{xlyellow}                 │{" " * ((24 - len(text)) // 2)}{shine(text=text,offset=time.time(),bold=True,color=(240, 232, 158))}{xlyellow}{" " * ((24 - len(text)) // 2)}│
+    [{start_row+4};1H#4{xlyellow}                 │{" " * ((24 - len(text)) // 2)}{shine(text=text,offset=time.time(),bold=True,color=(240, 232, 158))}{xlyellow}{" " * ((24 - len(text)) // 2)}│
+    """,flush=True)
+    # Five-cell star catalog, grouped into the three performance fills:
+    # center star first, the two medium stars second, and the two outer stars
+    # last. Coordinates are terminal columns (the old art used these same
+    # visible positions), so later fills can paint over gray cells in place.
+    star_groups = (
+        ((2, 24, 25), (3, 22, 27), (4, 20, 29), (5, 22, 27), (6, 24, 25)),
+        ((1, 40, 41), (2, 38, 43), (3, 36, 45), (4, 34, 47),
+         (5, 36, 45), (6, 38, 43), (7, 40, 41)),
+        ((0, 60, 61), (1, 58, 63), (2, 56, 65), (3, 54, 67),
+         (4, 52, 69), (5, 54, 67), (6, 56, 65), (7, 58, 63),
+         (8, 60, 61)),
+        ((1, 80, 81), (2, 78, 83), (3, 76, 85), (4, 74, 87),
+         (5, 76, 85), (6, 78, 83), (7, 80, 81)),
+        ((2, 96, 97), (3, 94, 99), (4, 92, 101), (5, 94, 99),
+         (6, 96, 97)),
+    )
+    star_stages = ((2,), (1, 3), (0, 4))
+    star_stage_colours = (xb6, xblyellow, xbe)
+
+    def star_runs(groups):
+        rows = {}
+        for group in groups:
+            for row, start_col, end_col in star_groups[group]:
+                rows.setdefault(row, []).append((start_col, end_col))
+        for row in rows:
+            rows[row].sort()
+        return rows
+
+    def paint_star_runs(runs, background):
+        """Paint only the requested star cells; never clear the catalog."""
+        for row in sorted(runs):
+            for start_col, end_col in runs[row]:
+                width = end_col - start_col + 1
+                print(
+                    f"\033[{2 + row};{start_col}H\033#5"
+                    f"{background}{' ' * width}{unbg}",
+                    end="",
+                    flush=False,
+                )
+        sys.stdout.flush()
+
+    def wipe_star_stage(groups, background, duration):
+        """Reveal a stage with a white flash inside a fixed time budget."""
+        runs = star_runs(groups)
+        if duration <= 0:
+            paint_star_runs(runs, background)
+            return
+
+        rows = sorted(runs)
+        started = time.perf_counter()
+        for index, row in enumerate(rows, start=1):
+            row_runs = {row: runs[row]}
+            paint_star_runs(row_runs, xbf)
+            hold = min(0.04, duration / len(rows) * 0.45)
+            if hold > 0:
+                time.sleep(hold)
+            paint_star_runs(row_runs, background)
+            deadline = started + duration * index / len(rows)
+            remaining = deadline - time.perf_counter()
+            if remaining > 0:
+                time.sleep(remaining)
+
+    def draw_star_art(tier, animate=False):
+        """Show gray stars once, then fill each earned performance stage."""
+        tier = max(1, min(3, int(tier)))
+        clear_rows(2, 10)
+        # The catalog is painted once in gray. Every later operation overlays
+        # color on selected cells, avoiding the old delete/redraw flicker.
+        paint_star_runs(star_runs(range(len(star_groups))), xb7)
+
+        if animate:
+            # Regular appearance takes 0.3s for the second stage and another
+            # 0.4s for the third. Split that same total budget between fills;
+            # extreme can therefore never outlast regular.
+            total_duration = {1: 0.0, 2: 0.3, 3: 0.7}[tier]
+            stage_duration = total_duration / tier
+            for stage in range(tier):
+                wipe_star_stage(
+                    star_stages[stage],
+                    star_stage_colours[stage],
+                    stage_duration,
+                )
+            return
+
+        paint_star_runs(star_runs(star_stages[0]), star_stage_colours[0])
+        if tier >= 2:
+            if celebration_mode > 0:
+                time.sleep(0.3)
+            paint_star_runs(star_runs(star_stages[1]), star_stage_colours[1])
+        if tier >= 3:
+            if celebration_mode > 0:
+                time.sleep(0.4)
+            paint_star_runs(star_runs(star_stages[2]), star_stage_colours[2])
+
+    extra_xp = 0
+    bonus_label = ""
+    rowinfo = " "
     if remaining_hp_pct >= 80:
-        time.sleep(0.4)
-        extra_xp = 20
+        star_tier = 3
+        extra_xp = round(xp_required_for_next * 0.10)
         bonus_label = f"[+{extra_xp} XP - excellent!]"
+    elif remaining_hp_pct >= 50:
+        star_tier = 2
+        extra_xp = round(xp_required_for_next * 0.05)
+        bonus_label = f"[+{extra_xp} XP - great!]"
+    else:
+        star_tier = 1
+    if bonus_label:
         rowinfo = f"{reset}{bold}{xf}{bonus_label}{reset}"
-        move(1,1)
-        print(f"""
-#5{xe}                                {xlyellow}                 {x6}          ██          {xlyellow}                {xe}                
-#5{xe}                                {xlyellow}       ██        {x6}        ██████        {xlyellow}        ██      {xe}                
-#5{xe}                       ██       {xlyellow}     ██████      {x6}      ██████████      {xlyellow}      ██████    {xe}        ██      
-#5{xe}                     ██████     {xlyellow}   ██████████    {x6}    ██████████████    {xlyellow}    ██████████  {xe}      ██████    
-#5{xe}                   ██████████   {xlyellow} ██████████████  {x6}  ██████████████████  {xlyellow}  ██████████████{xe}    ██████████  
-#5{xe}                     ██████     {xlyellow}   ██████████    {x6}    ██████████████    {xlyellow}    ██████████  {xe}      ██████    
-#5{xe}                       ██       {xlyellow}     ██████      {x6}      ██████████      {xlyellow}      ██████    {xe}        ██      
-#5{xe}                                {xlyellow}       ██        {x6}        ██████        {xlyellow}        ██      {xe}                
-#5{xe}                                {xlyellow}                 {x6}          ██          {xlyellow}                {xe}                
-""",flush=True)          
-    art = bignumber(str(totalxp + extra_xp))
+    draw_star_art(star_tier, animate=celebration_mode >= 3)
+    art = bignumber(str(totalxp + extra_xp), background=xbb)
+    number_value = str(totalxp + extra_xp)
+    raw_number_lines = [
+        "  ".join(
+            bignumber_db(digit)[row]
+            for digit in number_value
+        )
+        for row in range(5)
+    ]
     length = max(visible_len(line) for line in art)
     text_column = max(
         1,
         os.get_terminal_size().columns // 2 - (length // 2) - 3,
     )
+
+    def render_number_frame(highlight_rows=()):
+        """Draw the number with white background cells on selected rows."""
+        highlighted = set(highlight_rows)
+        lines = []
+        for row, raw_line in enumerate(raw_number_lines):
+            background = xbf if row in highlighted else xbb
+            rendered = pad_visible(
+                background_blocks(raw_line, background),
+                length,
+            )
+            suffix = f" {rowinfo}{reset}" if row == 4 else ""
+            lines.append(
+                f"[{text_row + row};{text_column}H#5{rendered}{suffix}"
+            )
+        # Flush every frame so the white sweep is visible while the terminal
+        # is still waiting for the next animation step.
+        print("\n".join(lines), end="", flush=True)
+
     clear_rows(text_row, text_row + 4)
-    print(f"""
-[{text_row};{text_column}H#5{xb}{bold}{art[0]:<{length}}
-[{text_row+1};{text_column}H#5{art[1]:<{length}}
-[{text_row+2};{text_column}H#5{art[2]:<{length}}
-[{text_row+3};{text_column}H#5{art[3]:<{length}}
-[{text_row+4};{text_column}H#5{art[4]:<{length}} {rowinfo}{reset}
-""",flush=False)
+    render_number_frame()
 
     current_xp = player.xp + totalxp + extra_xp
     pc = max(0.0, min(current_xp / max_xp, 1.0))
     bar = f"{reset}{xbb} " * round((pc) * xp_bar_length) + f"{xb1} " * (xp_bar_length - round((pc) * xp_bar_length)) + f"{reset}"
-    if remaining_hp_pct >= 50:        
-        print(f"""
-[{text_row+5};1H#5{xlyellow}{" "*(os.get_terminal_size().columns - 1)}
-[{text_row+6};1H#5{xlyellow}{" " * ((os.get_terminal_size().columns - visible_len(pt)) // 2 - 3)}{xb}{pt}
-[{text_row+7};1H#5{xlyellow}{" "*(os.get_terminal_size().columns - 1)}
-[{text_row+8};1H#5{xlyellow}{" "*33}{f"{x0}█"*(xp_bar_length+4)}{reset}
-[{text_row+9};1H#5{xlyellow}{" "*33}{x0}██{bar}{x0}██{reset}
-[{text_row+10};1H#5{xlyellow}{" "*33}{x0}██{bar}{x0}██{reset}
-[{text_row+11};1H#5{xlyellow}{" "*33}{f"{x0}█"*(xp_bar_length+4)}{reset}
-""",flush=False)
-        delay = 0.048
-        time.sleep(delay)
-        print(f"""
-[{text_row};{text_column}H{xf}#5{art[0]:<{length}}
-[{text_row+1};{text_column}H{xb}#5{art[1]:<{length}}
-[{text_row+2};{text_column}H{xb}#5{art[2]:<{length}}
-[{text_row+3};{text_column}H{xb}#5{art[3]:<{length}}
-[{text_row+4};{text_column}H{xb}#5{art[4]:<{length}} {rowinfo}{reset}
-""",flush=False)
-        time.sleep(delay)
-        print(f"""
-[{text_row};{text_column}H{xf}#5{art[0]:<{length}}
-[{text_row+1};{text_column}H{xf}#5{art[1]:<{length}}
-[{text_row+2};{text_column}H{xb}#5{art[2]:<{length}}
-[{text_row+3};{text_column}H{xb}#5{art[3]:<{length}}
-[{text_row+4};{text_column}H{xb}#5{art[4]:<{length}} {rowinfo}{reset}
-""",flush=False)
-        time.sleep(delay)
-        print(f"""
-[{text_row};{text_column}H{xb}#5{art[0]:<{length}}
-[{text_row+1};{text_column}H{xf}#5{art[1]:<{length}}
-[{text_row+2};{text_column}H{xf}#5{art[2]:<{length}}
-[{text_row+3};{text_column}H{xb}#5{art[3]:<{length}}
-[{text_row+4};{text_column}H{xb}#5{art[4]:<{length}} {rowinfo}{reset}
-""",flush=False)
-        time.sleep(delay)
-        print(f"""
-[{text_row};{text_column}H{xb}#5{art[0]:<{length}}
-[{text_row+1};{text_column}H{xb}#5{art[1]:<{length}}
-[{text_row+2};{text_column}H{xf}#5{art[2]:<{length}}
-[{text_row+3};{text_column}H{xf}#5{art[3]:<{length}}
-[{text_row+4};{text_column}H{xb}#5{art[4]:<{length}} {rowinfo}{reset}
-""",flush=False)
+    if remaining_hp_pct >= 50 and celebration_mode >= 2:
+        # The original wall held at most two white rows.  This sweep peaks at
+        # three, then settles back to the all-blue number.
+        shine_frames = (
+            (0,),
+            (0, 1),
+            (0, 1, 2),
+            (1, 2, 3),
+            (2, 3, 4),
+            (3, 4),
+            (4,),
+            (),
+        )
+        # Keep the earlier 20% readability increase, then shorten that
+        # interval by 15% for the current sweep.
+        delay = 0.048 * 1.20 * (1 - 0.15)
+        for highlight_rows in shine_frames:
+            time.sleep(delay)
+            render_number_frame(highlight_rows)
 
-        time.sleep(delay)
-        print(f"""
-[{text_row};{text_column}H{xb}#5{art[0]:<{length}}
-[{text_row+1};{text_column}H{xb}#5{art[1]:<{length}}
-[{text_row+2};{text_column}H{xb}#5{art[2]:<{length}}
-[{text_row+3};{text_column}H{xf}#5{art[3]:<{length}}
-[{text_row+4};{text_column}H{xf}#5{art[4]:<{length}} {rowinfo}{reset}
-""",flush=False)
-
-        time.sleep(delay)
-        print(f"""
-[{text_row};{text_column}H{xb}#5{art[0]:<{length}}
-[{text_row+1};{text_column}H{xb}#5{art[1]:<{length}}
-[{text_row+2};{text_column}H{xb}#5{art[2]:<{length}}
-[{text_row+3};{text_column}H{xb}#5{art[3]:<{length}}
-[{text_row+4};{text_column}H{xf}#5{art[4]:<{length}} {rowinfo}{reset}
-""",flush=False)
-
-        time.sleep(delay)
-        print(f"""
-[{text_row};{text_column}H{xb}#5{art[0]:<{length}}
-[{text_row+1};{text_column}H{xb}#5{art[1]:<{length}}
-[{text_row+2};{text_column}H{xb}#5{art[2]:<{length}}
-[{text_row+3};{text_column}H{xb}#5{art[3]:<{length}}
-[{text_row+4};{text_column}H{xb}#5{art[4]:<{length}} {rowinfo}{reset}
-""",flush=False)
-
+    # Small keeps the count-up but still lets the earned-bonus label fade;
+    # Minimal leaves the final screen visible without any timed animation.
+    if remaining_hp_pct >= 50 and celebration_mode >= 1:
         bonus_column = text_column + length + 1
         fade_duration = 0.5
         fade_steps = 10
@@ -3896,6 +4041,15 @@ def battle_win():
             end="",
             flush=True,
         )
+
+    confirmation_prompt = f"{xf}› press any key to confirm ‹"
+    confirmation_column = max(
+        1,
+        (os.get_terminal_size().columns - visible_len(confirmation_prompt)) // 2
+        - 2,
+    )
+    # Match levelup()'s indicator, offset three terminal cells left of center.
+    draw_text(confirmation_column, 31, confirmation_prompt)
 
     player.xp += (enemy.xp_reward + health_xp_bonus + extra_xp)
     player.money += enemy.gold_reward
@@ -4593,8 +4747,8 @@ def character():
 
     # ===== CONFIG =====
     BAR_LENGTH = 30
-    FILLED_SEG = f"{xa}█"
-    EMPTY_SEG = f"{x0}█"
+    FILLED_SEG = f"{xba} "
+    EMPTY_SEG = f"{xb0} "
 
     # ===== CALCULATE FILLED SEGMENTS =====
     if EXP_NEEDED > 0:
@@ -4701,7 +4855,7 @@ def character():
         game.goto = character3
         return # skills & classes
     
-    print(f"""
+    print(background_blocks(f"""
 [1;{number}H{reset}
 [2;17H#3{x7}╭───────────────────────────╮
 [3;17H#4{x7}╭───────────────────────────╮
@@ -4850,7 +5004,7 @@ def character():
 [33;103H{RGB}255;203;204mLife Steal{x8}------{xlred}{bold}{char_round(round(player.life_steal,1))}%{reset}
 [36;42H{RGB}173;216;225m╰───────────────────────────────────────╯ {RGB}255;203;204m╰─────────────────────────────────────────╯
 [36;3H{x7}╰────────────────────────────────────╯{reset}
-""".strip().replace("\n", ""),end="",flush=True)
+""").strip().replace("\n", ""),end="",flush=True)
     if item.type_raw is not None: print(f"""
 [18;46HYour {item.type_raw} {bold}crits {RGB}255;219;187m{char_round(player.crit_rate)}%{reset} of the time,{reset}
 [19;46H{reset}in which case you deal {RGB}255;219;187m{bold}+{char_round(player.crit_damage)}%{reset} DMG:
@@ -4869,8 +5023,8 @@ def character():
     EXP_NEEDED = player.xpneeded
 
     BAR_LENGTH = 30
-    FILLED_SEG = f"{xa}█"
-    EMPTY_SEG = f"{x0}█"
+    FILLED_SEG = f"{xba} "
+    EMPTY_SEG = f"{xb0} "
 
     exp_progress = character_exp_progress(
         player.level,
@@ -6242,7 +6396,7 @@ def character2():
         rarity_indicator = f"{reset}{xe}★★★★★ {xf}Divine"
 
     draw_equipment_title_bar()
-    print(f"""
+    print(background_blocks(f"""
 [08;3H{xf}{bold}╭────────────────────────────────────╮{reset}
 [09;3H{xf}{bold}│                                    │{reset}
 [10;3H{xf}{bold}│ {player.color}   ██████                        {xf}  │{reset}
@@ -6341,7 +6495,7 @@ def character2():
 
 
 
-""".strip().replace("\n",""),end="",flush=True)
+""").strip().replace("\n",""),end="",flush=True)
     slot_lines, set_lines = equipped_fragment_summary_lines()
     for row, text in zip((10, 12, 14), slot_lines):
         print(f"\033[{row};87H{reset}{RGB}186;243;219m{text[:38]:<38}{reset}")
@@ -6375,7 +6529,7 @@ def character3():
     spaces = " " * max(pad, 0)
     centered = spaces + playernamd
     number = 1
-    print(f"""
+    print(background_blocks(f"""
 [1;{number}H{reset}
 [2;17H#3{x7}╭───────────────────────────╮
 [3;17H#4{x7}╭───────────────────────────╮
@@ -6448,7 +6602,7 @@ def character3():
 [26;85H{RGB}255;203;204m{bold}┤ 🔥 Ultimate - {player.ult_name if player.ult_name is not None else "Unnamed"} ├
 [36;42H{RGB}173;216;225m╰───────────────────────────────────────╯ {RGB}255;203;204m╰─────────────────────────────────────────╯
 [36;3H{x7}╰────────────────────────────────────╯{reset}
-""".strip().replace("\n",""),end="",flush=True)
+""").strip().replace("\n",""),end="",flush=True)
     
 
     if player.playerclass.lower() == "warrior":
@@ -7022,17 +7176,17 @@ def draw_confirmation_progress(filled, action):
     filled = max(0, min(43, int(filled)))
     d.hold_item = filled
     if action == "upgrade":
-        filled_colour = xa
-        empty_colour = rgb(17, 45, 69)
+        filled_colour = xba
+        empty_colour = rgback(17, 45, 69)
     else:
-        filled_colour = xc
-        empty_colour = rgb(48, 18, 18)
+        filled_colour = xbc
+        empty_colour = rgback(48, 18, 18)
     xpbar = (
-        f"{filled_colour}{'█' * filled}"
-        f"{empty_colour}{'█' * (43 - filled)}"
+        f"{filled_colour}{' ' * filled}"
+        f"{empty_colour}{' ' * (43 - filled)}"
     )
-    print(f"\033[20;63H{x0}██{xpbar}{x0}██")
-    print(f"\033[21;63H{x0}██{xpbar}{x0}██", end="", flush=True)
+    print(f"\033[20;63H{xb0}  {xpbar}{xb0}  {reset}")
+    print(f"\033[21;63H{xb0}  {xpbar}{xb0}  {reset}", end="", flush=True)
 
 
 def hold_for_confirmation(action, duration=1.2, initial_confirm=False):
@@ -7145,11 +7299,11 @@ def draw_upgrade_menu(
         print(f"\033[16;63H{bold}↑ {xlyellow}Upgrade {item_obj.name}{reset}")
 
     filled = round((target_level * 43) / max_level)
-    xpbar = f"{xb}{'█' * filled}{rgb(17,45,69)}{'█' * (43 - filled)}"
-    print(f"\033[19;63H{x0}███████████████████████████████████████████████")
-    print(f"\033[20;63H██{xpbar}{x0}██")
-    print(f"\033[21;63H██{xpbar}{x0}██")
-    print(f"\033[22;63H{x0}███████████████████████████████████████████████{reset}")
+    xpbar = f"{xbb}{' ' * filled}{rgback(17,45,69)}{' ' * (43 - filled)}"
+    print(f"\033[19;63H{xb0}{' ' * 47}{reset}")
+    print(f"\033[20;63H{xb0}  {xpbar}{xb0}  {reset}")
+    print(f"\033[21;63H{xb0}  {xpbar}{xb0}  {reset}")
+    print(f"\033[22;63H{xb0}{' ' * 47}{reset}")
 
     print(f"\033[24;63H{xf}Target level: {x7}{current_level} {xf}→ {xlyellow}{bold}{target_level}/{max_level}{reset}")
     print(f"\033[25;63H{xf}Levels: {xlyellow}{bold}+{levels}{reset}{x7}  (+ increase / - decrease){reset}")
@@ -7198,13 +7352,13 @@ def draw_refinement_menu(item_obj, message="", draw_title=False):
 
     filled = round((target_stage * 43) / WEAPON_REFINEMENT_MAX)
     refine_bar = (
-        f"{xd}{'█' * filled}"
-        f"{rgb(54,18,49)}{'█' * (43 - filled)}"
+        f"{xbd}{' ' * filled}"
+        f"{rgback(54,18,49)}{' ' * (43 - filled)}"
     )
-    print(f"\033[19;63H{x0}{'█' * 47}")
-    print(f"\033[20;63H██{refine_bar}{x0}██")
-    print(f"\033[21;63H██{refine_bar}{x0}██")
-    print(f"\033[22;63H{x0}{'█' * 47}{reset}")
+    print(f"\033[19;63H{xb0}{' ' * 47}{reset}")
+    print(f"\033[20;63H{xb0}  {refine_bar}{xb0}  {reset}")
+    print(f"\033[21;63H{xb0}  {refine_bar}{xb0}  {reset}")
+    print(f"\033[22;63H{xb0}{' ' * 47}{reset}")
 
     print(
         f"\033[24;63H{xf}Refinement: {x7}R{current_stage} {xf}→ "
@@ -8141,15 +8295,14 @@ def displaynewsel():
     empty = 43-filled
     
     for i in range(filled):
-        xpbar += f"{xb}█"
+        xpbar += f"{xbb} "
     for i in range(empty):
-        xpbar += f"{rgb(17,45,69)}█"
+        xpbar += f"{rgback(17,45,69)} "
     
-    print(f"[19;63H{x0}███████████████████████████████████████████████")
-    print(f"[20;63H██{xpbar}{x0}██")
-    print(f"[21;63H██{xpbar}{x0}██")
-    print(f"[22;63H{x0}███████████████████████████████████████████████")
-    print(reset, end="")
+    print(f"[19;63H{xb0}{' ' * 47}{reset}")
+    print(f"[20;63H{xb0}  {xpbar}{xb0}  {reset}")
+    print(f"[21;63H{xb0}  {xpbar}{xb0}  {reset}")
+    print(f"[22;63H{xb0}{' ' * 47}{reset}")
     indicators = ""
     # If equipped, show equipped indicator
     equipped_path = inv_active_path(game.sel, item)
