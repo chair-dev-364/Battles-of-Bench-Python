@@ -1,1 +1,1 @@
-Bracelet;;Lifeblood Bracelet;;1;;HP %;;7;;Titan;;0
+Necklace;;Silent Oath Necklace;;1;;Crit Damage;;10;;Assassin;;0

@@ -880,6 +880,29 @@ def handle_client(conn, addr):
             elif command.upper() == "REFRESH_AUDIO":
                 refresh_audio_settings()
 
+            elif command.upper().startswith("PRECACHE "):
+                # cache the pitch without playing it
+                precache_name, precache_pitch = parse_sound_and_pitch(
+                    command[9:].strip()
+                )
+                if not MIXER_AVAILABLE or not precache_name:
+                    continue
+                precache_mp3 = os.path.join(SOUNDS_DIR, f"{precache_name}.mp3")
+                precache_wav = os.path.join(SOUNDS_DIR, f"{precache_name}.wav")
+                if os.path.isfile(precache_mp3):
+                    precache_file = precache_mp3
+                elif os.path.isfile(precache_wav):
+                    precache_file = precache_wav
+                else:
+                    continue
+                precache_base = load_cached_sound(precache_file)
+                if precache_base is not None:
+                    get_pitched_sound(
+                        precache_file,
+                        precache_base,
+                        precache_pitch,
+                    )
+
             elif command.upper().startswith("STOP"):
                 if command.upper() == "STOP":
                     print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Received STOP command from {addr}. Stopping all sounds.")
@@ -967,6 +990,28 @@ def handle_udp_command(command, addr=None, sock=None):
                 print(f"Warning: Failed to send PONG to {addr} via UDP: {e}")
     elif cmd_up == "REFRESH_AUDIO":
         refresh_audio_settings()
+    elif cmd_up.startswith("PRECACHE "):
+        # cache the pitch without playing it
+        precache_name, precache_pitch = parse_sound_and_pitch(
+            command[9:].strip()
+        )
+        if not MIXER_AVAILABLE or not precache_name:
+            return
+        precache_mp3 = os.path.join(SOUNDS_DIR, f"{precache_name}.mp3")
+        precache_wav = os.path.join(SOUNDS_DIR, f"{precache_name}.wav")
+        if os.path.isfile(precache_mp3):
+            precache_file = precache_mp3
+        elif os.path.isfile(precache_wav):
+            precache_file = precache_wav
+        else:
+            return
+        precache_base = load_cached_sound(precache_file)
+        if precache_base is not None:
+            get_pitched_sound(
+                precache_file,
+                precache_base,
+                precache_pitch,
+            )
     elif cmd_up.startswith("STOP"):
         if cmd_up == "STOP":
             print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Received STOP command from {addr}. Stopping all sounds.")

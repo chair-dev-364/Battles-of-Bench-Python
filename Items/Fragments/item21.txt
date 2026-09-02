@@ -1,1 +1,1 @@
-Ring;;Executioner's Ring;;1;;ATK;;24;;Assassin;;0
+Ring;;Phantom Ring;;1;;DEF;;5;;Assassin;;0

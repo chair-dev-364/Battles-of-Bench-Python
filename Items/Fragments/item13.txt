@@ -1,1 +1,1 @@
-Ring;;Phantom Ring;;1;;DEF;;5;;Assassin;;0
+Bracelet;;Ironpulse Bracelet;;6;;ATK;;22.0;;Warrior;;0;;DEF;;5

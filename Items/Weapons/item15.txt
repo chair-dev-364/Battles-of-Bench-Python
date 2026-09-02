@@ -1,1 +1,1 @@
-book;;0e;;Befriend a Shark in 30 Days;;25;;242;;185.8;;Regeneration;;19;;Contains sharks and... fanfics?!;;0.05;;A shark will attack after you do!;;0;;3
+knife;;02;;Basic Knife;;10;;65;;38.0;;Defence;;5;;Knife yay;;0.03;;ability;;0;;0

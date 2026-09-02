@@ -1,1 +1,1 @@
-Ring;;Citadel Ring;;1;;HP;;140;;Guardian;;0
+Necklace;;Endurance Necklace;;1;;HP %;;7;;Titan;;0

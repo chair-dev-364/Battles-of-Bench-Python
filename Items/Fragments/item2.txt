@@ -1,1 +1,1 @@
-Ring;;Watchtower Ring;;1;;Crit Damage;;6;;Guardian;;0
+Necklace;;Venom Necklace;;15;;ATK %;;6.0;;Assassin;;0;;Speed;;2;;ATK;;5;;HP %;;5

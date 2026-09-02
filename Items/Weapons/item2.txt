@@ -1,1 +1,1 @@
-pistol;;02;;Thunder-er V2;;9;;81;;47.5;;Regeneration;;7;;Forecast: loud with a chance of sparks.;;0.035;;No ability.;;0;;0
+bow;;0d;;The Melter;;25;;127;;100;;Health;;25;;The bow of mass destruction. Not joking.;;0.045;;No ability.;;0;;0

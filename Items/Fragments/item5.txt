@@ -1,1 +1,1 @@
-Necklace;;Venom Necklace;;15;;ATK %;;6.0;;Assassin;;0;;Speed;;2;;ATK;;5;;HP %;;5
+Bracelet;;Razor Bracelet;;15;;ATK;;23.0;;Assassin;;0;;Crit Rate;;3;;ATK %;;4;;HP %;;3

@@ -1,1 +1,1 @@
-Necklace;;Bastion Necklace;;1;;DEF;;9;;Guardian;;0
+Ring;;Blackstar Ring;;1;;Crit Rate;;4;;Assassin;;0

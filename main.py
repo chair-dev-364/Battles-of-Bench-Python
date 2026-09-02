@@ -2765,6 +2765,9 @@ def mainmenu():
         if k.lower() == "ctrl/t" or k.lower() == "t":
             game.goto = internal_modify
             return
+        if k.lower() == "ctrl/t" or k.lower() == "k":
+                    game.goto = internal_modify_beta
+                    return
         if animate_menu_effects:
             time.sleep(0.01)
         # play sound: ctrl+R
@@ -3691,9 +3694,7 @@ def battle_win():
         text = random.choice(["Battle over!", "Well done!", "Nice work!", "You win!", "Victory!"])
         atype = 3
 
-    # Celebration levels: 0 = Minimal, 1 = Small, 2 = Regular, 3 = Extreme.
-    # Reduce-motion/instant animation settings intentionally collapse this to
-    # Minimal without changing the user's saved celebration preference.
+    # celebration levels: 0 = minimal, 1 = small, 2 = regular, 3 = extreme
     celebration_mode = getattr(setting, "victory_celebration", 2)
     effective_setting = getattr(setting, "effective_setting", None)
     if callable(effective_setting):
@@ -3702,16 +3703,11 @@ def battle_win():
         celebration_mode = max(0, min(3, int(celebration_mode)))
     except (TypeError, ValueError):
         celebration_mode = 2
-    # Keep this guard local as well as in SettingsData.effective_setting so a
-    # reduced-motion session can never accidentally run a saved celebration.
+    # keep reduced motion local to this animation
     if getattr(setting, "reduce_motion", False) or not animations_enabled():
         celebration_mode = 0
     
-    # Full-health XP follows a gently accelerating level curve.  The anchors
-    # are intentionally easy to reason about: about 8 XP at level 1, 30 XP at
-    # level 50, and 150 XP at level 90.  Remaining health scales that award by
-    # a sub-linear power so partial-health wins still receive a meaningful
-    # bonus without overwhelming the level scaling.
+    # scale the xp reward from remaining health
     level_progress = max(0.0, (float(player.level) - 1.0) / 89.0)
     full_health_bonus = 8.0 * (150.0 / 8.0) ** (level_progress ** 1.33)
     health_ratio = max(0.0, min(1.0, remaining_hp_pct / 100.0))
@@ -3722,7 +3718,83 @@ def battle_win():
         screen_wipe("normal",10)
     
     totalxp = round(enemy.xp_reward + health_xp_bonus)
-    totalgold = enemy.gold_reward
+    gold_reward = max(0, int(enemy.gold_reward))
+    totalgold = max(0, round(gold_reward * health_ratio ** 0.75))
+
+    # local animation controls
+    xp_animation_duration = 1.8
+    xp_animation_tick_amount = 1
+    gold_animation_duration = 0.675
+    gold_animation_tick_amount = 25
+    gold_animation_max_ticks = 10
+    gold_animation_acceleration = 1.20
+    gold_animation_pitch_rise = 0.16
+    gold_animation_delay = 0.3
+    star_to_number_delay = 0.2
+    notice_fade_duration = 0.5
+    confirmation_fade_duration = 0.5
+    title_animation_timeout = 0.05
+
+    xp_animation_tick_amount = max(1, int(xp_animation_tick_amount))
+    gold_animation_tick_amount = max(1, int(gold_animation_tick_amount))
+
+    # keep live xp separate from the reward number
+    animated_level = min(CHARACTER_MAX_LEVEL, max(1, int(getattr(player, "level", 1))))
+    animated_xp = max(0, int(getattr(player, "xp", 0)))
+    animated_xpneeded = max(1, int(getattr(player, "xpneeded", 1)))
+    earned_xp = 0
+    xp_required_for_next = animated_xpneeded
+    if animated_level >= CHARACTER_MAX_LEVEL:
+        xp_required_for_next = 0
+
+    thresholds = [
+        (0, x8), (5, x7), (10, xf), (15, x3), (20, x9), (25, xb),
+        (30, x2), (35, xa), (40, xlorange), (45, xlyellow), (50, xe),
+        (55, x5), (60, xd), (65, xlred), (70, xc), (75, x4),
+        (80, rgb(184, 172, 246)), (85, rgb(254, 163, 98)),
+        (90, rgb(186, 243, 219)), (95, rgb(255, 131, 101)),
+        (100, rgb(227, 62, 57)),
+    ]
+    color_milestones = [req_level for req_level, color in thresholds if req_level > 0]
+    player_color = x8
+    for req_level, color in thresholds:
+        if animated_level >= req_level:
+            player_color = color
+    color_values = re.search(r"38;2;(\d+);(\d+);(\d+)m", player_color)
+    player_rgb = tuple(int(value) for value in color_values.groups()) if color_values else (94, 94, 94)
+    xp_color = rgback(*player_rgb)
+    xp_dark_color = rgback(*tuple(max(0, round(value * 0.22)) for value in player_rgb))
+    levelup_notice = ""
+    color_notice = ""
+    levelup_notice_start = 0.0
+    color_notice_start = 0.0
+    notice_width = len("New color unlocked!")
+    levelup_notice_frame = " " * notice_width
+    color_notice_frame = " " * notice_width
+
+    gold_animation_tick_count = min(gold_animation_max_ticks, max(1, math.ceil(totalgold / gold_animation_tick_amount))) if totalgold > 0 and celebration_mode >= 2 else 0
+    gold_animation_pitches = []
+
+    gold_animation_started = False
+    gold_animation_start = 0.0
+    gold_animation_tick = 0
+    gold_count = 0
+    gold_balance_start = int(getattr(player, "money", 0))
+    gold_amount_text = str(totalgold)
+    gold_balance_text = f"{gold_balance_start + totalgold:,}"
+    gold_frame_text = f"¤ +{gold_amount_text} gold → {gold_balance_text}"
+    gold_row = 31
+    # esc#3 and esc#4 use double-size cells
+    gold_column = max(1, (os.get_terminal_size().columns - visible_len(gold_frame_text) * 2) // 4)
+
+    title_text = random.choice([
+        "your progress to level",
+        "your advancement to level",
+        "here's your progress to level",
+        "your journey to level",
+        "your path to level",
+        "your quest to level",
+    ])
     
     if celebration_mode > 0:
         move(4,1)
@@ -3740,76 +3812,123 @@ def battle_win():
     move(15,30)
 
     z = totalxp
-    y = 1.8
-
-    start = time.perf_counter()
-    # Minimal jumps straight to the same final layout used by the animated
-    # path.  The single draw below keeps the final screen identical without
-    # spending time counting through every XP value.
+    # minimal uses the final animated layout
     start_row = 5
     text_row = 13
     milestone_shifts = 0
     max_title_shifts = 5
-    max_number_shifts = 4
-    # get terminal columns
-    xp_required_for_next = max(0, int(getattr(player, "xpneeded", 0)))
-    if player.level >= CHARACTER_MAX_LEVEL:
-        xp_required_for_next = 0
-    max_xp = max(1, xp_required_for_next)
+    max_number_shifts = 5
     xp_bar_length = 50
-    pt = f"{bold}XP earned{unbold} {xf}· {random.choice(["your progress to level", "your advancement to level", "here's your progress to level", "your journey to level", "your path to level", "your quest to level"])} {bold}{xb}{player.level + 1}:{reset}"
-    if player.level == 100:
-        max_xp = 1
+    xp_notification_column = 33 + xp_bar_length + 6
+    next_level = str(animated_level + 1) if animated_level < CHARACTER_MAX_LEVEL else "MAX"
+    pt = f"{bold}{player_color}XP earned{unbold} {xf}· {title_text} {bold}{player_color}{next_level}:{reset}"
+    xp_animation_tick_count = max(1, math.ceil(totalxp / xp_animation_tick_amount)) if totalxp > 0 else 1
+    xp_animation_start = time.perf_counter()
 
-    def clear_rows(first_row, last_row):
-        print(
-            "".join(
-                f"[{row};1H#5[2K"
-                for row in range(first_row, last_row + 1)
-            ),
-            end="",
-        )
-
-    def clear_title_rows(first_row):
-        # Erase the complete physical line before changing its DEC double-
-        # height mode.  Writing a fixed number of spaces while a row is in
-        # #3/#4 mode can leave the old border at the right edge (or redraw it
-        # at half width), which is the source of the stale yellow line.
-        print(
-            "".join(
-                f"[{first_row + offset};1H[2K#5"
-                for offset in range(6)
-            ),
-            end="",
-        )
-
-    milestone_values = [
-        round(z * pc) for pc in (0.8, 0.85, 0.9, 0.95, 0.98, 0.99, 1)
-    ]
+    milestone_values = sorted(set(
+        round(z * milestone_ratio) for milestone_ratio in (0.8, 0.85, 0.9, 0.95, 0.98, 0.99, 1)
+    )) if z > 0 else []
     ms = milestone_values if celebration_mode > 0 else []
+    milestone_index = 0
     if celebration_mode == 0:
-        # Pick the same resting coordinates the animated path would reach,
-        # even when a tiny reward collapses several milestones to one value.
+        # match the animated resting coordinates
         milestone_count = min(max_title_shifts, len(set(milestone_values)))
         start_row += milestone_count
         text_row += min(max_number_shifts, milestone_count)
-    count_values = range(z + 1) if celebration_mode > 0 else (z,)
-    for i in count_values:
-        if i in ms and milestone_shifts < max_title_shifts:
-            clear_title_rows(start_row + 1)
+    if celebration_mode > 0:
+        count_values = range(xp_animation_tick_count)
+    else:
+        count_values = range(1)
+    extra_xp = 0
+    bonus_label = ""
+    rowinfo = " "
+
+    for xp_tick in count_values:
+        if z > 0:
+            if celebration_mode == 0:
+                xp_tick_start = 0
+                xp_tick_end = z
+            else:
+                xp_tick_start = xp_tick * xp_animation_tick_amount
+                xp_tick_end = min(z, (xp_tick + 1) * xp_animation_tick_amount)
+            xp_tick_amount = max(0, xp_tick_end - xp_tick_start)
+        else:
+            xp_tick_amount = 0
+        earned_xp = min(z, earned_xp + xp_tick_amount)
+        animated_xp += xp_tick_amount
+
+        # apply levelups inline
+        while (
+            animated_level < CHARACTER_MAX_LEVEL
+            and animated_xp >= animated_xpneeded
+        ):
+            xp_for_next = animated_xpneeded
+            animated_xp -= xp_for_next
+            animated_level += 1
+            sound("inside_levelup")
+            levelup_notice = "Level up!"
+            levelup_notice_start = time.perf_counter()
+            if animated_level in color_milestones:
+                color_notice = "New color unlocked!"
+                color_notice_start = time.perf_counter()
+            if animated_level < CHARACTER_MAX_LEVEL:
+                xp_for_next = round(xp_for_next + 15 + animated_level / 4)
+            animated_xpneeded = round(xp_for_next)
+            player_color = x8
+            for req_level, color in thresholds:
+                if animated_level >= req_level:
+                    player_color = color
+            color_values = re.search(r"38;2;(\d+);(\d+);(\d+)m", player_color)
+            player_rgb = tuple(int(value) for value in color_values.groups()) if color_values else (94, 94, 94)
+            xp_color = rgback(*player_rgb)
+            xp_dark_color = rgback(*tuple(max(0, round(value * 0.22)) for value in player_rgb))
+
+        while (
+            milestone_index < len(ms)
+            and earned_xp >= ms[milestone_index]
+            and milestone_shifts < max_title_shifts
+        ):
+            print(
+                "".join(
+                    f"[{start_row + 1 + offset};1H[2K#5"
+                    for offset in range(6)
+                ),
+                end="",
+            )
             start_row += 1
             if milestone_shifts < max_number_shifts:
-                clear_rows(text_row, text_row + 11)
+                print(
+                    "".join(
+                        f"[{row};1H#5[2K"
+                        for row in range(text_row, text_row + 12)
+                    ),
+                    end="",
+                )
                 text_row += 1
             milestone_shifts += 1
+            milestone_index += 1
 
-        formatted_xp = f"{i:>{len(str(z))}}"
-        art = bignumber(str(i), background=xbb)
+        notice_time = time.perf_counter()
+        if levelup_notice and notice_time - levelup_notice_start < notice_fade_duration:
+            notice_progress = max(0.0, min(1.0, (notice_time - levelup_notice_start) / notice_fade_duration))
+            notice_shade = round(242 + (55 - 242) * notice_progress)
+            levelup_notice_frame = f"{rgb(notice_shade, notice_shade, notice_shade)}{bold}{levelup_notice.ljust(notice_width)}{reset}"
+        else:
+            levelup_notice_frame = " " * notice_width
+        if color_notice and notice_time - color_notice_start < notice_fade_duration:
+            notice_progress = max(0.0, min(1.0, (notice_time - color_notice_start) / notice_fade_duration))
+            notice_shade = round(242 + (55 - 242) * notice_progress)
+            color_notice_frame = f"{rgb(notice_shade, notice_shade, notice_shade)}{bold}{color_notice.ljust(notice_width)}{reset}"
+        else:
+            color_notice_frame = " " * notice_width
+        rowinfo = shine(text=bonus_label, offset=time.time(), bold=True, color=(242, 242, 242)) if bonus_label else " "
+        art = bignumber(str(earned_xp), background=xp_color)
+        if art is None:
+            art = bignumber(str(earned_xp % 1000), background=xp_color)
         length = max(visible_len(art[0]), visible_len(art[1]), visible_len(art[2]), visible_len(art[3]), visible_len(art[4]))
-        text_column = max(
-            1,
-            os.get_terminal_size().columns // 2 - (length // 2) - 3,
-        )
+        text_column = max(1, os.get_terminal_size().columns // 2 - (length // 2) - 3)
+        next_level = str(animated_level + 1) if animated_level < CHARACTER_MAX_LEVEL else "MAX"
+        pt = f"{bold}{player_color}XP earned{unbold} {xf}· {title_text} {bold}{player_color}{next_level}:{reset}"
         print(f"""
 [{text_row};1H#5[2K[{text_row};{text_column}H{pad_visible(art[0], length)}
 [{text_row+1};1H#5[2K[{text_row+1};{text_column}H{pad_visible(art[1], length)}
@@ -3825,35 +3944,41 @@ def battle_win():
 [{start_row+4};1H#4{xlyellow}                 │{" " * ((24 - len(text)) // 2)}{xa}{bold}{shine(text=text,offset=time.time(),bold=True,color=(240, 232, 158))}{reset}{xlyellow}{" " * ((24 - len(text)) // 2)}│
 [{start_row+5};1H#3{xlyellow}                 ╰────────────────────────╯
 [{start_row+6};1H#4{xlyellow}                 ╰────────────────────────╯
-""",flush=False)
+        """,flush=False)
         
         # xp bar - fill in the bar based on the current xp
-        current_xp = player.xp + i
+        if animated_level >= CHARACTER_MAX_LEVEL:
+            max_xp = 1
+            current_xp = 1
+        else:
+            max_xp = max(1, animated_xpneeded)
+            current_xp = max(0, animated_xp)
         pc = max(0.0, min(current_xp / max_xp, 1.0))
-        bar = f"{reset}{xbb} " * round((pc) * xp_bar_length) + f"{xb1} " * (xp_bar_length - round((pc) * xp_bar_length)) + f"{reset}"
+        bar = f"{reset}{xp_color} " * round(pc * xp_bar_length) + f"{xp_dark_color} " * (xp_bar_length - round(pc * xp_bar_length)) + f"{reset}"
         
         print(f"""
 [{text_row+5};1H#5{xlyellow}{" "*(os.get_terminal_size().columns - 1)}
-[{text_row+6};1H#5{xlyellow}{" " * ((os.get_terminal_size().columns - visible_len(pt)) // 2 - 3)}{xb}{pt}
+[{text_row+6};1H#5{xlyellow}{" " * ((os.get_terminal_size().columns - visible_len(pt)) // 2 - 3)}{pt}
 [{text_row+7};1H#5{xlyellow}{" "*(os.get_terminal_size().columns - 1)}
 [{text_row+8};1H#5{xlyellow}{" "*33}{f"{xb0} "*(xp_bar_length+4)}{reset}
 [{text_row+9};1H#5{xlyellow}{" "*33}{xb0}  {bar}{xb0}  {reset}
 [{text_row+10};1H#5{xlyellow}{" "*33}{xb0}  {bar}{xb0}  {reset}
 [{text_row+11};1H#5{xlyellow}{" "*33}{f"{xb0} "*(xp_bar_length+4)}{reset}
+[{text_row+9};{xp_notification_column}H#5{levelup_notice_frame}
+[{text_row+10};{xp_notification_column}H#5{color_notice_frame}
 """,flush=True)
         
         
         if celebration_mode > 0 and z > 0:
-            target = start + (i + 1) * y / z
+            target = xp_animation_start + (xp_tick + 1) * xp_animation_duration / xp_animation_tick_count
             time.sleep(max(0, target - time.perf_counter()))
+    next_level = str(animated_level + 1) if animated_level < CHARACTER_MAX_LEVEL else "MAX"
+    pt = f"{bold}{player_color}XP earned{unbold} {xf}· {title_text} {bold}{player_color}{next_level}:{reset}"
     print(f"""
     [{start_row+3};1H#3{xlyellow}                 │{" " * ((24 - len(text)) // 2)}{shine(text=text,offset=time.time(),bold=True,color=(240, 232, 158))}{xlyellow}{" " * ((24 - len(text)) // 2)}│
     [{start_row+4};1H#4{xlyellow}                 │{" " * ((24 - len(text)) // 2)}{shine(text=text,offset=time.time(),bold=True,color=(240, 232, 158))}{xlyellow}{" " * ((24 - len(text)) // 2)}│
     """,flush=True)
-    # Five-cell star catalog, grouped into the three performance fills:
-    # center star first, the two medium stars second, and the two outer stars
-    # last. Coordinates are terminal columns (the old art used these same
-    # visible positions), so later fills can paint over gray cells in place.
+    # star groups for the three fills
     star_groups = (
         ((2, 24, 25), (3, 22, 27), (4, 20, 29), (5, 22, 27), (6, 24, 25)),
         ((1, 40, 41), (2, 38, 43), (3, 36, 45), (4, 34, 47),
@@ -3869,99 +3994,150 @@ def battle_win():
     star_stages = ((2,), (1, 3), (0, 4))
     star_stage_colours = (xb6, xblyellow, xbe)
 
-    def star_runs(groups):
-        rows = {}
-        for group in groups:
-            for row, start_col, end_col in star_groups[group]:
-                rows.setdefault(row, []).append((start_col, end_col))
-        for row in rows:
-            rows[row].sort()
-        return rows
-
-    def paint_star_runs(runs, background):
-        """Paint only the requested star cells; never clear the catalog."""
-        for row in sorted(runs):
-            for start_col, end_col in runs[row]:
-                width = end_col - start_col + 1
-                print(
-                    f"\033[{2 + row};{start_col}H\033#5"
-                    f"{background}{' ' * width}{unbg}",
-                    end="",
-                    flush=False,
-                )
-        sys.stdout.flush()
-
-    def wipe_star_stage(groups, background, duration):
-        """Reveal a stage with a white flash inside a fixed time budget."""
-        runs = star_runs(groups)
-        if duration <= 0:
-            paint_star_runs(runs, background)
-            return
-
-        rows = sorted(runs)
-        started = time.perf_counter()
-        for index, row in enumerate(rows, start=1):
-            row_runs = {row: runs[row]}
-            paint_star_runs(row_runs, xbf)
-            hold = min(0.04, duration / len(rows) * 0.45)
-            if hold > 0:
-                time.sleep(hold)
-            paint_star_runs(row_runs, background)
-            deadline = started + duration * index / len(rows)
-            remaining = deadline - time.perf_counter()
-            if remaining > 0:
-                time.sleep(remaining)
-
-    def draw_star_art(tier, animate=False):
-        """Show gray stars once, then fill each earned performance stage."""
-        tier = max(1, min(3, int(tier)))
-        clear_rows(2, 10)
-        # The catalog is painted once in gray. Every later operation overlays
-        # color on selected cells, avoiding the old delete/redraw flicker.
-        paint_star_runs(star_runs(range(len(star_groups))), xb7)
-
-        if animate:
-            # Regular appearance takes 0.3s for the second stage and another
-            # 0.4s for the third. Split that same total budget between fills;
-            # extreme can therefore never outlast regular.
-            total_duration = {1: 0.0, 2: 0.3, 3: 0.7}[tier]
-            stage_duration = total_duration / tier
-            for stage in range(tier):
-                wipe_star_stage(
-                    star_stages[stage],
-                    star_stage_colours[stage],
-                    stage_duration,
-                )
-            return
-
-        paint_star_runs(star_runs(star_stages[0]), star_stage_colours[0])
-        if tier >= 2:
-            if celebration_mode > 0:
-                time.sleep(0.3)
-            paint_star_runs(star_runs(star_stages[1]), star_stage_colours[1])
-        if tier >= 3:
-            if celebration_mode > 0:
-                time.sleep(0.4)
-            paint_star_runs(star_runs(star_stages[2]), star_stage_colours[2])
-
     extra_xp = 0
     bonus_label = ""
     rowinfo = " "
     if remaining_hp_pct >= 80:
         star_tier = 3
-        extra_xp = round(xp_required_for_next * 0.10)
+        extra_xp = 100 if animated_level >= CHARACTER_MAX_LEVEL else round(xp_required_for_next * 0.10)
         bonus_label = f"[+{extra_xp} XP - excellent!]"
     elif remaining_hp_pct >= 50:
         star_tier = 2
-        extra_xp = round(xp_required_for_next * 0.05)
+        extra_xp = 50 if animated_level >= CHARACTER_MAX_LEVEL else round(xp_required_for_next * 0.05)
         bonus_label = f"[+{extra_xp} XP - great!]"
     else:
         star_tier = 1
     if bonus_label:
         rowinfo = f"{reset}{bold}{xf}{bonus_label}{reset}"
-    draw_star_art(star_tier, animate=celebration_mode >= 3)
-    art = bignumber(str(totalxp + extra_xp), background=xbb)
-    number_value = str(totalxp + extra_xp)
+
+    star_tier = max(1, min(3, int(star_tier)))
+    print(
+        "".join(
+            f"[{row};1H#5[2K"
+            for row in range(2, 11)
+        ),
+        end="",
+    )
+    star_rows = {}
+    for star_group in range(len(star_groups)):
+        for row, start_col, end_col in star_groups[star_group]:
+            star_rows.setdefault(row, []).append((start_col, end_col))
+    for row in star_rows:
+        star_rows[row].sort()
+    # paint the gray star catalog once
+    for row in sorted(star_rows):
+        for start_col, end_col in star_rows[row]:
+            print(
+                f"[{2 + row};{start_col}H#5"
+                f"{xb7}{' ' * (end_col - start_col + 1)}{unbg}",
+                end="",
+                flush=False,
+            )
+    sys.stdout.flush()
+    if celebration_mode >= 3:
+        total_star_duration = {1: 0.0, 2: 0.3, 3: 0.7}[star_tier]
+        star_stage_duration = total_star_duration / star_tier
+        for star_stage in range(star_tier):
+            star_stage_rows = {}
+            for star_group in star_stages[star_stage]:
+                for row, start_col, end_col in star_groups[star_group]:
+                    star_stage_rows.setdefault(row, []).append((start_col, end_col))
+            for row in star_stage_rows:
+                star_stage_rows[row].sort()
+            star_stage_rows_list = sorted(star_stage_rows)
+            star_stage_start = time.perf_counter()
+            for star_row_index, row in enumerate(star_stage_rows_list, start=1):
+                for start_col, end_col in star_stage_rows[row]:
+                    print(
+                        f"[{2 + row};{start_col}H#5"
+                        f"{xbf}{' ' * (end_col - start_col + 1)}{unbg}",
+                        end="",
+                        flush=False,
+                    )
+                sys.stdout.flush()
+                star_hold = min(0.04, star_stage_duration / len(star_stage_rows_list) * 0.45)
+                if star_hold > 0:
+                    time.sleep(star_hold)
+                for start_col, end_col in star_stage_rows[row]:
+                    print(
+                        f"[{2 + row};{start_col}H#5"
+                        f"{star_stage_colours[star_stage]}{' ' * (end_col - start_col + 1)}{unbg}",
+                        end="",
+                        flush=False,
+                    )
+                sys.stdout.flush()
+                star_deadline = (
+                    star_stage_start
+                    + star_stage_duration
+                    * star_row_index
+                    / len(star_stage_rows_list)
+                )
+                time.sleep(max(0, star_deadline - time.perf_counter()))
+    else:
+        star_stage_rows = {}
+        for star_group in star_stages[0]:
+            for row, start_col, end_col in star_groups[star_group]:
+                star_stage_rows.setdefault(row, []).append((start_col, end_col))
+        for row in sorted(star_stage_rows):
+            for start_col, end_col in star_stage_rows[row]:
+                print(
+                    f"[{2 + row};{start_col}H#5"
+                    f"{star_stage_colours[0]}{' ' * (end_col - start_col + 1)}{unbg}",
+                    end="",
+                    flush=False,
+                )
+        sys.stdout.flush()
+        if star_tier >= 2:
+            if celebration_mode > 0:
+                time.sleep(0.3)
+            star_stage_rows = {}
+            for star_group in star_stages[1]:
+                for row, start_col, end_col in star_groups[star_group]:
+                    star_stage_rows.setdefault(row, []).append((start_col, end_col))
+            for row in sorted(star_stage_rows):
+                for start_col, end_col in star_stage_rows[row]:
+                    print(
+                        f"[{2 + row};{start_col}H#5"
+                        f"{star_stage_colours[1]}{' ' * (end_col - start_col + 1)}{unbg}",
+                        end="",
+                        flush=False,
+                    )
+            sys.stdout.flush()
+        if star_tier >= 3:
+            if celebration_mode > 0:
+                time.sleep(0.4)
+            star_stage_rows = {}
+            for star_group in star_stages[2]:
+                for row, start_col, end_col in star_groups[star_group]:
+                    star_stage_rows.setdefault(row, []).append((start_col, end_col))
+            for row in sorted(star_stage_rows):
+                for start_col, end_col in star_stage_rows[row]:
+                    print(
+                        f"[{2 + row};{start_col}H#5"
+                        f"{star_stage_colours[2]}{' ' * (end_col - start_col + 1)}{unbg}",
+                        end="",
+                        flush=False,
+                    )
+            sys.stdout.flush()
+        sys.stdout.flush()
+    notice_time = time.perf_counter()
+    if levelup_notice and notice_time - levelup_notice_start < notice_fade_duration:
+        notice_progress = max(0.0, min(1.0, (notice_time - levelup_notice_start) / notice_fade_duration))
+        notice_shade = round(242 + (55 - 242) * notice_progress)
+        levelup_notice_frame = f"{rgb(notice_shade, notice_shade, notice_shade)}{bold}{levelup_notice.ljust(notice_width)}{reset}"
+    else:
+        levelup_notice_frame = " " * notice_width
+    if color_notice and notice_time - color_notice_start < notice_fade_duration:
+        notice_progress = max(0.0, min(1.0, (notice_time - color_notice_start) / notice_fade_duration))
+        notice_shade = round(242 + (55 - 242) * notice_progress)
+        color_notice_frame = f"{rgb(notice_shade, notice_shade, notice_shade)}{bold}{color_notice.ljust(notice_width)}{reset}"
+    else:
+        color_notice_frame = " " * notice_width
+    rowinfo = shine(text=bonus_label, offset=time.time(), bold=True, color=(242, 242, 242)) if bonus_label else " "
+    final_art = bignumber(str(totalxp + extra_xp), background=xp_color)
+    if final_art is None:
+        final_art = bignumber(str((totalxp + extra_xp) % 1000), background=xp_color)
+    number_value = str(earned_xp)
     raw_number_lines = [
         "  ".join(
             bignumber_db(digit)[row]
@@ -3969,39 +4145,56 @@ def battle_win():
         )
         for row in range(5)
     ]
-    length = max(visible_len(line) for line in art)
-    text_column = max(
-        1,
-        os.get_terminal_size().columns // 2 - (length // 2) - 3,
+    length = max(visible_len(line) for line in final_art)
+    text_column = max(1, os.get_terminal_size().columns // 2 - (length // 2) - 3)
+
+    print(
+        "".join(
+            f"[{row};1H#5[2K"
+            for row in range(text_row, text_row + 5)
+        ),
+        end="",
     )
-
-    def render_number_frame(highlight_rows=()):
-        """Draw the number with white background cells on selected rows."""
-        highlighted = set(highlight_rows)
-        lines = []
-        for row, raw_line in enumerate(raw_number_lines):
-            background = xbf if row in highlighted else xbb
-            rendered = pad_visible(
-                background_blocks(raw_line, background),
-                length,
-            )
-            suffix = f" {rowinfo}{reset}" if row == 4 else ""
-            lines.append(
-                f"[{text_row + row};{text_column}H#5{rendered}{suffix}"
-            )
-        # Flush every frame so the white sweep is visible while the terminal
-        # is still waiting for the next animation step.
-        print("\n".join(lines), end="", flush=True)
-
-    clear_rows(text_row, text_row + 4)
-    render_number_frame()
-
-    current_xp = player.xp + totalxp + extra_xp
+    lines = []
+    for row, raw_line in enumerate(raw_number_lines):
+        rendered = pad_visible(
+            background_blocks(raw_line, xp_color),
+            length,
+        )
+        suffix = f" {rowinfo}{reset}" if row == 4 else ""
+        lines.append(
+            f"[{text_row + row};{text_column}H#5{rendered}{suffix}"
+        )
+    print("\n".join(lines), end="", flush=False)
+    if animated_level >= CHARACTER_MAX_LEVEL:
+        max_xp = 1
+        current_xp = 1
+    else:
+        max_xp = max(1, animated_xpneeded)
+        current_xp = max(0, animated_xp)
     pc = max(0.0, min(current_xp / max_xp, 1.0))
-    bar = f"{reset}{xbb} " * round((pc) * xp_bar_length) + f"{xb1} " * (xp_bar_length - round((pc) * xp_bar_length)) + f"{reset}"
+    bar = f"{reset}{xp_color} " * round(pc * xp_bar_length) + f"{xp_dark_color} " * (xp_bar_length - round(pc * xp_bar_length)) + f"{reset}"
+    print(f"""
+[{start_row+1};1H#3{xlyellow}                 ╭────────────────────────╮
+[{start_row+2};1H#4{xlyellow}                 ╭────────────────────────╮
+[{start_row+3};1H#3{xlyellow}                 │{" " * ((24 - len(text)) // 2)}{xa}{bold}{shine(text=text,offset=time.time(),bold=True,color=(240, 232, 158))}{reset}{xlyellow}{" " * ((24 - len(text)) // 2)}│
+[{start_row+4};1H#4{xlyellow}                 │{" " * ((24 - len(text)) // 2)}{xa}{bold}{shine(text=text,offset=time.time(),bold=True,color=(240, 232, 158))}{reset}{xlyellow}{" " * ((24 - len(text)) // 2)}│
+[{start_row+5};1H#3{xlyellow}                 ╰────────────────────────╯
+[{start_row+6};1H#4{xlyellow}                 ╰────────────────────────╯
+[{text_row+5};1H#5{xlyellow}{" "*(os.get_terminal_size().columns - 1)}
+[{text_row+6};1H#5{xlyellow}{" " * ((os.get_terminal_size().columns - visible_len(pt)) // 2 - 3)}{pt}
+[{text_row+7};1H#5{xlyellow}{" "*(os.get_terminal_size().columns - 1)}
+[{text_row+8};1H#5{xlyellow}{" "*33}{f"{xb0} "*(xp_bar_length+4)}{reset}
+[{text_row+9};1H#5{xlyellow}{" "*33}{xb0}  {bar}{xb0}  {reset}
+[{text_row+10};1H#5{xlyellow}{" "*33}{xb0}  {bar}{xb0}  {reset}
+[{text_row+11};1H#5{xlyellow}{" "*33}{f"{xb0} "*(xp_bar_length+4)}{reset}
+[{text_row+9};{xp_notification_column}H#5{levelup_notice_frame}
+[{text_row+10};{xp_notification_column}H#5{color_notice_frame}
+""", flush=True)
+
+    extra_xp_applied = False
     if remaining_hp_pct >= 50 and celebration_mode >= 2:
-        # The original wall held at most two white rows.  This sweep peaks at
-        # three, then settles back to the all-blue number.
+        # sweep the big number
         shine_frames = (
             (0,),
             (0, 1),
@@ -4012,49 +4205,337 @@ def battle_win():
             (4,),
             (),
         )
-        # Keep the earlier 20% readability increase, then shorten that
-        # interval by 15% for the current sweep.
+        # keep the shine quick
         delay = 0.048 * 1.20 * (1 - 0.15)
-        for highlight_rows in shine_frames:
-            time.sleep(delay)
-            render_number_frame(highlight_rows)
+        number_shine_target = time.perf_counter() + (star_to_number_delay if celebration_mode >= 3 else delay)
+        for shine_index, highlight_rows in enumerate(shine_frames):
+            if shine_index == 0:
+                time.sleep(max(0, number_shine_target - time.perf_counter()))
+            else:
+                time.sleep(delay)
 
-    # Small keeps the count-up but still lets the earned-bonus label fade;
-    # Minimal leaves the final screen visible without any timed animation.
-    if remaining_hp_pct >= 50 and celebration_mode >= 1:
+            # apply the bonus when the shine begins
+            if not extra_xp_applied:
+                animated_xp += extra_xp
+                earned_xp = totalxp + extra_xp
+                while (
+                    animated_level < CHARACTER_MAX_LEVEL
+                    and animated_xp >= animated_xpneeded
+                ):
+                    xp_for_next = animated_xpneeded
+                    animated_xp -= xp_for_next
+                    animated_level += 1
+                    sound("inside_levelup")
+                    levelup_notice = "Level up!"
+                    levelup_notice_start = time.perf_counter()
+                    if animated_level in color_milestones:
+                        color_notice = "New color unlocked!"
+                        color_notice_start = time.perf_counter()
+                    if animated_level < CHARACTER_MAX_LEVEL:
+                        xp_for_next = round(xp_for_next + 15 + animated_level / 4)
+                    animated_xpneeded = round(xp_for_next)
+                    player_color = x8
+                    for req_level, color in thresholds:
+                        if animated_level >= req_level:
+                            player_color = color
+                    color_values = re.search(r"38;2;(\d+);(\d+);(\d+)m", player_color)
+                    player_rgb = tuple(int(value) for value in color_values.groups()) if color_values else (94, 94, 94)
+                    xp_color = rgback(*player_rgb)
+                    xp_dark_color = rgback(*tuple(max(0, round(value * 0.22)) for value in player_rgb))
+                next_level = str(animated_level + 1) if animated_level < CHARACTER_MAX_LEVEL else "MAX"
+                pt = f"{bold}{player_color}XP earned{unbold} {xf}· {title_text} {bold}{player_color}{next_level}:{reset}"
+                number_value = str(earned_xp)
+                raw_number_lines = [
+                    "  ".join(
+                        bignumber_db(digit)[row]
+                        for digit in number_value
+                    )
+                    for row in range(5)
+                ]
+                extra_xp_applied = True
+            notice_time = time.perf_counter()
+            if levelup_notice and notice_time - levelup_notice_start < notice_fade_duration:
+                notice_progress = max(0.0, min(1.0, (notice_time - levelup_notice_start) / notice_fade_duration))
+                notice_shade = round(242 + (55 - 242) * notice_progress)
+                levelup_notice_frame = f"{rgb(notice_shade, notice_shade, notice_shade)}{bold}{levelup_notice.ljust(notice_width)}{reset}"
+            else:
+                levelup_notice_frame = " " * notice_width
+            if color_notice and notice_time - color_notice_start < notice_fade_duration:
+                notice_progress = max(0.0, min(1.0, (notice_time - color_notice_start) / notice_fade_duration))
+                notice_shade = round(242 + (55 - 242) * notice_progress)
+                color_notice_frame = f"{rgb(notice_shade, notice_shade, notice_shade)}{bold}{color_notice.ljust(notice_width)}{reset}"
+            else:
+                color_notice_frame = " " * notice_width
+            rowinfo = shine(text=bonus_label, offset=time.time(), bold=True, color=(242, 242, 242)) if bonus_label else " "
+            highlighted = set(highlight_rows)
+            lines = []
+            for row, raw_line in enumerate(raw_number_lines):
+                background = xbf if row in highlighted else xp_color
+                rendered = pad_visible(
+                    background_blocks(raw_line, background),
+                    length,
+                )
+                suffix = f" {rowinfo}{reset}" if row == 4 else ""
+                lines.append(
+                    f"[{text_row + row};{text_column}H#5{rendered}{suffix}"
+                )
+            print("\n".join(lines), end="", flush=False)
+            next_level = str(animated_level + 1) if animated_level < CHARACTER_MAX_LEVEL else "MAX"
+            pt = f"{bold}{player_color}XP earned{unbold} {xf}· {title_text} {bold}{player_color}{next_level}:{reset}"
+            if animated_level >= CHARACTER_MAX_LEVEL:
+                max_xp = 1
+                current_xp = 1
+            else:
+                max_xp = max(1, animated_xpneeded)
+                current_xp = max(0, animated_xp)
+            pc = max(0.0, min(current_xp / max_xp, 1.0))
+            bar = f"{reset}{xp_color} " * round(pc * xp_bar_length) + f"{xp_dark_color} " * (xp_bar_length - round(pc * xp_bar_length)) + f"{reset}"
+            print(f"""
+[{start_row+1};1H#3{xlyellow}                 ╭────────────────────────╮
+[{start_row+2};1H#4{xlyellow}                 ╭────────────────────────╮
+[{start_row+3};1H#3{xlyellow}                 │{" " * ((24 - len(text)) // 2)}{xa}{bold}{shine(text=text,offset=time.time(),bold=True,color=(240, 232, 158))}{reset}{xlyellow}{" " * ((24 - len(text)) // 2)}│
+[{start_row+4};1H#4{xlyellow}                 │{" " * ((24 - len(text)) // 2)}{xa}{bold}{shine(text=text,offset=time.time(),bold=True,color=(240, 232, 158))}{reset}{xlyellow}{" " * ((24 - len(text)) // 2)}│
+[{start_row+5};1H#3{xlyellow}                 ╰────────────────────────╯
+[{start_row+6};1H#4{xlyellow}                 ╰────────────────────────╯
+[{text_row+5};1H#5{xlyellow}{" "*(os.get_terminal_size().columns - 1)}
+[{text_row+6};1H#5{xlyellow}{" " * ((os.get_terminal_size().columns - visible_len(pt)) // 2 - 3)}{pt}
+[{text_row+7};1H#5{xlyellow}{" "*(os.get_terminal_size().columns - 1)}
+[{text_row+8};1H#5{xlyellow}{" "*33}{f"{xb0} "*(xp_bar_length+4)}{reset}
+[{text_row+9};1H#5{xlyellow}{" "*33}{xb0}  {bar}{xb0}  {reset}
+[{text_row+10};1H#5{xlyellow}{" "*33}{xb0}  {bar}{xb0}  {reset}
+[{text_row+11};1H#5{xlyellow}{" "*33}{f"{xb0} "*(xp_bar_length+4)}{reset}
+[{text_row+9};{xp_notification_column}H#5{levelup_notice_frame}
+[{text_row+10};{xp_notification_column}H#5{color_notice_frame}
+""", flush=True)
+
+    else:
+        # apply the bonus after the stars
+        animated_xp += extra_xp
+        earned_xp = totalxp + extra_xp
+        while (
+            animated_level < CHARACTER_MAX_LEVEL
+            and animated_xp >= animated_xpneeded
+        ):
+            xp_for_next = animated_xpneeded
+            animated_xp -= xp_for_next
+            animated_level += 1
+            sound("inside_levelup")
+            levelup_notice = "Level up!"
+            levelup_notice_start = time.perf_counter()
+            if animated_level in color_milestones:
+                color_notice = "New color unlocked!"
+                color_notice_start = time.perf_counter()
+            if animated_level < CHARACTER_MAX_LEVEL:
+                xp_for_next = round(xp_for_next + 15 + animated_level / 4)
+            animated_xpneeded = round(xp_for_next)
+            player_color = x8
+            for req_level, color in thresholds:
+                if animated_level >= req_level:
+                    player_color = color
+            color_values = re.search(r"38;2;(\d+);(\d+);(\d+)m", player_color)
+            player_rgb = tuple(int(value) for value in color_values.groups()) if color_values else (94, 94, 94)
+            xp_color = rgback(*player_rgb)
+            xp_dark_color = rgback(*tuple(max(0, round(value * 0.22)) for value in player_rgb))
+        notice_time = time.perf_counter()
+        if levelup_notice and notice_time - levelup_notice_start < notice_fade_duration:
+            notice_progress = max(0.0, min(1.0, (notice_time - levelup_notice_start) / notice_fade_duration))
+            notice_shade = round(242 + (55 - 242) * notice_progress)
+            levelup_notice_frame = f"{rgb(notice_shade, notice_shade, notice_shade)}{bold}{levelup_notice.ljust(notice_width)}{reset}"
+        else:
+            levelup_notice_frame = " " * notice_width
+        if color_notice and notice_time - color_notice_start < notice_fade_duration:
+            notice_progress = max(0.0, min(1.0, (notice_time - color_notice_start) / notice_fade_duration))
+            notice_shade = round(242 + (55 - 242) * notice_progress)
+            color_notice_frame = f"{rgb(notice_shade, notice_shade, notice_shade)}{bold}{color_notice.ljust(notice_width)}{reset}"
+        else:
+            color_notice_frame = " " * notice_width
+        rowinfo = shine(text=bonus_label, offset=time.time(), bold=True, color=(242, 242, 242)) if bonus_label else " "
+        next_level = str(animated_level + 1) if animated_level < CHARACTER_MAX_LEVEL else "MAX"
+        pt = f"{bold}{player_color}XP earned{unbold} {xf}· {title_text} {bold}{player_color}{next_level}:{reset}"
+        number_value = str(earned_xp)
+        raw_number_lines = [
+            "  ".join(
+                bignumber_db(digit)[row]
+                for digit in number_value
+            )
+            for row in range(5)
+        ]
+        extra_xp_applied = True
+        lines = []
+        for row, raw_line in enumerate(raw_number_lines):
+            rendered = pad_visible(
+                background_blocks(raw_line, xp_color),
+                length,
+            )
+            suffix = f" {rowinfo}{reset}" if row == 4 else ""
+            lines.append(
+                f"[{text_row + row};{text_column}H#5{rendered}{suffix}"
+            )
+        print("\n".join(lines), end="", flush=False)
+        next_level = str(animated_level + 1) if animated_level < CHARACTER_MAX_LEVEL else "MAX"
+        pt = f"{bold}{player_color}XP earned{unbold} {xf}· {title_text} {bold}{player_color}{next_level}:{reset}"
+        if animated_level >= CHARACTER_MAX_LEVEL:
+            max_xp = 1
+            current_xp = 1
+        else:
+            max_xp = max(1, animated_xpneeded)
+            current_xp = max(0, animated_xp)
+        pc = max(0.0, min(current_xp / max_xp, 1.0))
+        bar = f"{reset}{xp_color} " * round(pc * xp_bar_length) + f"{xp_dark_color} " * (xp_bar_length - round(pc * xp_bar_length)) + f"{reset}"
+        print(f"""
+[{start_row+1};1H#3{xlyellow}                 ╭────────────────────────╮
+[{start_row+2};1H#4{xlyellow}                 ╭────────────────────────╮
+[{start_row+3};1H#3{xlyellow}                 │{" " * ((24 - len(text)) // 2)}{xa}{bold}{shine(text=text,offset=time.time(),bold=True,color=(240, 232, 158))}{reset}{xlyellow}{" " * ((24 - len(text)) // 2)}│
+[{start_row+4};1H#4{xlyellow}                 │{" " * ((24 - len(text)) // 2)}{xa}{bold}{shine(text=text,offset=time.time(),bold=True,color=(240, 232, 158))}{reset}{xlyellow}{" " * ((24 - len(text)) // 2)}│
+[{start_row+5};1H#3{xlyellow}                 ╰────────────────────────╯
+[{start_row+6};1H#4{xlyellow}                 ╰────────────────────────╯
+[{text_row+5};1H#5{xlyellow}{" "*(os.get_terminal_size().columns - 1)}
+[{text_row+6};1H#5{xlyellow}{" " * ((os.get_terminal_size().columns - visible_len(pt)) // 2 - 3)}{pt}
+[{text_row+7};1H#5{xlyellow}{" "*(os.get_terminal_size().columns - 1)}
+[{text_row+8};1H#5{xlyellow}{" "*33}{f"{xb0} "*(xp_bar_length+4)}{reset}
+[{text_row+9};1H#5{xlyellow}{" "*33}{xb0}  {bar}{xb0}  {reset}
+[{text_row+10};1H#5{xlyellow}{" "*33}{xb0}  {bar}{xb0}  {reset}
+[{text_row+11};1H#5{xlyellow}{" "*33}{f"{xb0} "*(xp_bar_length+4)}{reset}
+[{text_row+9};{xp_notification_column}H#5{levelup_notice_frame}
+[{text_row+10};{xp_notification_column}H#5{color_notice_frame}
+""", flush=True)
+    confirmation_prompt_text = "› press any key to continue ‹"
+    confirmation_prompt = f"{xf}{confirmation_prompt_text}"
+    confirmation_column = max(1, (os.get_terminal_size().columns - visible_len(confirmation_prompt)) // 2 - 2)
+    confirmation_prompt_frame = " " * visible_len(confirmation_prompt)
+    draw_text(confirmation_column, 34, confirmation_prompt_frame)
+    if totalgold > 0 and celebration_mode >= 2:
+        # precache after the stars so the opening animation stays responsive
+        for gold_tick in range(gold_animation_tick_count):
+            gold_progress = (gold_tick + 1) / gold_animation_tick_count
+            if gold_tick == 0:
+                gold_pitch = 1.0
+            else:
+                gold_pitch = 1.0 + gold_animation_pitch_rise * (gold_progress ** 1.15)
+            gold_animation_pitches.append(gold_pitch)
+            sound(f"PRECACHE pickup_silver {gold_pitch:.4f}")
+        time.sleep(gold_animation_delay)
+        gold_animation_started = True
+        gold_animation_start = time.perf_counter()
+
+    # finish remaining gold ticks
+    if totalgold > 0 and gold_animation_started:
+        while gold_animation_tick < gold_animation_tick_count:
+            gold_animation_tick += 1
+            gold_progress = gold_animation_tick / gold_animation_tick_count
+            gold_target = (
+                gold_animation_start
+                + gold_progress * gold_animation_duration
+            )
+            time.sleep(max(0, gold_target - time.perf_counter()))
+            gold_count = min(totalgold, max(gold_count, 1, round(totalgold * gold_progress ** gold_animation_acceleration)))
+            sound(
+                f"pickup_silver "
+                f"{gold_animation_pitches[gold_animation_tick - 1]:.4f}"
+            )
+            gold_amount_text = str(gold_count)
+            gold_balance_text = f"{gold_balance_start + gold_count:,}"
+            gold_frame_text = f"¤ +{gold_amount_text} gold → {gold_balance_text}"
+            gold_column = max(1, (os.get_terminal_size().columns - visible_len(gold_frame_text) * 2) // 4)
+            gold_plus_frame = f"{xlyellow}{bold}+{reset}"
+            gold_amount_frame = f"{xlyellow}{bold}{gold_amount_text}{reset}"
+            confirmation_shade = round(55 + (242 - 55) * gold_progress)
+            confirmation_prompt_frame = f"{rgb(confirmation_shade, confirmation_shade, confirmation_shade)}{confirmation_prompt_text}{reset}"
+            gold_frame = f"{xf}¤ {reset}{gold_plus_frame}{gold_amount_frame}{xlyellow} gold{reset}{xf} → {reset}{x7}{gold_balance_text}{reset}"
+            print(f"""
+[{gold_row};1H[2K#3{xlyellow}{" " * (gold_column - 1)}{gold_frame}{reset}
+[{gold_row + 1};1H[2K#4{xlyellow}{" " * (gold_column - 1)}{gold_frame}{reset}
+[34;{confirmation_column}H#5{confirmation_prompt_frame}
+""", end="", flush=True)
+
+    gold_count = totalgold
+    gold_amount_text = str(gold_count)
+    gold_balance_text = f"{gold_balance_start + gold_count:,}"
+    gold_frame_text = f"¤ +{gold_amount_text} gold → {gold_balance_text}"
+    gold_column = max(1, (os.get_terminal_size().columns - visible_len(gold_frame_text) * 2) // 4)
+    gold_plus_frame = f"{xlyellow}{bold}+{reset}"
+    gold_amount_frame = f"{xlyellow}{bold}{gold_amount_text}{reset}"
+    gold_frame = f"{xf}¤ {reset}{gold_plus_frame}{gold_amount_frame}{xlyellow} gold{reset}{xf} → {reset}{x7}{gold_balance_text}{reset}"
+    print(f"""
+[{gold_row};1H[2K#3{" " * (gold_column - 1)}{gold_frame}
+[{gold_row + 1};1H[2K#4{" " * (gold_column - 1)}{gold_frame}
+""", end="", flush=True)
+
+    if not gold_animation_started:
+        if animations_enabled():
+            for confirmation_step in range(1, 11):
+                confirmation_progress = confirmation_step / 10
+                confirmation_shade = round(55 + (242 - 55) * confirmation_progress)
+                confirmation_prompt_frame = f"{rgb(confirmation_shade, confirmation_shade, confirmation_shade)}{confirmation_prompt_text}{reset}"
+                draw_text(confirmation_column, 34, confirmation_prompt_frame)
+                time.sleep(confirmation_fade_duration / 10)
+        else:
+            confirmation_prompt_frame = f"{xf}{confirmation_prompt_text}{reset}"
+            draw_text(confirmation_column, 34, confirmation_prompt_frame)
+
+    # fade the notices when needed
+    if celebration_mode >= 1 and (bonus_label or levelup_notice or color_notice):
         bonus_column = text_column + length + 1
-        fade_duration = 0.5
+        fade_duration = notice_fade_duration
         fade_steps = 10
         for fade_step in range(1, fade_steps + 1):
             fade_progress = fade_step / fade_steps
             shade = round(242 + (55 - 242) * fade_progress)
-            print(
-                f"[{text_row+4};{bonus_column}H#5"
-                f"{rgb(shade, shade, shade)}{unbold}{bonus_label}{reset}",
-                end="",
-                flush=True,
-            )
+            if bonus_label:
+                print(f"[{text_row+4};{bonus_column}H#5{rgb(shade, shade, shade)}{unbold}{bonus_label}{reset}",end="",flush=True)
+            notice_time = time.perf_counter()
+            if levelup_notice and notice_time - levelup_notice_start < notice_fade_duration:
+                notice_progress = max(0.0, min(1.0, (notice_time - levelup_notice_start) / notice_fade_duration))
+                notice_shade = round(242 + (55 - 242) * notice_progress)
+                levelup_notice_frame = f"{rgb(notice_shade, notice_shade, notice_shade)}{unbold}{levelup_notice.ljust(notice_width)}{reset}"
+            else:
+                levelup_notice_frame = " " * notice_width
+            if color_notice and notice_time - color_notice_start < notice_fade_duration:
+                notice_progress = max(0.0, min(1.0, (notice_time - color_notice_start) / notice_fade_duration))
+                notice_shade = round(242 + (55 - 242) * notice_progress)
+                color_notice_frame = f"{rgb(notice_shade, notice_shade, notice_shade)}{unbold}{color_notice.ljust(notice_width)}{reset}"
+            else:
+                color_notice_frame = " " * notice_width
+            print(f"[{text_row+9};{xp_notification_column}H#5{levelup_notice_frame}[{text_row+10};{xp_notification_column}H#5{color_notice_frame}",end="",flush=True)
             time.sleep(fade_duration / fade_steps)
-        print(
-            f"[{text_row+4};{bonus_column}H#5"
-            f"{' ' * len(bonus_label)}{reset}",
-            end="",
-            flush=True,
-        )
+        if bonus_label:
+            print(f"[{text_row+4};{bonus_column}H#5{' ' * len(bonus_label)}{reset}",end="",flush=True)
+        print(f"[{text_row+9};{xp_notification_column}H#5{' ' * notice_width}[{text_row+10};{xp_notification_column}H#5{' ' * notice_width}",end="",flush=True)
 
-    confirmation_prompt = f"{xf}› press any key to confirm ‹"
-    confirmation_column = max(
-        1,
-        (os.get_terminal_size().columns - visible_len(confirmation_prompt)) // 2
-        - 2,
-    )
-    # Match levelup()'s indicator, offset three terminal cells left of center.
-    draw_text(confirmation_column, 31, confirmation_prompt)
-
-    player.xp += (enemy.xp_reward + health_xp_bonus + extra_xp)
-    player.money += enemy.gold_reward
+    # save xp and gold
+    player.level = animated_level
+    player.xp = animated_xp
+    player.xpneeded = animated_xpneeded
+    player.color = player_color
+    player.money += totalgold
     player.save()
-    key()
+
+    # keep the title animated while waiting
+    while True:
+        print(f"""
+[{start_row+3};1H#3{xlyellow}                 │{" " * ((24 - len(text)) // 2)}{shine(text=text,offset=time.time(),bold=True,color=(240, 232, 158))}{xlyellow}{" " * ((24 - len(text)) // 2)}│
+[{start_row+4};1H#4{xlyellow}                 │{" " * ((24 - len(text)) // 2)}{shine(text=text,offset=time.time(),bold=True,color=(240, 232, 158))}{xlyellow}{" " * ((24 - len(text)) // 2)}│
+""", flush=True)
+        if celebration_mode >= 3 and totalgold > 0:
+            gold_count = totalgold
+            gold_amount_text = str(gold_count)
+            gold_balance_text = f"{gold_balance_start + gold_count:,}"
+            gold_frame_text = f"¤ +{gold_amount_text} gold → {gold_balance_text}"
+            gold_column = max(1, (os.get_terminal_size().columns - visible_len(gold_frame_text) * 2) // 4)
+            gold_plus_frame = f"{xlyellow}{bold}+{reset}"
+            gold_amount_frame = f"{xlyellow}{bold}{gold_amount_text}{reset}"
+            gold_frame = f"{xf}¤ {reset}{gold_plus_frame}{gold_amount_frame}{xlyellow} gold{reset}{xf} → {reset}{x7}{gold_balance_text}{reset}"
+            print(f"""
+[{gold_row};1H[2K#3{" " * (gold_column - 1)}{gold_frame}
+[{gold_row + 1};1H[2K#4{" " * (gold_column - 1)}{gold_frame}
+""", end="", flush=True)
+        if celebration_mode > 0 and animations_enabled():
+            pressed_key = key(timeout=title_animation_timeout)
+            if pressed_key == "TIMEOUT":
+                continue
+        else:
+            pressed_key = key()
+        break
     game.goto = mainmenu
     return
 
@@ -4100,12 +4581,13 @@ def battle_preparation():
     
     #
     enemies_list = [
-        EnemyData(name="Goblin", hp=7000, attack=1000, defense=10, xp_reward=20, gold_reward=10, speed=110),
-        EnemyData(name="Orc", hp=5000, attack=2, defense=1, xp_reward=50, gold_reward=25, speed=80),
-        EnemyData(name="Troll", hp=8000, attack=3, defense=2, xp_reward=100, gold_reward=50, speed=60),
-        EnemyData(name="Dragon", hp=15000, attack=5, defense=3, xp_reward=200, gold_reward=100, speed=40),
-        EnemyData(name="Dark Knight", hp=12000, attack=4, defense=4, xp_reward=150, gold_reward=75, speed=50),
-        EnemyData(name="Necromancer", hp=10000, attack=3, defense=2, xp_reward=120, gold_reward=60, speed=70),
+        EnemyData(name="Goblin", hp=7000, attack=1000, defense=10, xp_reward=20, gold_reward=100, speed=110),
+        EnemyData(name="Orc", hp=5000, attack=2, defense=1, xp_reward=50, gold_reward=250, speed=80),
+        EnemyData(name="Troll", hp=8000, attack=3, defense=2, xp_reward=100, gold_reward=500, speed=60),
+        EnemyData(name="Dragon", hp=15000, attack=5, defense=3, xp_reward=200, gold_reward=1000, speed=40),
+        EnemyData(name="Dark Knight", hp=12000, attack=4, defense=4, xp_reward=150, gold_reward=750, speed=50),
+        EnemyData(name="Necromancer", hp=10000, attack=3, defense=2, xp_reward=120, gold_reward=600, speed=70),
+        EnemyData(name="Ancient Dragon", hp=20000, attack=6, defense=5, xp_reward=500, gold_reward=250, speed=30),
     ]    
     # give the player the option to choose an enemy to fight
     cls()
@@ -4182,7 +4664,7 @@ def battle_show_data():
     print(f"  {x7}HP{reset}  {hp_bar(enemy.hp, enemy_max_hp)}  {xf}{enemy.hp}/{enemy_max_hp}{reset}")
     print(f"  {x7}ATK{reset} {xf}{enemy.attack}{reset}  |  {x7}DEF{reset} {xf}{enemy.defense}{reset}  |  {x7}SPD{reset} {xf}{enemy.speed}{reset}")
     print(f"  {x7}Action Value{reset}  {xb}{enemy.av}{reset}  ({xf}{d.av_difference:+d}{reset})")
-    print(f"  {x7}Reward:{reset} {xa}{enemy.xp_reward} XP{reset} and {xe}{enemy.gold_reward} gold coins{reset}")
+    print(f"  {x7}Reward:{reset} {xa}{enemy.xp_reward} XP{reset} and {xe}{max(0, int(enemy.gold_reward))} gold coins{reset}")
     print()
 
     print(f"{bold}{xa}▸ {player.name}{reset}")

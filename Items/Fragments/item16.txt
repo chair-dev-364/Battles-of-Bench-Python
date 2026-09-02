@@ -1,1 +1,1 @@
-Bracelet;;Mountain Bracelet;;1;;DEF;;10;;Titan;;0
+Necklace;;Warrior Necklace;;1;;Speed;;4;;Warrior;;0

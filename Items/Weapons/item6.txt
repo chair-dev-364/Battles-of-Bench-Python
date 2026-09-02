@@ -1,1 +1,1 @@
-axe;;03;;The Disconnector;;11;;101;;54.0;;Strength;;9;;Loading description...;;0.040;;No ability.;;0;;0
+book;;0e;;Befriend a Shark in 30 Days;;25;;242;;185.8;;Regeneration;;19;;Contains sharks and... fanfics?!;;0.05;;A shark will attack after you do!;;0;;3

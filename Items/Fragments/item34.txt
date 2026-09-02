@@ -1,1 +1,1 @@
-Ring;;Blackstar Ring;;1;;Crit Rate;;4;;Assassin;;0
+Bracelet;;Bracelet of Dreams;;1;;Speed;;2;;Warrior;;0

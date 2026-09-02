@@ -1,1 +1,1 @@
-Necklace;;Warrior Necklace;;1;;Speed;;4;;Warrior;;0
+Bracelet;;Vanguard Bracelet;;15;;ATK %;;5.0;;Warrior;;0;;HP %;;5;;DEF;;6;;HP;;63

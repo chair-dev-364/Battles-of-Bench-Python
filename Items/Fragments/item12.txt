@@ -1,1 +1,1 @@
-Necklace;;Rampart Necklace;;1;;Crit Rate;;2;;Guardian;;0
+Necklace;;Bannerchain Necklace;;15;;ATK;;20.0;;Warrior;;0;;HP;;32;;ATK %;;3;;HP %;;4

@@ -1,1 +1,1 @@
-bow;;0e;;The En Passanter;;20;;220;;150.0;;Defence;;9;;The chess player's ultimate trick.;;0.05;;+30 percent skill DMG.;;0;;0
+book;;0d;;Diary of Inner Thoughts;;25;;109;;55.8;;Strength;;3;;Is it safe to write in there?;;0.045;;Your Skill reduces enemy ATK twice as much.;;0;;0

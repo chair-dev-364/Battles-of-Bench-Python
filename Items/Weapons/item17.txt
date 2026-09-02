@@ -1,1 +1,1 @@
-knife;;02;;Basic Knife;;10;;65;;38.0;;Defence;;5;;Knife yay;;0.03;;ability;;0;;0
+dagger;;03;;The Slightly Bent Ruler;;7;;72;;39.5;;Strength;;6;;Measures twice. Misses anyway.;;0.035;;No ability.;;0;;0

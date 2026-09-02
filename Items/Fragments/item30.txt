@@ -1,1 +1,1 @@
-Bracelet;;Bulwark Bracelet;;1;;DEF;;10;;Guardian;;0
+Bracelet;;Embercord Bracelet;;1;;Crit Damage;;8;;Warrior;;0

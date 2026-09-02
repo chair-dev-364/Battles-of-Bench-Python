@@ -1,1 +1,1 @@
-Bracelet;;Sentinel Bracelet;;1;;HP %;;6;;Guardian;;0
+Bracelet;;Bracelet of Dreams;;15;;ATK;;174;;Warrior;;0;;ATK %;;2;;HP;;45;;DEF;;10

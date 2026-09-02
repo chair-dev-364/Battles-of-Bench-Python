@@ -1,1 +1,1 @@
-Necklace;;Warcry Necklace;;15;;HP;;120.0;;Warrior;;0;;HP %;;1;;Crit Rate;;2;;ATK;;9
+Bracelet;;Shade Bracelet;;15;;Speed;;4.0;;Assassin;;0;;ATK %;;3;;DEF;;3;;Crit Damage;;2

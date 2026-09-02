@@ -1,1 +1,1 @@
-bodywear;;03;;Average Armour;;20;;12;;None;;None;;1;;0.035
+bodywear;;0e;;Adventurer's Insane Bodywear;;20;;10;;None;;None;;0;;0.035

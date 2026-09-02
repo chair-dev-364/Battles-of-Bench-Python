@@ -1,1 +1,1 @@
-Bracelet;;Colossus Bracelet;;1;;HP;;160;;Titan;;0
+Ring;;Everliving Ring;;1;;Crit Damage;;5;;Titan;;0

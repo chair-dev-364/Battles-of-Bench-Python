@@ -1,1 +1,1 @@
-Necklace;;Moonveil Necklace;;1;;HP %;;4;;Assassin;;0
+Bracelet;;Stoneward Bracelet;;1;;HP;;150;;Guardian;;0

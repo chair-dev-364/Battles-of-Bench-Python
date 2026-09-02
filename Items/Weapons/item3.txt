@@ -1,1 +1,1 @@
-dagger;;03;;The Slightly Bent Ruler;;7;;72;;39.5;;Strength;;6;;Measures twice. Misses anyway.;;0.035;;No ability.;;0;;0
+book;;0d;;Krita User Manual;;25;;161;;75.8;;Regeneration;;2;;The mental health destroyer.;;0.045;;ab;;0;;3

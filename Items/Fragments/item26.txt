@@ -1,1 +1,1 @@
-Ring;;Duelist's Ring;;15;;Speed;;4.0;;Warrior;;0;;DEF;;5;;HP %;;1;;ATK;;10
+Bracelet;;Lifeblood Bracelet;;1;;HP %;;7;;Titan;;0
