@@ -2766,8 +2766,8 @@ def mainmenu():
             game.goto = internal_modify
             return
         if k.lower() == "ctrl/t" or k.lower() == "k":
-                    game.goto = internal_modify_beta
-                    return
+            game.goto = internal_modify_beta
+            return
         if animate_menu_effects:
             time.sleep(0.01)
         # play sound: ctrl+R
