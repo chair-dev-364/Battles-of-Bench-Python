@@ -1,0 +1,1 @@
+Bracelet;;Guardian Bracelet;;1;;DEF;;9;;Guardian;;0

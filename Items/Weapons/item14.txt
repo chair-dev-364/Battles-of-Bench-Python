@@ -1,1 +1,1 @@
-knife;;02;;Basic Knife;;10;;65;;38.0;;Defence;;5;;Knife yay;;0.03;;ability;;0;;0
+wand;;03;;Magic Wand Pro Max;;15;;130;;75.0;;Strength;;5;;a;;0.04;;No ability.;;0;;0

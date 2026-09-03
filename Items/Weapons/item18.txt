@@ -1,1 +1,1 @@
-wand;;03;;Magic Wand Pro Max;;6;;130;;75;;Strength;;5;;a;;0.040;;No ability.;;0;;0
+pistol;;02;;Thunder-er V2;;9;;81;;47.5;;Regeneration;;7;;Forecast: loud with a chance of sparks.;;0.035;;No ability.;;0;;0

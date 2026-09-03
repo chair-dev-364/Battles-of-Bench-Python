@@ -1,1 +1,1 @@
-knife;;02;;Basic Knife;;10;;65;;38.0;;Defence;;5;;Knife yay;;0.03;;ability;;0;;0
+axe;;03;;The Disconnector;;11;;101;;54.0;;Strength;;9;;Loading description...;;0.040;;No ability.;;0;;0

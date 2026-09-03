@@ -5266,6 +5266,7 @@ def character():
     # headwear dodge functions exactly like armor
     head_dodge = (getattr(head, "level", 0) // 10) * 0.3
     player.dodge = base_dodge + armor_dodge + weapon_dodge + head_dodge
+    player.dodge = round(player.dodge, -1)
     del base_dodge, armor_dodge, weapon_dodge, head_dodge
     
     # now, let's do effect res

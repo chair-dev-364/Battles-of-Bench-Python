@@ -1,1 +1,1 @@
-bow;;0d;;Soul Stealer;;18;;108;;63.8;;Health;;32;;Stealing the energy, let's go!;;0.045;;No ability.;;0;;0
+wand;;03;;Magic Wand Pro Max;;19;;130;;75.0;;Strength;;5;;a;;0.04;;No ability.;;0;;0

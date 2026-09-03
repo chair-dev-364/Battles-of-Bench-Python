@@ -1,0 +1,1 @@
+Necklace;;Warrior Necklace;;1;;ATK;;15;;Warrior;;0
