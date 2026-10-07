@@ -1,1 +1,1 @@
-Bracelet;;Guardian Bracelet;;1;;DEF;;9;;Guardian;;0
+Ring;;Watchtower Ring;;1;;Crit Damage;;6;;Guardian;;0

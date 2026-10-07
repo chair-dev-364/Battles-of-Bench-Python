@@ -55,7 +55,7 @@ def _numbered_item_files(folder):
         return files
     for path in folder.iterdir():
         match = ITEM_FILE_PATTERN.fullmatch(path.name)
-        if match:
+        if match and path.is_file():
             files.append((int(match.group(1)), path))
     return sorted(files)
 
@@ -74,14 +74,12 @@ def _update_active_item_ids(items_root, category, id_map):
             path.write_text(str(id_map[old_id]), encoding="utf-8")
 
 
-def sort_item_category(items_root, category, sorting, order):
+def sort_item_category(items_root, category, sorting, order, before_change=None):
     """Sort and sequentially rename one item category; return old-to-new IDs."""
-    if sorting == "Off":
-        return {}
     if category not in ITEM_CATEGORIES:
         raise ValueError(f"Unknown item category: {category}")
     key_name = sorting.casefold()
-    if key_name not in {"name", "level", "rarity"}:
+    if key_name not in {"off", "name", "level", "rarity"}:
         raise ValueError(f"Unknown inventory sorting method: {sorting}")
 
     items_root = Path(items_root)
@@ -94,16 +92,20 @@ def sort_item_category(items_root, category, sorting, order):
             metadata = {"name": "", "level": float("inf"), "rarity": -1}
         records.append((old_id, path, metadata))
 
-    records.sort(
-        key=lambda record: record[2][key_name],
-        reverse=order == "Descending",
-    )
+    if key_name != "off":
+        records.sort(
+            key=lambda record: record[2][key_name],
+            reverse=order == "Descending",
+        )
     id_map = {
         old_id: new_id
         for new_id, (old_id, _, _) in enumerate(records, start=1)
     }
     if all(old_id == new_id for old_id, new_id in id_map.items()):
         return id_map
+
+    if before_change is not None:
+        before_change(records[0][1])
 
     temporary_paths = []
     token = uuid4().hex
@@ -118,12 +120,10 @@ def sort_item_category(items_root, category, sorting, order):
     return id_map
 
 
-def sort_inventory(items_root, sorting, order):
+def sort_inventory(items_root, sorting, order, before_change=None):
     """Apply the configured ordering to every inventory category."""
-    if sorting == "Off":
-        return {}
     return {
-        category: sort_item_category(items_root, category, sorting, order)
+        category: sort_item_category(items_root, category, sorting, order, before_change)
         for category in ITEM_CATEGORIES
     }
 

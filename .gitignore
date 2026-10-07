@@ -10,6 +10,9 @@ venv/
 .venv/
 Thumbs.db
 Desktop.ini
+desktop.ini
+debug.log
+latest.log
 .vscode/
 .idea/
 *.log
@@ -30,5 +33,7 @@ Docs/
 desktop.ini
 tests/
 run.command
-!Scripts/tests/
-!Scripts/tests/*.py
+Scripts/tests/
+Scripts/tests/*.py
+Settings/Backups/
+main_backup.py

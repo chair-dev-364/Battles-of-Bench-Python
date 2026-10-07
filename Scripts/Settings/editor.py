@@ -5,12 +5,14 @@ owns only the short-lived state of an edit (focused value, save, or cancel).
 """
 
 from Scripts.Settings.keybinds import SETTINGS as KEYBIND_SETTINGS
+from Scripts.Settings.controls import SETTINGS as CONTROL_SETTINGS
 
 
 RESERVED_KEYBINDS = {"esc", "up", "down", "left", "right"}
 KEYBIND_CONFLICT_GROUPS = {
     item["attr"]: item.get("conflict_group", "default")
-    for item in KEYBIND_SETTINGS
+    for item in KEYBIND_SETTINGS + CONTROL_SETTINGS
+    if item["type"] == "keybind"
 }
 
 
@@ -29,24 +31,24 @@ def setting_index_at(x, y, count, col, row, width, height):
     return None
 
 
-def category_index_at(x, y, count=6):
+def category_index_at(x, y, count=6, height=4, offset=0):
     """Return the category button under a zero-based mouse position."""
-    col_start = 2
-    col_end = col_start + 19
+    col_start = 1
+    col_end = col_start + 18
     if not col_start <= x <= col_end:
         return None
 
     for index in range(count):
-        button_top = 7 + index * 4
-        button_bottom = button_top + 2
+        button_top = 7 + index * height
+        button_bottom = button_top + height - 2
         if button_top <= y <= button_bottom:
-            return index
+            return offset + index
     return None
 
 
 def back_button_contains(x, y):
     """Return whether a zero-based mouse position is over Back to house."""
-    return 2 <= x <= 21 and 31 <= y <= 34
+    return 1 <= x <= 19 and 31 <= y <= 34
 
 
 def slider_step_count(item):
@@ -85,12 +87,13 @@ def setting_is_off(item, value):
     return False
 
 
-def volume_value_at_mouse(x, item, col, box_width, clamp=False):
+def volume_value_at_mouse(x, item, col, box_width, clamp=False, label_width=None):
     """Map a zero-based mouse column onto the rendered volume track."""
-    label_width = {
-        "volume": 4,
-        "duration": 5,
-    }.get(item.get("display"), 7)
+    if label_width is None:
+        label_width = {
+            "volume": 4,
+            "duration": 5,
+        }.get(item.get("display"), 7)
     steps = slider_step_count(item)
     display_width = steps + 1 + 1 + label_width
     track_start = col + box_width - display_width - 1
@@ -110,9 +113,9 @@ def volume_value_at_mouse(x, item, col, box_width, clamp=False):
     return stepped
 
 
-def boolean_control_contains(x, col, box_width):
+def boolean_control_contains(x, col, box_width, label_width=3):
     """Return whether a zero-based column is over the tiny boolean control."""
-    display_width = 7
+    display_width = 4 + label_width
     control_start = col + box_width - display_width - 1
     return control_start <= x < control_start + display_width
 
@@ -121,20 +124,18 @@ def format_setting_value(item, value):
     """Return a compact display value for one declarative setting."""
     if item.get("disabled"):
         return "Coming soon"
+    if item["type"] == "action":
+        return "Run"
     if item["type"] == "bool":
         return "On" if value else "Off"
     if item["type"] == "keybind":
-        return str(value).capitalize()
+        return {"up": "↑", "down": "↓", "left": "←", "right": "→", "enter": "⏎"}.get(str(value).lower(), str(value).capitalize())
     if value in item.get("value_labels", {}):
         return item["value_labels"][value]
     if item.get("display") == "animation_speed":
-        if value >= item.get("max", 10):
-            return "Instant"
-        if value <= item.get("min", 0):
-            return "Normal"
-        return f"{1 + value / 10:.1f}×"
+        return f"{value:g}x"
     if item.get("display") == "difficulty":
-        return ("Easy", "Normal", "Hard")[max(0, min(2, int(value)))]
+        return ("Easy", "Normal", "Hard", "Extreme")[max(0, min(3, int(value)))]
     if item.get("display") == "victory_celebration":
         return ("Minimal", "Small", "Regular", "Extreme")[
             max(0, min(3, int(value)))
@@ -164,6 +165,8 @@ class SettingEditor:
         self.message = ""
 
     def begin(self, item, owner):
+        if item["type"] == "action":
+            return "ignored"
         if item.get("disabled"):
             self.message = "This option is not implemented yet."
             return "disabled"
@@ -198,6 +201,12 @@ class SettingEditor:
         return "cancelled"
 
     def commit(self):
+        if not self.active:
+            return "ignored"
+        if getattr(self.owner, "setting_is_locked", lambda attr: False)(self.item["attr"]):
+            self.active = False
+            self.message = self.owner.setting_lock_message(self.item["attr"])
+            return "locked"
         setattr(self.owner, self.item["attr"], self.value)
         self.owner.save()
         self.active = False
@@ -248,7 +257,8 @@ class SettingEditor:
                     f"{self.item['name']} can only be assigned to {choices}."
                 )
                 return "error"
-            if key_name in RESERVED_KEYBINDS or key_name.startswith("ctrl/"):
+            if (key_name in RESERVED_KEYBINDS or key_name in self.item.get("reserved_keys", ())
+                    or key_name.startswith("ctrl/")):
                 self.message = f"{pressed!r} is reserved; press another key."
                 return "error"
             conflict = self._keybind_conflict(key_name)

@@ -1,1 +1,1 @@
-wand;;0e;;Wand of Galanb III.;;25;;173;;97.5;;Health;;149;;Government drones... ACTION!;;0.05;;3 pigeons will aid you in battle!;;0;;3
+knife;;02;;Basic Knife;;11;;65;;38.0;;Defence;;5;;Knife yay;;0.03;;ability;;0;;0

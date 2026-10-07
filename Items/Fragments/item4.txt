@@ -1,1 +1,1 @@
-Bracelet;;Shade Bracelet;;15;;Speed;;4.0;;Assassin;;0;;ATK %;;3;;DEF;;3;;Crit Damage;;2
+Ring;;Atlas Ring;;1;;DEF;;10;;Titan;;0

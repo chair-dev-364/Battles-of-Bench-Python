@@ -1,13 +1,13 @@
 {
-    "dust": 95038,
+    "dust": 5,
     "gems": 0,
-    "level": 82,
-    "money": 1000000,
+    "level": 60,
+    "money": 4373,
     "skill_main": 1,
     "skill_skill": 1,
     "skill_ult": 1,
     "skill_talent": 1,
-    "xp": 420,
-    "xpneeded": 512,
+    "xp": 296,
+    "xpneeded": 454,
     "tryd": 0
 }

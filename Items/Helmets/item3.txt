@@ -1,2 +1,2 @@
-helmet;;02;;Linux Helmet;;2;;14;;None;;None;;0;;0.035
+helmet;;0b;;Average Helmet;;20;;12;;None;;None;;0;;0.035
 

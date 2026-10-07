@@ -163,7 +163,10 @@ def wipe_multi(delay, filler, accel, color_enabled, noise):
     """Multi wipe: run several effects in sequence."""
     effects = [wipe_center, wipe_diagonal, wipe_glitch, wipe_classic]
     for effect in effects:
-        effect(delay, filler, accel, color_enabled)
+        if effect is wipe_glitch:
+            effect(delay, filler, accel, color_enabled, noise)
+        else:
+            effect(delay, filler, accel, color_enabled)
         # short pause between effects
         sleep_ms(100)
 
@@ -174,7 +177,7 @@ def wipe_diagonal(delay, filler, accel, color_enabled):
     # go through diagonal steps
     for diag in range(rows + cols - 1):
         for row in range(1, rows + 1):
-            col = diag - (row - 1)
+            col = diag - (row - 1) + 1
             if 1 <= col <= cols:
                 move_cursor(col - 1, row - 1)
                 text = apply_color(filler, color_enabled)
@@ -232,19 +235,18 @@ def main():
             print(" - " + m)
         sys.exit(1)
     
+    if delay < 0 or cycles < 1:
+        parser.error("Delay must be non-negative and cycles must be at least 1.")
+    if reverse_flag:
+        mode_name = {"top": "bottom", "bottom": "top", "center": "normal", "normal": "center"}.get(mode_name, mode_name)
     effect_func = MODES[mode_name]
 
     # run the chosen effect for the requested cycles
     for i in range(cycles):
-        effect_func(delay, " ", False if reverse_flag else False or color_enabled, color_enabled)  # call normally
-        # if reverse flag is on, use the reverse version if it exists
-        if reverse_flag:
-            # classic/center swap to their reverse versions
-            if mode_name == "classic":
-                wipe_reverse_classic(delay, " ", False, color_enabled)
-            elif mode_name == "center":
-                wipe_outside_in(delay, " ", False, color_enabled)
-            # other modes just keep going as-is for now
+        if mode_name in ("glitch", "multi"):
+            effect_func(delay, " ", False, color_enabled, noise)
+        else:
+            effect_func(delay, " ", False, color_enabled)
         if sound_flag:
             play_sound_effect()
 

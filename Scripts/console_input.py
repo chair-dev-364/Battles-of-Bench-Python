@@ -32,6 +32,66 @@ _POSIX_MOUSE_RE = re.compile(rb"^\x1b\[<(\d+);(\d+);(\d+)([Mm])")
 _posix_input_buffer = bytearray()
 _posix_pressed_button = None
 _posix_last_click = None
+_terminal_background_color = None
+_terminal_background_checked = False
+_BACKGROUND_REPLY = re.compile(rb"\x1b\]11;rgb:([0-9a-fA-F]{1,4})/([0-9a-fA-F]{1,4})/([0-9a-fA-F]{1,4})(?:\x07|\x1b\\)")
+
+
+def _read_background_reply(buffer):
+    global _terminal_background_color
+    reply = _BACKGROUND_REPLY.search(buffer)
+    if reply is None:
+        return False
+    _terminal_background_color = tuple(round(int(value, 16) * 255 / (16 ** len(value) - 1)) for value in reply.groups())
+    del buffer[reply.start():reply.end()]
+    return True
+
+
+def terminal_background():
+    global _terminal_background_checked, _terminal_background_color
+    if _terminal_background_checked:
+        return _terminal_background_color
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        return None
+    _terminal_background_checked = True
+    try:
+        if os.name == "nt":
+            class ScreenInfo(ctypes.Structure):
+                _fields_ = [
+                    ("cbSize", wintypes.DWORD), ("dwSize", COORD),
+                    ("dwCursorPosition", COORD), ("wAttributes", wintypes.WORD),
+                    ("srWindow", ctypes.c_short * 4), ("dwMaximumWindowSize", COORD),
+                    ("wPopupAttributes", wintypes.WORD), ("bFullscreenSupported", wintypes.BOOL),
+                    ("ColorTable", wintypes.DWORD * 16),
+                ]
+            info = ScreenInfo()
+            info.cbSize = ctypes.sizeof(info)
+            query = _kernel32.GetConsoleScreenBufferInfoEx
+            query.argtypes = [wintypes.HANDLE, ctypes.POINTER(ScreenInfo)]
+            if query(_kernel32.GetStdHandle(-11), ctypes.byref(info)):
+                color = info.ColorTable[(info.wAttributes >> 4) & 15]
+                _terminal_background_color = (color & 255, (color >> 8) & 255, (color >> 16) & 255)
+        else:
+            descriptor = sys.stdin.fileno()
+            _ensure_raw_mode(descriptor)
+            sys.stdout.write("\x1b]11;?\x1b\\")
+            sys.stdout.flush()
+            deadline = time.monotonic() + 0.08
+            while time.monotonic() < deadline:
+                if _read_background_reply(_posix_input_buffer):
+                    break
+                remaining = max(0, deadline - time.monotonic())
+                if not select.select([descriptor], [], [], remaining)[0]:
+                    break
+                data = os.read(descriptor, 4096)
+                if not data:
+                    break
+                _posix_input_buffer.extend(data)
+            _read_background_reply(_posix_input_buffer)
+    except (AttributeError, OSError, ValueError):
+        pass
+    return _terminal_background_color
+
 
 
 def _posix_modifier_prefix(parameter):
@@ -45,7 +105,7 @@ def _posix_modifier_prefix(parameter):
         modifier_bits = int(parameter) - 1
     except (TypeError, ValueError):
         return ""
-    if modifier_bits & (4 | 8):
+    if modifier_bits & (4 | 8 | 32):
         return "ctrl/"
     if modifier_bits & 2:
         return "alt/"
@@ -81,6 +141,9 @@ def _posix_alt_character(buffer):
     return "alt/" + character
 
 
+_mouse_hover_enabled = False
+
+
 def _posix_mouse_event(code, x, y, terminator):
     """Translate one SGR mouse report to the Win32-compatible public shape."""
     global _posix_last_click, _posix_pressed_button
@@ -100,6 +163,10 @@ def _posix_mouse_event(code, x, y, terminator):
             "x": x,
             "y": y,
         }
+
+    # no buttons held: this is hover, not a release
+    if code & 32 and button_code == 3 and terminator != b"m":
+        return {"type": "mouse", "event": "move", "x": x, "y": y}
 
     if terminator == b"m" or button_code == 3:
         released = _posix_pressed_button or button
@@ -165,6 +232,14 @@ def _extract_posix_event(buffer):
 
     first = buffer[0]
     if first == 0x1B:
+        if bytes(buffer).startswith(b"\x1b]11;"):
+            if _read_background_reply(buffer):
+                return _IGNORED
+            terminator = re.search(rb"\x07|\x1b\\", buffer)
+            if terminator is None:
+                return _NEED_MORE
+            del buffer[:terminator.end()]
+            return _IGNORED
         mouse_match = _POSIX_MOUSE_RE.match(buffer)
         if mouse_match:
             code, x, y = (int(value) for value in mouse_match.groups()[:3])
@@ -213,6 +288,8 @@ def _extract_posix_event(buffer):
             # terminal can distinguish, including macOS Option and Command.
             if final == "u":
                 fields = parameters.split(";")
+                if len(fields) > 1 and fields[1].partition(":")[2] == "3":
+                    return _IGNORED
                 try:
                     character = chr(int(fields[0].split(":", 1)[0]))
                 except (ValueError, OverflowError):
@@ -220,15 +297,33 @@ def _extract_posix_event(buffer):
                 prefix = _posix_modifier_prefix(
                     fields[1].split(":", 1)[0] if len(fields) > 1 else 1
                 )
-                if prefix and character.isprintable():
-                    return prefix + character
-                return character if character.isprintable() else _IGNORED
+                key_name = {
+                    "\r": "enter",
+                    "\n": "enter",
+                    " ": "space",
+                    "\x1b": "esc",
+                    "\x08": "backspace",
+                    "\x7f": "backspace",
+                }.get(character, character)
+                if key_name != character or character.isprintable():
+                    return prefix + key_name
+                return _IGNORED
+
+            if final == "~":
+                fields = parameters.split(";")
+                key_name = {"1": "home", "7": "home", "4": "end", "8": "end", "3": "delete"}.get(fields[0])
+                if key_name:
+                    prefix = _posix_modifier_prefix(fields[1]) if len(fields) > 1 else ""
+                    return prefix + key_name
+                return _IGNORED
 
             key_name = {
                 "A": "up",
                 "B": "down",
                 "C": "right",
                 "D": "left",
+                "H": "home",
+                "F": "end",
             }.get(final)
             if key_name is None:
                 return _IGNORED
@@ -389,6 +484,14 @@ if os.name == "nt":
         _fields_ = [("EventType", wintypes.WORD), ("Event", EVENT_UNION)]
 
     _kernel32 = ctypes.windll.kernel32
+    _kernel32.GetStdHandle.argtypes = [wintypes.DWORD]
+    _kernel32.GetStdHandle.restype = wintypes.HANDLE
+    _kernel32.GetConsoleMode.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    _kernel32.SetConsoleMode.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    _kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    _kernel32.WaitForSingleObject.restype = wintypes.DWORD
+    _kernel32.GetNumberOfConsoleInputEvents.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    _kernel32.ReadConsoleInputW.argtypes = [wintypes.HANDLE, ctypes.POINTER(INPUT_RECORD), wintypes.DWORD, ctypes.POINTER(wintypes.DWORD)]
     _stdin_handle = None
     _original_mode = None
     _base_mode = None
@@ -459,6 +562,9 @@ if os.name == "nt":
             VK_ESCAPE: "esc",
             VK_BACK: "backspace",
             VK_SPACE: "space",
+            0x24: "home",
+            0x23: "end",
+            0x2E: "delete",
         }
         if virtual_key in special:
             return special[virtual_key]
@@ -509,6 +615,8 @@ if os.name == "nt":
                     "x": x,
                     "y": y,
                 }
+            if _mouse_hover_enabled and not mouse_event.dwButtonState:
+                return {"type": "mouse", "event": "move", "x": x, "y": y}
             return None
 
         current = mouse_event.dwButtonState
@@ -586,17 +694,19 @@ if os.name == "nt":
                 else:
                     _event_queue.append(parsed)
 
-    def key(timeout=None, mouse=False):
+    def key(timeout=None, mouse=False, hover=False, shortcuts=False):
         """Return one key/mouse event, or ``"TIMEOUT"`` when none arrives."""
         global _stdin_handle
 
         if _stdin_handle is None:
             _init_console()
         _set_mouse_mode(mouse)
+        global _mouse_hover_enabled
+        _mouse_hover_enabled = mouse and hover
 
         while _event_queue:
             event = _event_queue.popleft()
-            if isinstance(event, dict) and not mouse:
+            if isinstance(event, dict) and (not mouse or (event.get("event") == "move" and not _mouse_hover_enabled)):
                 continue
             return event
 
@@ -616,7 +726,7 @@ if os.name == "nt":
         _drain_console_events()
         while _event_queue:
             event = _event_queue.popleft()
-            if isinstance(event, dict) and not mouse:
+            if isinstance(event, dict) and (not mouse or (event.get("event") == "move" and not _mouse_hover_enabled)):
                 continue
             return event
         return "TIMEOUT"
@@ -667,27 +777,47 @@ else:
         # on macOS terminals. Full raw mode disables that output translation.
         tty.setcbreak(descriptor, termios.TCSANOW)
 
-    def _set_mouse_mode(enable):
+    def _set_mouse_mode(enable, hover=False):
         """Toggle basic, drag, and SGR-coordinate mouse reporting."""
         global _posix_mouse_enabled
-        if _posix_mouse_enabled == enable:
+        mode = 3 if enable and hover else 2 if enable else False
+        if _posix_mouse_enabled == mode:
             return
         if _posix_mouse_enabled is None and not enable:
             _posix_mouse_enabled = False
             return
         if getattr(sys.stdout, "isatty", lambda: False)():
             if enable:
-                sequence = "\x1b[?1000h\x1b[?1002h\x1b[?1006h"
+                sequence = "\x1b[?1002l\x1b[?1003l\x1b[?1000h\x1b[?1006h"
+                sequence += "\x1b[?1003h" if hover else "\x1b[?1002h"
             else:
-                sequence = "\x1b[?1006l\x1b[?1002l\x1b[?1000l"
+                sequence = "\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l"
             try:
                 sys.stdout.write(sequence)
                 sys.stdout.flush()
             except (OSError, ValueError):
                 pass
-        _posix_mouse_enabled = enable
+        _posix_mouse_enabled = mode
+
+    _posix_shortcuts_enabled = False
+
+    def _set_shortcut_mode(enable):
+        global _posix_shortcuts_enabled
+        if enable == _posix_shortcuts_enabled:
+            return
+        if not getattr(sys.stdout, "isatty", lambda: False)():
+            return
+        # ask supporting terminals to send modified keys, including Command
+        sequence = "\x1b[>1u" if enable else "\x1b[<u"
+        try:
+            sys.stdout.write(sequence)
+            sys.stdout.flush()
+        except (OSError, ValueError):
+            return
+        _posix_shortcuts_enabled = enable
 
     def _restore_console():
+        _set_shortcut_mode(False)
         if _posix_mouse_enabled:
             _set_mouse_mode(False)
         if (
@@ -708,12 +838,12 @@ else:
     def _queued_event(mouse):
         while _event_queue:
             event = _event_queue.popleft()
-            if isinstance(event, dict) and not mouse:
+            if isinstance(event, dict) and (not mouse or (event.get("event") == "move" and not _mouse_hover_enabled)):
                 continue
             return event
         return None
 
-    def key(timeout=None, mouse=False):
+    def key(timeout=None, mouse=False, hover=False, shortcuts=False):
         """Return one key/mouse event, or ``"TIMEOUT"`` when none arrives."""
         try:
             descriptor = sys.stdin.fileno()
@@ -721,7 +851,10 @@ else:
             raise OSError("Standard input does not expose a terminal handle") from error
 
         _ensure_raw_mode(descriptor)
-        _set_mouse_mode(mouse)
+        _set_mouse_mode(mouse, hover=hover)
+        _set_shortcut_mode(shortcuts)
+        global _mouse_hover_enabled
+        _mouse_hover_enabled = mouse and hover
 
         queued = _queued_event(mouse)
         if queued is not None:
@@ -739,7 +872,7 @@ else:
                     escape_deadline = None
                     if event is _IGNORED:
                         continue
-                    if isinstance(event, dict) and not mouse:
+                    if isinstance(event, dict) and (not mouse or (event.get("event") == "move" and not _mouse_hover_enabled)):
                         continue
                     return event
 
@@ -776,7 +909,7 @@ else:
                     continue
                 incoming = os.read(descriptor, 64)
                 if not incoming:
-                    return "TIMEOUT"
+                    raise EOFError("Standard input closed")
                 _posix_input_buffer.extend(incoming)
         finally:
             # Raw/no-echo mode intentionally remains active between key()

@@ -1,1 +1,1 @@
-axe;;03;;The Disconnector;;11;;101;;54.0;;Strength;;9;;Loading description...;;0.040;;No ability.;;0;;0
+wand;;03;;Magic Wand Pro Max;;6;;130;;75;;Strength;;5;;a;;0.040;;No ability.;;0;;0

@@ -8,18 +8,19 @@ without lag on the first play, a major issue back in the Batch version.
 I'll fix this up if needed for the official release.
 """
 # --- AGGRESSIVE OS-LEVEL STDERR SUPPRESSION (before any other imports) ---
-try:
-    sys.stderr.flush()
-except Exception:
-    pass
-try:
-    if hasattr(sys.stderr, 'fileno'):
-        fd_stderr = sys.stderr.fileno()
-        devnull = os.open(os.devnull, os.O_WRONLY)
-        os.dup2(devnull, fd_stderr)
-        os.close(devnull)
-except Exception:
-    pass
+if __name__ == "__main__":
+    try:
+        sys.stderr.flush()
+    except Exception:
+        pass
+    try:
+        if hasattr(sys.stderr, 'fileno'):
+            fd_stderr = sys.stderr.fileno()
+            devnull = os.open(os.devnull, os.O_WRONLY)
+            os.dup2(devnull, fd_stderr)
+            os.close(devnull)
+    except Exception:
+        pass
 # Track which MP3s have been cleaned this session
 _already_cleaned_mp3s = set()
 # sound_player.py
@@ -29,6 +30,7 @@ import os
 import sys
 import time
 import json
+import math
 try:
     import pygame # Requires: pip install pygame
 except ImportError:
@@ -131,6 +133,9 @@ def _native_play(file_path, volume):
             stderr=subprocess.DEVNULL,
         )
         with native_audio_lock:
+            for previous in list(native_sound_processes):
+                if previous.poll() is not None:
+                    native_sound_processes.discard(previous)
             native_sound_processes.add(process)
         return process
     except OSError as e:
@@ -219,18 +224,8 @@ def _load_cached_sound(sound_file):
         if sound_file not in _already_cleaned_mp3s:
             try:
                 clean_id3_tags(sound_file)
-                # After cleaning, try to load tags with mutagen; if it fails, skip loading
-                try:
-                    from mutagen.id3 import ID3
-                    ID3(sound_file)
-                except Exception:
-                    print(f"[ID3] Skipping {sound_file}: still has malformed tags after cleaning.")
-                    _already_cleaned_mp3s.add(sound_file)
-                    return None
             except Exception:
-                print(f"[ID3] Skipping {sound_file}: cleaning failed.")
-                _already_cleaned_mp3s.add(sound_file)
-                return None
+                print(f"[ID3] Could not clean {sound_file}; trying the audio decoder.")
             _already_cleaned_mp3s.add(sound_file)
     # Load the sound from disk
     try:
@@ -357,12 +352,7 @@ def _remove_metadata_with_ffmpeg(mp3_path):
             )
         subprocess.run(cmd, **run_options)
         # Replace original file atomically
-        try:
-            os.replace(tmp, mp3_path)
-        except Exception:
-            # Fallback: try remove and rename
-            if os.path.exists(mp3_path): os.remove(mp3_path)
-            os.rename(tmp, mp3_path)
+        os.replace(tmp, mp3_path)
         print(f"[TagFix] Removed metadata from {os.path.basename(mp3_path)} using ffmpeg.")
         return True
     except Exception as e:
@@ -383,10 +373,12 @@ def clean_id3_tags(mp3_path):
       3) Return True if we modified the file, False otherwise.
     """
     try:
-        from mutagen.id3 import ID3
+        from mutagen.id3 import ID3, ID3NoHeaderError
         try:
             ID3(mp3_path)
             return False  # tags present and readable
+        except ID3NoHeaderError:
+            return False  # no tags is fine too
         except Exception:
             # Attempt to remove all ID3 tags using mutagen if possible
             try:
@@ -609,7 +601,7 @@ def parse_sound_and_pitch(command):
     if not head.strip():
         return text, 1.0
 
-    if pitch <= 0:
+    if not math.isfinite(pitch) or pitch <= 0:
         print(f"Warning: Invalid pitch '{tail}' in command '{command}'. Using 1.0.")
         pitch = 1.0
 
@@ -814,10 +806,16 @@ def play_sound_thread(sound_name, pitch=1.0, volume_key=None, pan=0.0):
 
         # Play and set volume per-channel (avoids mutating the cached Sound object)
         with mixer_lock:
-            ch = play_obj.play()
-            if ch is None:
-                print(f"Warning: No available channel to play {sound_name}.")
-                return
+            if sound_name in ("end_excellent", "end_great", "end_good"):
+                ch = pygame.mixer.Channel(0)
+                ch.play(play_obj)
+            else:
+                ch = play_obj.play()
+                if ch is None:
+                    channel_count = pygame.mixer.get_num_channels()
+                    pygame.mixer.set_num_channels(channel_count + 1)
+                    ch = pygame.mixer.Channel(channel_count)
+                    ch.play(play_obj)
             try:
                 if vol_key == "sfx" and spatial_audio_enabled() and pan:
                     left = 1.0 if pan <= 0 else 1.0 - pan
@@ -1092,13 +1090,8 @@ QUEUE_POLL_INTERVAL = 0.001  # 1 ms poll for extreme low-latency
 
 
 def file_queue_listener():
-    """Tails a queue file and executes commands as they arrive.
-
-    This allows appending commands to the General/Temp sound queue file
-    and avoid launching Python processes per command.
-    """
+    """Read complete commands without truncating concurrent appends."""
     last_pos = 0
-    # Ensure directory exists
     try:
         os.makedirs(os.path.dirname(QUEUE_FILE), exist_ok=True)
     except Exception:
@@ -1109,39 +1102,22 @@ def file_queue_listener():
             if not os.path.isfile(QUEUE_FILE):
                 time.sleep(QUEUE_POLL_INTERVAL)
                 continue
-
-            with open(QUEUE_FILE, 'r+', encoding='utf-8', errors='replace') as f:
-                f.seek(last_pos)
-                lines = f.readlines()
-                if lines:
-                    for line in lines:
-                        cmd = line.strip()
-                        if not cmd:
-                            continue
-                        # Use the same handler; no reply socket available (sock=None)
-                        handle_udp_command(cmd, ('file-queue', 0), None)
-                last_pos = f.tell()
-
-                # If we've read to the end, truncate the file (clear processed commands)
-                f.seek(0, os.SEEK_END)
-                end_pos = f.tell()
-                if last_pos >= end_pos:
-                    f.truncate(0)
+            with open(QUEUE_FILE, 'rb') as f:
+                if os.fstat(f.fileno()).st_size < last_pos:
                     last_pos = 0
-                # Compact file if it grows too large (should be rare now)
-                elif last_pos > 1024 * 1024:  # >1MB
-                    try:
-                        f.seek(last_pos)
-                        rest = f.read()
-                        f.seek(0)
-                        f.write(rest)
-                        f.truncate(len(rest.encode('utf-8')))
-                        last_pos = len(rest.encode('utf-8'))
-                    except Exception as e:
-                        print(f"[Queue] Error compacting queue file: {e}")
-
+                f.seek(last_pos)
+                while not shutdown_flag.is_set():
+                    line_start = f.tell()
+                    line = f.readline()
+                    if not line.endswith(b'\n'):
+                        last_pos = line_start
+                        break
+                    cmd = line.decode('utf-8', errors='replace').strip()
+                    last_pos = f.tell()
+                    if cmd:
+                        handle_udp_command(cmd, ('file-queue', 0), None)
         except Exception as e:
-            print(f"[Queue] Error reading queue: {e}")
+            print(f"[FileQueue] Error: {e}")
         time.sleep(QUEUE_POLL_INTERVAL)
 
 
@@ -1175,8 +1151,7 @@ def main():
         else:
         # Using pre_init with smaller buffer (512) for near-instant (11ms) playback latency
             pygame.mixer.pre_init(frequency=44100, size=-16, channels=2, buffer=512)
-            pygame.init() # Initializes all Pygame modules needed
-        # pygame.mixer.init() # Explicitly init mixer (good practice) - redundant if pygame.init() called
+            pygame.mixer.init()
             print(f"Pygame Mixer initialized successfully.")
             print(f"Mixer settings: {pygame.mixer.get_init()}") # Print actual settings
         # Clear any in-memory cache on startup to avoid stale entries
@@ -1189,7 +1164,8 @@ def main():
         # Reserve additional mixer channels to reduce "no channel" race conditions
             try:
                 pygame.mixer.set_num_channels(32)
-                print("Mixer channels set to 32.")
+                pygame.mixer.set_reserved(1) # keep victory sounds out of the reward sound pile
+                print("Mixer channels set to 32 (one reserved for victory sounds).")
             except Exception:
                 pass
         # Start UDP listener for fast fire-and-forget commands
@@ -1242,16 +1218,14 @@ def main():
                 time.sleep(0.1) # Avoid busy-waiting on error
 
     except socket.error as e:
-        print(f"Fatal Error: Could not start server socket on {HOST}:{PORT}. Error: {e}")
-        print("Check if the port is already in use or if you have network permissions.")
-        if server_socket: server_socket.close()
-        if MIXER_AVAILABLE:
-            pygame.quit()
-        sys.exit(1)
+        print(f"Socket listener unavailable on {HOST}:{PORT}: {e}; using the file queue.")
+        while not shutdown_flag.wait(0.5):
+            pass
     except Exception as e:
          print(f"Fatal Error in main server loop: {e}")
     finally:
         # --- Cleanup ---
+        shutdown_flag.set()
         print("Server shutting down...")
         if server_socket:
             server_socket.close()

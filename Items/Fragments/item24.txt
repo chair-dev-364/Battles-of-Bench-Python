@@ -1,1 +1,1 @@
-Bracelet;;Mountain Bracelet;;1;;DEF;;10;;Titan;;0
+Bracelet;;Lifeblood Bracelet;;1;;HP %;;7;;Titan;;0

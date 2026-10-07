@@ -1,1 +1,1 @@
-Bracelet;;Bracelet of Dreams;;1;;Speed;;2;;Warrior;;0
+Necklace;;Silent Oath Necklace;;1;;Crit Damage;;10;;Assassin;;0

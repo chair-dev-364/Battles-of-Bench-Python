@@ -1,1 +1,1 @@
-Bracelet;;Razor Bracelet;;15;;ATK;;23.0;;Assassin;;0;;Crit Rate;;3;;ATK %;;4;;HP %;;3
+Necklace;;Bannerchain Necklace;;15;;ATK;;20.0;;Warrior;;0;;HP;;32;;ATK %;;3;;HP %;;4

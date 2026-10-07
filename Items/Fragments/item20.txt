@@ -1,1 +1,1 @@
-Necklace;;Rampart Necklace;;1;;Crit Rate;;2;;Guardian;;0
+Ring;;Executioner's Ring;;1;;ATK;;24;;Assassin;;0

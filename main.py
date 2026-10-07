@@ -22,7 +22,7 @@
 *******************************************************************************"""
 import difflib
 
-from Scripts.console_input import key
+from Scripts.console_input import key, terminal_background
 from Scripts.Settings.editor import (
     SettingEditor,
     back_button_contains,
@@ -41,17 +41,24 @@ from Scripts.Settings.schema import (
     PERSISTENT_DEFAULTS,
     SETTINGS_BY_ATTR,
     SETTINGS_PAGES,
+    CATEGORY_NAMES,
+    CATEGORY_ICONS,
+    CATEGORY_DESCRIPTIONS,
 )
+from Scripts.save_backups import backup_before_write, backup_transaction, trim_backups, create_backup
 from Scripts.sort import sort_inventory
+from Scripts.battle import apply_difficulty, attack_damage, short_action_log
+from Scripts.Settings.text import SIMPLE_DESCRIPTIONS
+from Scripts.Settings.search import find_settings
 import atexit, os, time, sys, ctypes, ast, math, operator as op, subprocess, json, re, random, shlex, shutil, tempfile, stat, urllib.request  # noqa: E401, E402
 from pathlib import Path  # noqa: E402
+from copy import copy
+from functools import wraps
 from typing import Literal  # noqa: E402
 RGB="[38;2;"
 
 PROJECT_ROOT = Path(__file__).resolve().parent
-# Legacy gameplay paths are relative by design. Anchor them once so launching
-# the script through Finder, a desktop shortcut, or an absolute path uses the
-# same save and asset directories on every operating system.
+# use the game folder for saves and sounds, no matter where we launch from
 os.chdir(PROJECT_ROOT)
 
 
@@ -156,7 +163,7 @@ if hasattr(sys.stdout, "reconfigure"):
 
 
 def _enable_virtual_terminal_output():
-    """Enable ANSI output on Windows; POSIX terminals already support it."""
+    # let Windows use ansi colors too
     if os.name != "nt":
         return
     try:
@@ -170,14 +177,14 @@ def _enable_virtual_terminal_output():
 
 
 def _set_terminal_title(title):
-    """Set the terminal title without invoking a platform-specific shell."""
+    # set the terminal title
     if getattr(sys.stdout, "isatty", lambda: False)():
         sys.stdout.write(f"\x1b]0;{title}\x07")
         sys.stdout.flush()
 
 
 def _create_windows_kill_job(process):
-    """Keep Windows' kill-on-parent-close behavior for the sound helper."""
+    # close the sound helper when the game closes on Windows
     if os.name != "nt":
         return None
 
@@ -218,7 +225,14 @@ def _create_windows_kill_job(process):
 
     try:
         kernel32 = ctypes.windll.kernel32
+        kernel32.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
         kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+        kernel32.SetInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
+        kernel32.SetInformationJobObject.restype = wintypes.BOOL
+        kernel32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+        kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.CloseHandle.restype = wintypes.BOOL
         job_handle = kernel32.CreateJobObjectW(None, None)
         if not job_handle:
             return None
@@ -244,15 +258,16 @@ def _create_windows_kill_job(process):
 
 
 def _stop_sound_process():
-    """Stop the helper on normal exits on every supported operating system."""
+    # stop the sound helper when leaving the game
     if sound_process.poll() is None:
         try:
-            sound_process.terminate()
-            sound_process.wait(timeout=1)
+            sound("QUIT")
+            sound_process.wait(timeout=2)
         except (OSError, subprocess.TimeoutExpired):
             try:
                 sound_process.kill()
-            except OSError:
+                sound_process.wait(timeout=1)
+            except (OSError, subprocess.TimeoutExpired):
                 pass
     if _windows_sound_job is not None:
         try:
@@ -264,20 +279,20 @@ def _stop_sound_process():
 _enable_virtual_terminal_output()
 _set_terminal_title(TITLE)
 
-# Never replay sound commands persisted by an earlier session. Cache warmup is
-# silent; this stale queue was what made every queued effect fire at startup.
-sound_queue_path = PROJECT_ROOT / "General" / "Temp" / "sound_cmd_queue.txt"
-sound_queue_path.parent.mkdir(parents=True, exist_ok=True)
-sound_queue_path.write_text("", encoding="utf-8")
+# clear old sound commands so they don't all play at startup
+if __name__ == "__main__":
+    sound_queue_path = PROJECT_ROOT / "General" / "Temp" / "sound_cmd_queue.txt"
+    sound_queue_path.parent.mkdir(parents=True, exist_ok=True)
+    sound_queue_path.write_text("", encoding="utf-8")
 
-sound_process = subprocess.Popen(
-    [sys.executable, str(PROJECT_ROOT / "Scripts" / "sound_player.py")],
-    cwd=str(PROJECT_ROOT),
-    stdout=subprocess.DEVNULL,
-    stderr=subprocess.DEVNULL,
-)
-_windows_sound_job = _create_windows_kill_job(sound_process)
-atexit.register(_stop_sound_process)
+    sound_process = subprocess.Popen(
+        [sys.executable, str(PROJECT_ROOT / "Scripts" / "sound_player.py")],
+        cwd=str(PROJECT_ROOT),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    _windows_sound_job = _create_windows_kill_job(sound_process)
+    atexit.register(_stop_sound_process)
 
 """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 🎯 FUNCTIONS
@@ -367,13 +382,16 @@ def safe_eval(expr):
             raise TypeError("Unsupported expression")
 
     parsed = ast.parse(expr, mode='eval')
-    return _eval(parsed.body)
+    value = _eval(parsed.body)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError("Invalid number")
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValueError("Invalid number")
+    return value
 
 # woosh, character screen rounding!! DEF is happy with this
 def char_round(value):
-    if isinstance(value, float) and value.is_integer():
-        return str(int(value))
-    return str(value)
+    return format_number(value)
 
 # Simple. "cursor(True)" to show, "cursor(False)" to hide.
 def cursor(x):
@@ -401,7 +419,7 @@ def visible_len(text):
 
 
 def pad_visible(text, width, fill=" "):
-    """Pad an ANSI-styled string to a visible terminal width."""
+    # pad using the visible width, ansi colors do not count
     return text + fill * max(0, width - visible_len(text))
 
 # FINALLY, getx(). Line input, but actually good.
@@ -461,7 +479,9 @@ def getx(
                                (max_val is None or preview_result <= max_val):
                                 is_valid = True
                         else:
-                            val = float(buffer) if "." in buffer else int(buffer)
+                            val = float(buffer) if expect == "float" or "." in buffer else int(buffer)
+                            if isinstance(val, float) and not math.isfinite(val):
+                                raise ValueError("Invalid number")
                             if isinstance(val, float) and val.is_integer():
                                 val = int(val)
                             if (min_val is None or val >= min_val) and \
@@ -548,8 +568,10 @@ def getx(
                     if any(op in buffer for op in "+-*/%()"):
                         value = safe_eval(buffer)
                     else:
-                        value = float(buffer) if "." in buffer else int(buffer)
+                        value = float(buffer) if expect == "float" or "." in buffer else int(buffer)
 
+                    if isinstance(value, float) and not math.isfinite(value):
+                        raise ValueError("Invalid number")
                     if isinstance(value, float) and value.is_integer():
                         value = int(value)
 
@@ -587,6 +609,32 @@ def rgback(r, g, b):
     return f"[48;2;{r};{g};{b}m"
 
 # Finally, actually global variables. Thanks, Batch.
+def save_operation(action):
+    # one backup for the whole action
+    @wraps(action)
+    def wrapped(*args, **kwargs):
+        with backup_transaction(PROJECT_ROOT):
+            return action(*args, **kwargs)
+    return wrapped
+
+
+def write_file(path, value):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    owner = globals().get("setting")
+    backup_before_write(PROJECT_ROOT, path, value, getattr(owner, "backup_count", 3))
+    temp_path = None
+    try:
+        # finish writing before replacing the old file
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent, delete=False) as f:
+            temp_path = Path(f.name)
+            f.write(str(value))
+        os.replace(temp_path, path)
+    finally:
+        if temp_path is not None and temp_path.exists():
+            temp_path.unlink()
+
+
 class GeneralVariables:
     pass
 d = GeneralVariables()
@@ -630,24 +678,39 @@ class PlayerData:
             self._create_default_file()
 
         try:
-            with open(self._path, "r") as f:
+            with open(self._path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-        except (json.JSONDecodeError, FileNotFoundError):
+        except (json.JSONDecodeError, FileNotFoundError, UnicodeError):
+            data = {}
+        if not isinstance(data, dict):
             data = {}
 
         # Load persistent stats only
         for key, default in self._persistent_fields.items():
-            setattr(self, key, data.get(key, default))
+            setattr(self, key, self._validated_value(key, data.get(key, default), default))
+
+    def _validated_value(self, key, value, default):
+        if not isinstance(value, int) or isinstance(value, bool):
+            return default
+        minimum = 1 if key == "level" or key == "xpneeded" or key.startswith("skill_") else 0
+        if value < minimum:
+            return default
+        if key == "level":
+            return min(value, CHARACTER_MAX_LEVEL)
+        if key.startswith("skill_"):
+            return min(value, 10)
+        return value
 
     # ───────────── SAVE ─────────────
     def save(self):
+        for key, default in self._persistent_fields.items():
+            setattr(self, key, self._validated_value(key, getattr(self, key, default), default))
         data = {
             key: getattr(self, key)
             for key in self._persistent_fields.keys()
         }
 
-        with open(self._path, "w") as f:
-            json.dump(data, f, indent=4)
+        write_file(self._path, json.dumps(data, indent=4))
 
     # ───────────── RESET ─────────────
     def reset(self):
@@ -657,8 +720,7 @@ class PlayerData:
 
     # ───────────── CREATE DEFAULT FILE ─────────────
     def _create_default_file(self):
-        with open(self._path, "w") as f:
-            json.dump(self._persistent_fields, f, indent=4)
+        write_file(self._path, json.dumps(self._persistent_fields, indent=4))
 
 player = PlayerData()
 class EnemyData:
@@ -672,7 +734,7 @@ enemy = EnemyData()
 # Load settings.
 class SettingsData:
     _REDUCE_MOTION_OVERRIDES = {
-        "animation_speed": 10,
+        "animation_speed": 1.0,
         "menu_transitions": False,
         "disable_startup_animation": True,
         "victory_celebration": 0,
@@ -689,8 +751,7 @@ class SettingsData:
         self._settings_by_attr = SETTINGS_BY_ATTR
         self._keybind_fields = tuple(KEYBIND_DEFAULTS)
 
-        # Keep older, non-menu values intact while making the declarative
-        # settings files the source of truth for all editable defaults.
+        # keep old values, use the settings pages for editable defaults
         legacy_defaults = {
             "difficulty": 0,
             "datatype": 1,
@@ -701,13 +762,14 @@ class SettingsData:
             "skiplevelanim": False,
             "soon": False,
             "_animation_slider_reversed": True,
-            "inventory_last_selections": {},
+            "_animation_speed_multiplier": True,
         }
         self._persistent_fields = {
             **legacy_defaults,
             **PERSISTENT_DEFAULTS,
         }
 
+        self.inventory_last_selections = {}
         self.load()
 
     @staticmethod
@@ -715,7 +777,7 @@ class SettingsData:
         try:
             with open(path, "r", encoding="utf-8") as f:
                 loaded = json.load(f)
-        except (json.JSONDecodeError, FileNotFoundError):
+        except (json.JSONDecodeError, FileNotFoundError, UnicodeError):
             return {}
         return loaded if isinstance(loaded, dict) else {}
 
@@ -723,12 +785,12 @@ class SettingsData:
         item = self._settings_by_attr.get(key)
         setting_type = item.get("type") if item else None
 
-        # Migrate values from the former choice-based animation setting.
+        # convert the old animation choices
         if key == "animation_speed" and isinstance(value, str):
             value = {
-                "instant": 10,
-                "fast": 5,
-                "normal": 0,
+                "instant": 2.0,
+                "fast": 1.5,
+                "normal": 1.0,
             }.get(value.casefold(), value)
 
         if key == "battle_difficulty" and isinstance(value, str):
@@ -738,9 +800,10 @@ class SettingsData:
                 "normal": 1,
                 "hard": 2,
                 "very hard": 2,
+                "extreme": 3,
             }.get(value.casefold(), value)
 
-        # Preserve the old health-display choice under its clearer label.
+        # convert the old hp display names
         if key == "battle_health_display" and isinstance(value, str):
             value = {
                 "hp": "Number",
@@ -767,12 +830,17 @@ class SettingsData:
         if setting_type == "slider":
             if not isinstance(value, (int, float)) or isinstance(value, bool):
                 return default
+            if not math.isfinite(value):
+                return default
             value = max(item["min"], min(item["max"], value))
+            step = item.get("step", 1)
+            value = item["min"] + round((value - item["min"]) / step) * step
+            value = round(value, 6)
             if isinstance(default, int):
                 return int(round(value))
             return float(value)
 
-        # Validation for retained legacy fields.
+        # check older settings too
         if isinstance(default, bool):
             return value if isinstance(value, bool) else default
         if isinstance(default, int):
@@ -791,14 +859,20 @@ class SettingsData:
         ):
             data["sort_items_automatically"] = False
             data["inventory_sorting"] = "Name"
-        if (
-            "_animation_slider_reversed" not in data
-            and isinstance(data.get("animation_speed"), (int, float))
-            and not isinstance(data.get("animation_speed"), bool)
-        ):
-            data["animation_speed"] = 10 - data["animation_speed"]
+        # old speed used a 0-10 slider; now we save the actual multiplier
+        speed_migrated = not data.get("_animation_speed_multiplier", False)
+        if speed_migrated:
+            old_speed = data.get("animation_speed")
+            if isinstance(old_speed, (int, float)) and not isinstance(old_speed, bool):
+                if "_animation_slider_reversed" not in data:
+                    old_speed = 10 - old_speed
+                data["animation_speed"] = max(0.5, min(2.0, 1 + old_speed / 10))
+        data["_animation_speed_multiplier"] = True
+        # remembered bag positions belong to this run, not the save file
+        data.pop("inventory_last_selections", None)
         legacy_keybinds = self._read_json(self._legacy_keybind_path)
-        needs_sync = set(self._persistent_fields) - set(data)
+        needs_sync = speed_migrated or set(self._persistent_fields) - set(data)
+        needs_sync = needs_sync or "battle_preview_outcomes" in data or "show_detailed_action_value" in data
 
         for key, default in self._persistent_fields.items():
             if key in data:
@@ -810,7 +884,7 @@ class SettingsData:
             value = self._validated_value(key, value, default)
             setattr(self, key, value)
 
-        # Migrate legacy keybinds and add newly declared settings immediately.
+        # save old binds and any new settings
         if needs_sync or not os.path.exists(self._path):
             self.save()
 
@@ -818,13 +892,15 @@ class SettingsData:
         for key, default in self._persistent_fields.items():
             value = getattr(self, key, default)
             setattr(self, key, self._validated_value(key, value, default))
-        data = {
-            key: getattr(self, key, default)
-            for key, default in self._persistent_fields.items()
-        }
+        data = {}
+        for key, default in self._persistent_fields.items():
+            data[key] = getattr(self, key, default)
 
-        with open(self._path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=4)
+        write_file(self._path, json.dumps(data, indent=4))
+        trim_backups(PROJECT_ROOT, self.backup_count)
+        apply_palette = globals().get("apply_display_preferences")
+        if apply_palette is not None:
+            apply_palette()
 
     def reset(self):
         for key, default in self._persistent_fields.items():
@@ -878,7 +954,7 @@ class SettingsData:
         return "Turn Reduce motion off to edit this setting."
 
     def effective_setting(self, attr):
-        """Return a motion-safe value without overwriting the user's choice."""
+        # use the override here, keep the saved choice
         if (
             attr in {"master", "sound", "ambient", "sfx", "dialogue", "music"}
             and getattr(self, "disable_audio_completely", False)
@@ -920,7 +996,7 @@ game = SystemData()
 
 
 class KeyBinds:
-    """Compatibility view over keybind values now owned by SettingsData."""
+    # binds are saved with settings now
 
     def __init__(self, owner):
         object.__setattr__(self, "_owner", owner)
@@ -1016,17 +1092,27 @@ unstrike = ESC + "29m"
 uncolor = ESC + "39m"
 unbg = ESC + "49m"
 # ...but at least they work.
+_DEFAULT_READABILITY_PALETTE = {name: globals()[name] for name in ("x0", "x1", "x2", "x7", "x8", "x9")}
 
-# Terminal clearing is deliberately composed from several layers.  `clear`
-# is terminfo-aware, but older macOS terminfo entries only emit the visible
-# screen operation.  CSI 3J is the widely supported erase-saved-lines
-# extension, and iTerm2 has an additional vendor-specific history command.
+
+def apply_display_preferences():
+    globals().update(_DEFAULT_READABILITY_PALETTE)
+    if setting.high_contrast_colors:
+        globals().update(x0=rgb(180, 180, 180), x1=rgb(110, 185, 255),
+                         x2=rgb(100, 230, 130), x7=rgb(242, 242, 242),
+                         x8=rgb(195, 195, 195), x9=rgb(150, 170, 255))
+
+
+apply_display_preferences()
+
+
+# clear needs extra commands on some terminals to remove scrollback too
 _terminal_clear_cache_key = None
 _terminal_clear_payload_cache = None
 
 
 def _terminal_command_output(command, *arguments):
-    """Return a terminal-control command's stdout without invoking a shell."""
+    # run the terminal command and get its output
     try:
         result = subprocess.run(
             [command, *arguments],
@@ -1047,20 +1133,17 @@ def _terminal_command_output(command, *arguments):
 
 
 def _safe_terminal_fragment(output):
-    """Reject capability output that could itself create scrollback."""
+    # skip clear commands that would add new lines
     if not output:
         return b""
-    # A terminfo entry is allowed to use control characters, but a clear
-    # implementation containing LF/CR/form-feed would create new terminal
-    # rows before our explicit erase sequence runs.  The direct CSI fallback
-    # below is safer in that case.
+    # keep escape codes, reject other control characters that could add rows
     if any(byte < 0x20 and byte != 0x1B for byte in output):
         return b""
     return output
 
 
 def _get_terminal_clear_payload():
-    """Build a screen-and-history clear sequence for the active terminal."""
+    # prepare the commands to clear the screen and scrollback
     global _terminal_clear_cache_key, _terminal_clear_payload_cache
 
     cache_key = (
@@ -1076,26 +1159,20 @@ def _get_terminal_clear_payload():
 
     parts = []
 
-    # Keep the terminal-specific visible-screen operation when available.
-    # Do not treat it as complete: macOS may return only CSI 2J here.
+    # use the terminal's clear command first, it may only clear the screen
     clear = shutil.which("clear")
     if clear:
         parts.append(_safe_terminal_fragment(_terminal_command_output(clear)))
 
-    # E3 is the terminfo extension for erasing saved lines.  It is useful on
-    # terminals whose scrollback operation is not literally CSI 3J.
+    # E3 clears saved lines on terminals that support it
     tput = shutil.which("tput")
     if tput:
         parts.append(_safe_terminal_fragment(_terminal_command_output(tput, "E3")))
 
-    # Always include the explicit pair.  It covers macOS Terminal.app,
-    # iTerm2, Warp, xterm-compatible terminals, and terminals whose local
-    # terminfo database omits E3.  The order is intentional: clear the
-    # viewport, erase saved lines, then home the cursor.
+    # clear the screen, clear scrollback, move back to top left
     parts.append(b"\x1b[2J\x1b[3J\x1b[1;1H")
 
-    # iTerm2 documents this as its native history-clear operation.  Unknown
-    # terminals never receive it, while CSI 3J remains the generic fallback.
+    # iTerm2 has its own scrollback command too
     if os.environ.get("TERM_PROGRAM") == "iTerm.app":
         parts.append(b"\x1b]1337;ClearScrollback\x1b\\")
 
@@ -1105,7 +1182,7 @@ def _get_terminal_clear_payload():
 
 
 def _write_terminal_bytes(payload):
-    """Write control bytes without introducing a newline or text translation."""
+    # write terminal commands without adding a newline
     if not payload:
         return
 
@@ -1124,7 +1201,7 @@ def _write_terminal_bytes(payload):
             remaining = remaining[written:]
         return
     except (AttributeError, OSError, TypeError, ValueError):
-        # Keep cls() usable with redirected output and test doubles.
+        # if direct terminal output fails, try normal stdout
         try:
             sys.stdout.write(payload.decode("utf-8", errors="replace"))
             sys.stdout.flush()
@@ -1132,9 +1209,8 @@ def _write_terminal_bytes(payload):
             pass
 
 
-# Clear the terminal and scrollback, then return the cursor to the top-left corner.
+# clear the screen and old scrollback too
 def cls():
-    """Clear the screen and scrollback, then home the cursor."""
     _write_terminal_bytes(_get_terminal_clear_payload())
 
 # animation configs!! for accessibility settings.
@@ -1147,12 +1223,11 @@ def animation_speed_name():
 
 
 def animation_rate():
-    value = setting.effective_setting("animation_speed")
-    return 1.0 if value >= 10 else 1.0 + value / 10
+    return setting.effective_setting("animation_speed")
 
 
 def animations_enabled():
-    return animation_speed_name() != "Instant"
+    return not getattr(setting, "reduce_motion", False)
 
 
 def animation_sleep(seconds):
@@ -1178,7 +1253,7 @@ def screen_wipe(mode, delay_ms):
 
 
 def open_text_file(path):
-    """Open a text file in the platform's editor and wait when supported."""
+    # open the file in a text editor, wait if the editor allows it
     resolved_path = Path(path)
     if not resolved_path.is_absolute():
         resolved_path = PROJECT_ROOT / resolved_path
@@ -1213,6 +1288,11 @@ def open_text_file(path):
 
 # INTERACTIVITY TIME! Sound() plays a sound effect. It does this by writing the command to a text file, which is then read by the sound player.
 def sound(cmd, channel="sound", pan=0.0):
+    navigation_sounds = {"switch", "woosh", "setting_battles", "settings_graphics",
+                         "settings_music", "setting_keybinds", "setting_accessibility"}
+    if (channel == "sound" and not getattr(setting, "menu_feedback_sounds", True)
+            and (str(cmd).partition(" ")[0] in navigation_sounds or str(cmd).startswith("map_"))):
+        return
     if channel not in ("sound", "ambient", "sfx", "dialogue", "music"): # set your type!
         raise ValueError(f"Unknown audio channel: {channel}")
     pan = max(-1.0, min(1.0, float(pan)))
@@ -1228,11 +1308,7 @@ def sound(cmd, channel="sound", pan=0.0):
 def update(path, value):
     # Normalize path
     full_path = os.path.join(os.getcwd(), path + ".txt")
-    # Ensure directory exists
-    os.makedirs(os.path.dirname(full_path), exist_ok=True)
-    # Overwrite file
-    with open(full_path, "w", encoding="utf-8") as f:
-        f.write(str(value))
+    write_file(full_path, value)
         
 def read(path, default=None):
     full_path = os.path.join(os.getcwd(), path + ".txt")
@@ -1277,7 +1353,7 @@ def _load_armor_item_fields(target, parts, category):
         target.defense = stored_defense
         target.level_power = float(parts[8])
     else:
-        # Legacy armor stored its already-scaled Defense in field five.
+        # old armor files stored scaled defense in field five
         target.level_power = ARMOR_LEVEL_POWER_DEFAULTS.get(target.rarity, 0.035)
         target.defense = get_base_equipment_stat(
             stored_defense,
@@ -1324,10 +1400,42 @@ def compact_number(value):
     return int(value) if value.is_integer() else value
 
 
+def format_number(value):
+    # format the displayed number, keep the actual value unchanged
+    numeric = float(value)
+    if getattr(globals().get("setting"), "number_format", "Full") == "Compact":
+        for scale, suffix in ((1_000_000_000, "b"), (1_000_000, "m"), (1_000, "k")):
+            if abs(numeric) >= scale:
+                # 999.95k rounds to 1m
+                scaled = round(numeric / scale, 1)
+                if abs(scaled) >= 1000 and scale < 1_000_000_000:
+                    larger = {1_000: (1_000_000, "m"), 1_000_000: (1_000_000_000, "b")}
+                    scale, suffix = larger[scale]
+                    scaled = round(numeric / scale, 1)
+                return f"{scaled:g}{suffix}"
+    if numeric.is_integer():
+        return f"{int(numeric):,}"
+    return f"{numeric:,.2f}".rstrip("0").rstrip(".")
+
+
+def menu_navigation_key(pressed):
+    # turn custom movement keys into up/down/left/right
+    if not isinstance(pressed, str):
+        return pressed
+    lowered = pressed.lower()
+    if lowered in {"up", "down", "left", "right"}:
+        return lowered
+    for direction in ("up", "down", "left", "right"):
+        if lowered == getattr(setting, "menu_" + direction):
+            return direction
+    return lowered
+
+
 def format_fragment_stat(stat_name, value, signed=False):
     stat_name = normalize_fragment_stat(stat_name) or "Unknown"
     value = compact_number(value)
     sign = "+" if signed and float(value) >= 0 else ""
+    value = format_number(value)
     if stat_name in FRAGMENT_PERCENT_STATS:
         label = stat_name[:-2] if stat_name.endswith(" %") else stat_name
         return f"{sign}{value}% {label}"
@@ -1351,6 +1459,7 @@ def format_fragment_set_effect(effect_name, value):
     )
     value = compact_number(value)
     sign = "+" if float(value) >= 0 else ""
+    value = format_number(value)
     suffix = "%" if percent else ""
     return f"{sign}{value}{suffix} {label}"
 
@@ -1660,22 +1769,24 @@ def load_item(item_id, category="Weapons"):
             if not os.path.exists(path):
                 continue
 
-            with open(path, "r", encoding="utf-8") as f:
-                content = f.readline().strip()
-
-            if content.lower() == "none" or content == "":
-                continue
-
             try:
-                loaded = load_item(content, cat)
-            except (OSError, ValueError, IndexError):
-                if cat == "Fragments":
-                    update(
-                        os.path.splitext(os.path.join("Items", filename))[0],
-                        "none",
-                    )
+                with open(path, "r", encoding="utf-8") as f:
+                    content = f.readline().strip()
+                if content.lower() == "none" or content == "":
                     continue
-                raise
+                active_id = int(content)
+                if active_id <= 0:
+                    raise ValueError("Invalid item ID")
+                loaded = load_item(active_id, cat)
+                if cat == "Fragments" and loaded.slot != defaults["slot"]:
+                    raise ValueError("Wrong fragment slot")
+            except (FileNotFoundError, ValueError, TypeError, IndexError, UnicodeError):
+                _reset_object(obj, defaults)
+                update(
+                    os.path.splitext(os.path.join("Items", filename))[0],
+                    "none",
+                )
+                continue
             if cat == "Fragments":
                 _reset_object(obj, vars(loaded))
 
@@ -1726,7 +1837,7 @@ def load_item(item_id, category="Weapons"):
         item.locked = int(item.locked)
         item.refine = max(
             0,
-            min(WEAPON_REFINEMENT_MAX, int(item.refine)),
+            min(WEAPON_REFINEMENT_MAX, int(item.refine or 0)),
         )
 
         type_map = {
@@ -1811,8 +1922,7 @@ def save_item(item_id, category="Weapons"):
 
     line = ";;".join(parts)
 
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(line)
+    write_file(path, line)
 
 def load_binds():
     bind.load()
@@ -1970,7 +2080,7 @@ def get_actual_defense(item_obj, level=None):
 
 
 def scale_fragment_bonus(key, value):
-    """Return the effective value granted by one fragment stat or set effect."""
+    # calculate the bonus from a fragment stat or set
     scaled = float(value) * FRAGMENT_BONUS_SCALES.get(key, 1.0)
     if key == "hp_percent":
         return round(scaled)
@@ -1993,7 +2103,6 @@ def scale_fragment_stat(stat_name, value):
 
 
 def fragment_stat_icon(stat_name):
-    """Return a compact Unicode icon for a fragment stat."""
     return {
         "ATK": "⚔",
         "ATK %": "⚔",
@@ -2136,7 +2245,7 @@ def draw_box_text(text: str, y1: int, x1: int, y2: int, x2: int):
 
         # treat whitespace tokens as a single space when wrapping, but preserve surrounding ANSI
         if tok.isspace():
-            space_raw = tok
+            space_raw = ' '
             # collapse to one visible space
             space_vis = 1
             if cur_vis == 0:
@@ -2166,7 +2275,8 @@ def draw_box_text(text: str, y1: int, x1: int, y2: int, x2: int):
                     cur_raw += chunks[0]
                     flush()
                     # append remaining chunks as full lines
-                    for c in chunks[1:]:
+                    remaining = ''.join(chunks[1:])
+                    for c in split_token_chunks(remaining, width):
                         if len(lines) >= height:
                             break
                         lines.append(c)
@@ -2197,8 +2307,8 @@ def draw_box_text(text: str, y1: int, x1: int, y2: int, x2: int):
 
     overflow = False
     # Check if original text (visible) fits into produced lines
-    visible_total = visible_len(ANSI_PATTERN.sub('', text))
-    produced_vis = sum(visible_len(l) for l in lines)
+    visible_total = len(re.sub(r'\s+', '', ANSI_PATTERN.sub('', text)))
+    produced_vis = sum(len(re.sub(r'\s+', '', ANSI_PATTERN.sub('', l))) for l in lines)
     if produced_vis < visible_total or len(lines) > height:
         overflow = True
 
@@ -2208,7 +2318,7 @@ def draw_box_text(text: str, y1: int, x1: int, y2: int, x2: int):
         overflow = True
 
     if overflow and height > 0:
-        last_idx = height - 1
+        last_idx = min(height, len(lines)) - 1
         last = lines[last_idx]
         # compute allowed visible space for ellipsis
         if width <= 3:
@@ -2234,7 +2344,7 @@ def draw_box_text(text: str, y1: int, x1: int, y2: int, x2: int):
                 i += 1
                 cur_vis += 1
             cur = cur.rstrip()
-            lines[last_idx] = cur + ''
+            lines[last_idx] = cur + '...'
 
     # pad with empty lines if necessary
     while len(lines) < height:
@@ -2248,14 +2358,18 @@ def draw_box_text(text: str, y1: int, x1: int, y2: int, x2: int):
     return lines
 
 def center(text, row):
-    cols = os.get_terminal_size().columns
+    cols = shutil.get_terminal_size(fallback=(128, 36)).columns
     text_len = visible_len(text)
     col = max(1, (cols - text_len) // 2 + 1)
     draw_text(col, row, text)
 
 # why? Don't ask. Just... rainbow text. That's all.
-def rainbow(text, offset=0, bold=False, italic=False):
-    offset = offset * animation_rate() if animations_enabled() else 0
+def rainbow(text, offset=0, bold=False, italic=False, preview=False, speed=None):
+    if not preview and not getattr(setting, "rainbow_text", True):
+        style = ("\033[1m" if bold else "") + ("\033[3m" if italic else "")
+        return f"\033[38;2;255;255;255m{style}{text}\033[0m"
+    rate = animation_rate() if speed is None else speed
+    offset = offset * rate if animations_enabled() else 0
     colors = [
         (255, 100, 100),
         (255, 180, 100),
@@ -2290,18 +2404,21 @@ def rainbow(text, offset=0, bold=False, italic=False):
 
 # Now THIS is the MVP function. Amazing for animations.
 # Unlike rainbow, which just cycles through colors, this creates a "shine" effect that travels across the text. You can customize the color, width, intensity, and speed of the shine.
-def shine(text, offset=0, color=(255, 255, 0), bold=False):
-    style = "\033[1m" if bold else ""
-    if not animations_enabled():
+def shine(text, offset=0, color=(255, 255, 0), bold=False, start_color=None, italics=False, underline=False, fade_out=False, preview=False, speed=None):
+    style = ("\033[1m" if bold else "") + ("\033[3m" if italics else "") + ("\033[4m" if underline else "")
+    if start_color is None:
+        start_color = (255, 255, 255)
+    if not animations_enabled() or (not preview and not getattr(setting, "text_shine", True)):
         r, g, b = color
         return f"\033[38;2;{r};{g};{b}m{style}{text}\033[0m"
 
-    offset *= animation_rate()
+    rate = animation_rate() if speed is None else speed
+    offset *= rate if not fade_out else 1
     result = ""
     length = max(len(text), 1)
 
     # 🔁 cycle
-    cycle = offset % 1.0
+    cycle = max(0, min(1, offset)) if fade_out else offset % 1.0
 
     # ⚙️ tuning
     active_window = 0.75   # how long shine is active
@@ -2311,9 +2428,14 @@ def shine(text, offset=0, color=(255, 255, 0), bold=False):
     for i, char in enumerate(text):
         t = i / (length - 1) if length > 1 else 0
 
-        if cycle > active_window:
+        if fade_out:
+            strength = max(0, min(1, (cycle * (1 + width) - t) / width))
+            r = int(start_color[0] * (1 - strength) + color[0] * strength)
+            g = int(start_color[1] * (1 - strength) + color[1] * strength)
+            b = int(start_color[2] * (1 - strength) + color[2] * strength)
+        elif cycle > active_window:
             # 💤 fully idle (no shine at all)
-            r, g, b = 255, 255, 255
+            r, g, b = start_color
 
         else:
             # normalize 0 → 1 within active window
@@ -2327,25 +2449,78 @@ def shine(text, offset=0, color=(255, 255, 0), bold=False):
             # smooth falloff
             strength = max(0, 1 - dist * intensity)
 
-            r = int(255 * (1 - strength) + color[0] * strength)
-            g = int(255 * (1 - strength) + color[1] * strength)
-            b = int(255 * (1 - strength) + color[2] * strength)
+            r = int(start_color[0] * (1 - strength) + color[0] * strength)
+            g = int(start_color[1] * (1 - strength) + color[1] * strength)
+            b = int(start_color[2] * (1 - strength) + color[2] * strength)
         result += f"\033[38;2;{r};{g};{b}m{style}{char}"
     return result + "\033[0m"
 
-# Render the filled cells used by terminal art as background-coloured spaces.
-# A block glyph has a font-dependent shape and can leave hairline gaps between
-# adjacent cells.  A coloured space fills exactly one terminal cell instead.
+def flipboard(text, offset=0, color=(255, 255, 0), bold=False, italics=False, underline=False, start_text=None, quick=False, preview=False):
+    style = ("\033[1m" if bold else "") + ("\033[3m" if italics else "") + ("\033[4m" if underline else "")
+    if isinstance(color, str):
+        text_color = color
+    else:
+        r, g, b = color
+        text_color = f"\033[38;2;{r};{g};{b}m"
+    if not animations_enabled() or (not preview and not getattr(setting, "flipboard_animations", True)) or offset >= 1:
+        return f"{text_color}{style}{text}\033[0m"
+    if offset <= 0:
+        if start_text is not None:
+            return f"{text_color}{style}{start_text[:len(text)].ljust(len(text))}\033[0m"
+        return " " * len(text)
+
+    alphabet = "0123456789abcdefghijklmnopqrstuvwxyz"
+    if start_text is not None:
+        start_text = start_text[:len(text)].ljust(len(text))
+        result = ""
+        for i, char in enumerate(text):
+            start = alphabet.find(start_text[i].lower())
+            if start < 0:
+                start = (i * 11 + 7) % len(alphabet)
+            target = alphabet.find(char.lower())
+            progress = min(1, offset / (0.65 + (i % 4) * 0.08))
+            if progress >= 1 or start_text[i] == char:
+                result += char
+            elif quick:
+                source = start_text[i]
+                if source.isascii() and source.isdigit() and char.isascii() and char.isdigit():
+                    distance = (int(char) - int(source)) % 10
+                    if distance > 5:
+                        distance -= 10
+                    result += str((int(source) + round(progress * distance)) % 10)
+                else:
+                    letters = source + char
+                    result += letters[1 if progress >= 0.5 else 0]
+            else:
+                distance = (target - start) % len(alphabet)
+                step = int(progress * (len(alphabet) * 2 + distance))
+                if step == 0:
+                    result += start_text[i]
+                else:
+                    letter = alphabet[(start + step) % len(alphabet)]
+                    result += letter.upper() if char.isupper() else letter
+        return f"{text_color}{style}{result}\033[0m"
+    step = min(len(alphabet) - 1, int(offset * len(alphabet)))
+    result = ""
+    for char in text:
+        if char.isspace():
+            result += char
+            continue
+        target = alphabet.find(char.lower())
+        if target < 0:
+            result += alphabet[step]
+        else:
+            letter = alphabet[min(step, target)]
+            result += letter.upper() if char.isupper() else letter
+    return f"{text_color}{style}{result}\033[0m"
+
+
+# colored spaces fill the whole cell, blocks can leave gaps depending on the font
 _SGR_PATTERN = re.compile(r"\x1b\[([0-9;]*)m")
 
 
 def background_blocks(text, default_background=None):
-    """Replace ``█`` cells with background-coloured spaces.
-
-    The current true-colour foreground is used as the matching background, so
-    existing art can keep its per-cell colour palette.  ``default_background``
-    is used for uncoloured art such as the large number renderer.
-    """
+    # use colored spaces instead of blocks; keep the text color as the background
     if not text or "█" not in text:
         return text
 
@@ -2466,12 +2641,10 @@ def bignumber_db(digit):
     return art.get(digit, ["        "] * 5)
 
 def bignumber(number_str, display=False, background=None):
-    """Return five rows of large digits, optionally using coloured spaces."""
     if not number_str.isdigit() or len(number_str) < 1 or len(number_str) > 3:
         return None
 
-    # White is the neutral/default number colour.  Callers such as level-up
-    # pass a blue background explicitly when that screen needs it.
+    # white by default, other screens can choose their own background
     if background is None:
         background = globals().get(
             "xbf",
@@ -2497,10 +2670,19 @@ Here's where... you really don't want to look. This is the absolute mess of hard
 creates the actual game interface. It's a nightmare to maintain, but it works, so good luck.
 """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 
+def reward_number_art(value, background):
+    art = bignumber(str(value), background=background)
+    if art is not None:
+        return art
+    label = format_number(value)
+    width = max(17, len(label))
+    return [" " * width, " " * width, f"{xf}{bold}{label:^{width}}{reset}", " " * width, " " * width]
+
+
 def levelup():
     # don't overflow :c
     max_level = 100
-    if player.level >= max_level:
+    if player.level >= max_level or player.xp < player.xpneeded:
         game.goto = mainmenu
         return
 
@@ -2573,8 +2755,7 @@ def levelup():
     
     added_defense = levels_gained * 0.3
     
-    # Level-up numbers are intentionally white even though the battle number
-    # renderer uses blue for its resting cells.
+    # keep level-up numbers white
     graph = bignumber(str(level), display=False, background=xbf)
 
     print(background_blocks(f"""
@@ -2693,9 +2874,9 @@ def mainmenu():
         cls()
         # if it's nighttime (between 8pm and 6am), display stars in the background (but only if there is space and isn't already being occupied)
         current_hour = time.localtime().tm_hour
-        if current_hour >= 20 or current_hour < 6:
+        if setting.menu_background_decoration and (current_hour >= 20 or current_hour < 6):
             for _ in range(random.randint(30, 100)):
-                x = random.randint(1, os.get_terminal_size().columns)
+                x = random.randint(1, shutil.get_terminal_size(fallback=(128, 36)).columns)
                 y = random.randint(1, 15)
                 # make the stars more random in shape
                 star_shape = random.choice(["⁺", "⋆", "₊"])
@@ -2750,8 +2931,11 @@ def mainmenu():
     while True:
         if animate_menu_effects:
             offset += 0.005
-        print(f"[33;1H{x8}______│_____│_______│_____│_______│__[ == ==]/{x7}.::::::;;; {xlred}{bold}{shine("[B] to battle",offset=offset, color=(255, 71, 76), bold=True)}{reset}{x7} ;;;:::::::.{x8}\\[=  == ]___│_______│_______│_______│___│__{reset}")
-        print(f"[35;53H{reset}{shine('[Ctrl+T] to modify data', offset=offset, bold=True,color=(132, 224, 133))}",end="",flush=True)
+        print(f"[33;1H{x8}______│_____│_______│_____│_______│__[ == ==]/{x7}.::::::;;; {xlred}{bold}{shine('[B] to battle',offset=offset, color=(255, 71, 76), bold=True)}{reset}{x7} ;;;:::::::.{x8}\\[=  == ]___│_______│_______│_______│___│__{reset}")
+        shortcut_hint = f"[{setting.open_inventory.upper()}] Inventory  [{setting.open_character.upper()}] Character  [{setting.open_settings.upper()}] Settings"
+        draw_text(2, 35, f"{xf}{shortcut_hint[:47]:<47}{reset}")
+        if setting.debug_shortcuts:
+            print(f"[35;53H{reset}{shine('[Ctrl+T] to modify data', offset=offset, bold=True,color=(132, 224, 133))}",end="",flush=True)
         k = key(timeout=0 if animate_menu_effects else None)
         if k.lower() == "b":
             sound("woosh")
@@ -2761,21 +2945,30 @@ def mainmenu():
         if k.lower() == "1":
             game.goto = house
             return
+        if k.lower() == setting.open_inventory:
+            game.goto = inventory
+            return
+        if k.lower() == setting.open_character:
+            game.goto = character
+            return
+        if k.lower() == setting.open_settings:
+            game.goto = settings
+            return
         # cheats interface (terminal) => Ctrl+T
-        if k.lower() == "ctrl/t" or k.lower() == "t":
+        if setting.debug_shortcuts and k.lower() in ("ctrl/t", "t"):
             game.goto = internal_modify
             return
-        if k.lower() == "ctrl/t" or k.lower() == "k":
+        if setting.debug_shortcuts and k.lower() == "k":
             game.goto = internal_modify_beta
             return
         if animate_menu_effects:
             time.sleep(0.01)
         # play sound: ctrl+R
-        if k.lower() == "ctrl/r":
+        if setting.debug_shortcuts and k.lower() == "ctrl/r":
             game.goto = testsounds
             return
         # force levelup: ctrl+L
-        if k.lower() == "ctrl/l":
+        if setting.debug_shortcuts and k.lower() == "ctrl/l":
             player.xp = player.xpneeded
             player.save()
             game.goto = mainmenu
@@ -2846,7 +3039,7 @@ def internal_modify_beta():
         sys.stdout.flush()
 
     def redraw_console(force=False):
-        """Redraw only console rows whose visible content has changed."""
+        # only redraw rows that changed
         width = terminal_width()
         frame = []
         for index in range(console_height):
@@ -2871,7 +3064,7 @@ def internal_modify_beta():
         lines[30] = line
 
     def autocomplete(command):
-        """Build a lightweight autocomplete overlay without changing history."""
+        # show suggestions without adding them to command history
         nonlocal autocomplete_rows
         matches = sorted(
             name for name in command_colors
@@ -3524,7 +3717,7 @@ Type an attribute name to override.
                 new_value = parse_override_value(raw_value)
                 setattr(target_obj, field, new_value)
 
-                # Persist canonical player/settings fields automatically.
+                # save changed player values and settings
                 if target_obj is player and field in getattr(player, "_persistent_fields", {}):
                     player.save()
                     save_note = " (saved to Player/data.txt)"
@@ -3584,6 +3777,7 @@ def battle():
     d.frombattle = True
     d.first_turn = True
     d.latest_action = ""
+    d.battle_action_history = []
     cls()
     game.goto = character # load stuff then immediately jump to battle2() from there
     return
@@ -3595,21 +3789,31 @@ def whose_turn():
         return "enemy" # enemy
     return "none" # regen
 
+def simple_text(text, short_text):
+    return short_text if setting.simplify_tutorials else text
+
+
+def setting_description(item):
+    if setting.simplify_tutorials:
+        return SIMPLE_DESCRIPTIONS.get(item["attr"], item["description"])
+    return item["description"]
+
+
 def player_turn():
     d.latest_action += f"\n  {xf}→ Your turn, waiting for key..."
     battle_show_data()
     k = key()
-    if k == "2":
+    if k == "2" and setting.debug_shortcuts:
         player.hp = max(1, round(player.total_hp * 0.2))
         d.latest_action = f"{xlyellow}⚙  HP set to 20%{reset}"
         battle_show_data()
         return
-    elif k == "6":
+    elif k == "6" and setting.debug_shortcuts:
         player.hp = max(1, round(player.total_hp * 0.6))
         d.latest_action = f"{xlyellow}⚙  HP set to 60%{reset}"
         battle_show_data()
         return
-    elif k == "0":
+    elif k == "0" and setting.debug_shortcuts:
         enemy.hp = 0
         game.goto = battle_win
         return
@@ -3626,8 +3830,15 @@ def player_turn():
         game.goto = battle_heal
         return
     elif k.lower() == bind.forfeit:
-        game.goto = mainmenu
-        return
+        print(f"{xlred}Forfeit this battle? {bind.confirm.upper()} / {bind.deny.upper()}{reset}")
+        while True:
+            answer = key().lower()
+            if answer in (bind.confirm, "enter"):
+                game.goto = mainmenu
+                return
+            if answer in (bind.deny, bind.back, "esc"):
+                game.goto = player_turn
+                return
 
 def enemy_turn():
     d.latest_action += f"\n  {xf}→ Enemy's turn, attacking..."
@@ -3644,7 +3855,7 @@ def new_turn():
                  * getattr(player, "healing_received_multiplier", 1)
              )
              player.hp = min(player.total_hp, player.hp + heal_amount)
-             d.latest_action += f"\n  {xb}💧  Regenerated {heal_amount} HP{reset}"
+             d.latest_action += f"\n  {xb}💧  Regenerated {format_number(heal_amount)} HP{reset}"
     d.first_turn = False
     
     # if player hp is above max, set it to max
@@ -3678,288 +3889,25 @@ def battle_lose():
     game.goto = mainmenu
     return
 
-def battle_win():
-    # check remaining hp percentage
-    remaining_hp_pct = (player.hp / player.total_hp) * 100
-    if remaining_hp_pct >= 80:
-        text = random.choice(["Excellent!", "Stellar performance!", "Outstanding!", "Perfect!", "Battle over!", "Well done!", "Nice work!", "You win!", "Victory!"])
-        sound("end_excellent")
-        atype = 1
-    elif remaining_hp_pct >= 50:
-        text = random.choice(["Great job!", "Quick victory!", "Well played!", "Great performance!", "Battle over!", "Well done!", "Nice work!", "You win!", "Victory!"])
-        sound("end_great")
-        atype = 2
-    else:
-        sound("end_good")
-        text = random.choice(["Battle over!", "Well done!", "Nice work!", "You win!", "Victory!"])
-        atype = 3
-
-    # celebration levels: 0 = minimal, 1 = small, 2 = regular, 3 = extreme
-    celebration_mode = getattr(setting, "victory_celebration", 2)
-    effective_setting = getattr(setting, "effective_setting", None)
-    if callable(effective_setting):
-        celebration_mode = effective_setting("victory_celebration")
-    try:
-        celebration_mode = max(0, min(3, int(celebration_mode)))
-    except (TypeError, ValueError):
-        celebration_mode = 2
-    # keep reduced motion local to this animation
-    if getattr(setting, "reduce_motion", False) or not animations_enabled():
-        celebration_mode = 0
-    
-    # scale the xp reward from remaining health
-    level_progress = max(0.0, (float(player.level) - 1.0) / 89.0)
-    full_health_bonus = 8.0 * (150.0 / 8.0) ** (level_progress ** 1.33)
-    health_ratio = max(0.0, min(1.0, remaining_hp_pct / 100.0))
-    health_xp_bonus = round(full_health_bonus * health_ratio ** 0.75)
-    if celebration_mode == 0:
-        cls()
-    else:
-        screen_wipe("normal",10)
-    
-    totalxp = round(enemy.xp_reward + health_xp_bonus)
-    gold_reward = max(0, int(enemy.gold_reward))
-    totalgold = max(0, round(gold_reward * health_ratio ** 0.75))
-
-    # local animation controls
-    xp_animation_duration = 1.8
-    xp_animation_tick_amount = 1
-    gold_animation_duration = 0.675
-    gold_animation_tick_amount = 25
-    gold_animation_max_ticks = 10
-    gold_animation_acceleration = 1.20
-    gold_animation_pitch_rise = 0.16
-    gold_animation_delay = 0.3
-    star_to_number_delay = 0.2
-    notice_fade_duration = 0.5
-    confirmation_fade_duration = 0.5
-    title_animation_timeout = 0.05
-
-    xp_animation_tick_amount = max(1, int(xp_animation_tick_amount))
-    gold_animation_tick_amount = max(1, int(gold_animation_tick_amount))
-
-    # keep live xp separate from the reward number
-    animated_level = min(CHARACTER_MAX_LEVEL, max(1, int(getattr(player, "level", 1))))
-    animated_xp = max(0, int(getattr(player, "xp", 0)))
-    animated_xpneeded = max(1, int(getattr(player, "xpneeded", 1)))
-    earned_xp = 0
-    xp_required_for_next = animated_xpneeded
-    if animated_level >= CHARACTER_MAX_LEVEL:
-        xp_required_for_next = 0
-
-    thresholds = [
-        (0, x8), (5, x7), (10, xf), (15, x3), (20, x9), (25, xb),
-        (30, x2), (35, xa), (40, xlorange), (45, xlyellow), (50, xe),
-        (55, x5), (60, xd), (65, xlred), (70, xc), (75, x4),
-        (80, rgb(184, 172, 246)), (85, rgb(254, 163, 98)),
-        (90, rgb(186, 243, 219)), (95, rgb(255, 131, 101)),
-        (100, rgb(227, 62, 57)),
-    ]
-    color_milestones = [req_level for req_level, color in thresholds if req_level > 0]
-    player_color = x8
-    for req_level, color in thresholds:
-        if animated_level >= req_level:
-            player_color = color
-    color_values = re.search(r"38;2;(\d+);(\d+);(\d+)m", player_color)
-    player_rgb = tuple(int(value) for value in color_values.groups()) if color_values else (94, 94, 94)
-    xp_color = rgback(*player_rgb)
-    xp_dark_color = rgback(*tuple(max(0, round(value * 0.22)) for value in player_rgb))
-    levelup_notice = ""
-    color_notice = ""
-    levelup_notice_start = 0.0
-    color_notice_start = 0.0
-    notice_width = len("New color unlocked!")
-    levelup_notice_frame = " " * notice_width
-    color_notice_frame = " " * notice_width
-
-    gold_animation_tick_count = min(gold_animation_max_ticks, max(1, math.ceil(totalgold / gold_animation_tick_amount))) if totalgold > 0 and celebration_mode >= 2 else 0
-    gold_animation_pitches = []
-
-    gold_animation_started = False
-    gold_animation_start = 0.0
-    gold_animation_tick = 0
-    gold_count = 0
-    gold_balance_start = int(getattr(player, "money", 0))
-    gold_amount_text = str(totalgold)
-    gold_balance_text = f"{gold_balance_start + totalgold:,}"
-    gold_frame_text = f"¤ +{gold_amount_text} gold → {gold_balance_text}"
-    gold_row = 31
-    # esc#3 and esc#4 use double-size cells
-    gold_column = max(1, (os.get_terminal_size().columns - visible_len(gold_frame_text) * 2) // 4)
-
-    title_text = random.choice([
-        "your progress to level",
-        "your advancement to level",
-        "here's your progress to level",
-        "your journey to level",
-        "your path to level",
-        "your quest to level",
-    ])
-    
-    if celebration_mode > 0:
-        move(4,1)
-
-        print(f"""
-#5{" "*120}
-#3{xlyellow}                 ╭────────────────────────╮
-#4{xlyellow}                 ╭────────────────────────╮
-#3{xlyellow}                 │{" " * ((24 - len(text)) // 2)}{xa}{bold}{shine(text=text,offset=time.time(),bold=True,color=(240, 232, 158))}{reset}{xlyellow}{" " * ((24 - len(text)) // 2)}│
-#4{xlyellow}                 │{" " * ((24 - len(text)) // 2)}{xa}{bold}{shine(text=text,offset=time.time(),bold=True,color=(240, 232, 158))}{reset}{xlyellow}{" " * ((24 - len(text)) // 2)}│
-#3{xlyellow}                 ╰────────────────────────╯
-#4{xlyellow}                 ╰────────────────────────╯
-""")
-    
-    move(15,30)
-
-    z = totalxp
-    # minimal uses the final animated layout
-    start_row = 5
-    text_row = 13
-    milestone_shifts = 0
-    max_title_shifts = 5
-    max_number_shifts = 5
-    xp_bar_length = 50
-    xp_notification_column = 33 + xp_bar_length + 6
-    next_level = str(animated_level + 1) if animated_level < CHARACTER_MAX_LEVEL else "MAX"
-    pt = f"{bold}{player_color}XP earned{unbold} {xf}· {title_text} {bold}{player_color}{next_level}:{reset}"
-    xp_animation_tick_count = max(1, math.ceil(totalxp / xp_animation_tick_amount)) if totalxp > 0 else 1
-    xp_animation_start = time.perf_counter()
-
-    milestone_values = sorted(set(
-        round(z * milestone_ratio) for milestone_ratio in (0.8, 0.85, 0.9, 0.95, 0.98, 0.99, 1)
-    )) if z > 0 else []
-    ms = milestone_values if celebration_mode > 0 else []
-    milestone_index = 0
-    if celebration_mode == 0:
-        # match the animated resting coordinates
-        milestone_count = min(max_title_shifts, len(set(milestone_values)))
-        start_row += milestone_count
-        text_row += min(max_number_shifts, milestone_count)
-    if celebration_mode > 0:
-        count_values = range(xp_animation_tick_count)
-    else:
-        count_values = range(1)
-    extra_xp = 0
-    bonus_label = ""
-    rowinfo = " "
-
-    for xp_tick in count_values:
-        if z > 0:
-            if celebration_mode == 0:
-                xp_tick_start = 0
-                xp_tick_end = z
-            else:
-                xp_tick_start = xp_tick * xp_animation_tick_amount
-                xp_tick_end = min(z, (xp_tick + 1) * xp_animation_tick_amount)
-            xp_tick_amount = max(0, xp_tick_end - xp_tick_start)
-        else:
-            xp_tick_amount = 0
-        earned_xp = min(z, earned_xp + xp_tick_amount)
-        animated_xp += xp_tick_amount
-
-        # apply levelups inline
-        while (
-            animated_level < CHARACTER_MAX_LEVEL
-            and animated_xp >= animated_xpneeded
-        ):
-            xp_for_next = animated_xpneeded
-            animated_xp -= xp_for_next
-            animated_level += 1
-            sound("inside_levelup")
-            levelup_notice = "Level up!"
-            levelup_notice_start = time.perf_counter()
-            if animated_level in color_milestones:
-                color_notice = "New color unlocked!"
-                color_notice_start = time.perf_counter()
-            if animated_level < CHARACTER_MAX_LEVEL:
-                xp_for_next = round(xp_for_next + 15 + animated_level / 4)
-            animated_xpneeded = round(xp_for_next)
-            player_color = x8
-            for req_level, color in thresholds:
-                if animated_level >= req_level:
-                    player_color = color
-            color_values = re.search(r"38;2;(\d+);(\d+);(\d+)m", player_color)
-            player_rgb = tuple(int(value) for value in color_values.groups()) if color_values else (94, 94, 94)
-            xp_color = rgback(*player_rgb)
-            xp_dark_color = rgback(*tuple(max(0, round(value * 0.22)) for value in player_rgb))
-
-        while (
-            milestone_index < len(ms)
-            and earned_xp >= ms[milestone_index]
-            and milestone_shifts < max_title_shifts
-        ):
-            print(
-                "".join(
-                    f"[{start_row + 1 + offset};1H[2K#5"
-                    for offset in range(6)
-                ),
-                end="",
-            )
-            start_row += 1
-            if milestone_shifts < max_number_shifts:
-                print(
-                    "".join(
-                        f"[{row};1H#5[2K"
-                        for row in range(text_row, text_row + 12)
-                    ),
-                    end="",
-                )
-                text_row += 1
-            milestone_shifts += 1
-            milestone_index += 1
-
-        notice_time = time.perf_counter()
-        if levelup_notice and notice_time - levelup_notice_start < notice_fade_duration:
-            notice_progress = max(0.0, min(1.0, (notice_time - levelup_notice_start) / notice_fade_duration))
-            notice_shade = round(242 + (55 - 242) * notice_progress)
-            levelup_notice_frame = f"{rgb(notice_shade, notice_shade, notice_shade)}{bold}{levelup_notice.ljust(notice_width)}{reset}"
-        else:
-            levelup_notice_frame = " " * notice_width
-        if color_notice and notice_time - color_notice_start < notice_fade_duration:
-            notice_progress = max(0.0, min(1.0, (notice_time - color_notice_start) / notice_fade_duration))
-            notice_shade = round(242 + (55 - 242) * notice_progress)
-            color_notice_frame = f"{rgb(notice_shade, notice_shade, notice_shade)}{bold}{color_notice.ljust(notice_width)}{reset}"
-        else:
-            color_notice_frame = " " * notice_width
-        rowinfo = shine(text=bonus_label, offset=time.time(), bold=True, color=(242, 242, 242)) if bonus_label else " "
-        art = bignumber(str(earned_xp), background=xp_color)
-        if art is None:
-            art = bignumber(str(earned_xp % 1000), background=xp_color)
-        length = max(visible_len(art[0]), visible_len(art[1]), visible_len(art[2]), visible_len(art[3]), visible_len(art[4]))
-        text_column = max(1, os.get_terminal_size().columns // 2 - (length // 2) - 3)
-        next_level = str(animated_level + 1) if animated_level < CHARACTER_MAX_LEVEL else "MAX"
-        pt = f"{bold}{player_color}XP earned{unbold} {xf}· {title_text} {bold}{player_color}{next_level}:{reset}"
-        print(f"""
-[{text_row};1H#5[2K[{text_row};{text_column}H{pad_visible(art[0], length)}
-[{text_row+1};1H#5[2K[{text_row+1};{text_column}H{pad_visible(art[1], length)}
-[{text_row+2};1H#5[2K[{text_row+2};{text_column}H{pad_visible(art[2], length)}
-[{text_row+3};1H#5[2K[{text_row+3};{text_column}H{pad_visible(art[3], length)}
-[{text_row+4};1H#5[2K[{text_row+4};{text_column}H{pad_visible(art[4], length)}{reset}
-""",flush=False)
-        
-        print(f"""
+def battle_win_title(text, start_row):
+    # draw the victory box
+    print(f"""
 [{start_row+1};1H#3{xlyellow}                 ╭────────────────────────╮
 [{start_row+2};1H#4{xlyellow}                 ╭────────────────────────╮
 [{start_row+3};1H#3{xlyellow}                 │{" " * ((24 - len(text)) // 2)}{xa}{bold}{shine(text=text,offset=time.time(),bold=True,color=(240, 232, 158))}{reset}{xlyellow}{" " * ((24 - len(text)) // 2)}│
 [{start_row+4};1H#4{xlyellow}                 │{" " * ((24 - len(text)) // 2)}{xa}{bold}{shine(text=text,offset=time.time(),bold=True,color=(240, 232, 158))}{reset}{xlyellow}{" " * ((24 - len(text)) // 2)}│
 [{start_row+5};1H#3{xlyellow}                 ╰────────────────────────╯
 [{start_row+6};1H#4{xlyellow}                 ╰────────────────────────╯
-        """,flush=False)
-        
-        # xp bar - fill in the bar based on the current xp
-        if animated_level >= CHARACTER_MAX_LEVEL:
-            max_xp = 1
-            current_xp = 1
-        else:
-            max_xp = max(1, animated_xpneeded)
-            current_xp = max(0, animated_xp)
-        pc = max(0.0, min(current_xp / max_xp, 1.0))
-        bar = f"{reset}{xp_color} " * round(pc * xp_bar_length) + f"{xp_dark_color} " * (xp_bar_length - round(pc * xp_bar_length)) + f"{reset}"
-        
-        print(f"""
-[{text_row+5};1H#5{xlyellow}{" "*(os.get_terminal_size().columns - 1)}
-[{text_row+6};1H#5{xlyellow}{" " * ((os.get_terminal_size().columns - visible_len(pt)) // 2 - 3)}{pt}
-[{text_row+7};1H#5{xlyellow}{" "*(os.get_terminal_size().columns - 1)}
+""",flush=False)
+
+
+def battle_win_progress(text_row, progress_text, bar, xp_bar_length,
+                        xp_notification_column, levelup_notice_frame, color_notice_frame):
+    # xp bar and the two notices beside it
+    print(f"""
+[{text_row+5};1H#5{xlyellow}{" "*(shutil.get_terminal_size(fallback=(128, 36)).columns - 1)}
+[{text_row+6};1H#5{xlyellow}{" " * ((shutil.get_terminal_size(fallback=(128, 36)).columns - visible_len(progress_text)) // 2 - 3)}{progress_text}
+[{text_row+7};1H#5{xlyellow}{" "*(shutil.get_terminal_size(fallback=(128, 36)).columns - 1)}
 [{text_row+8};1H#5{xlyellow}{" "*33}{f"{xb0} "*(xp_bar_length+4)}{reset}
 [{text_row+9};1H#5{xlyellow}{" "*33}{xb0}  {bar}{xb0}  {reset}
 [{text_row+10};1H#5{xlyellow}{" "*33}{xb0}  {bar}{xb0}  {reset}
@@ -3967,17 +3915,36 @@ def battle_win():
 [{text_row+9};{xp_notification_column}H#5{levelup_notice_frame}
 [{text_row+10};{xp_notification_column}H#5{color_notice_frame}
 """,flush=True)
-        
-        
-        if celebration_mode > 0 and z > 0:
-            target = xp_animation_start + (xp_tick + 1) * xp_animation_duration / xp_animation_tick_count
-            time.sleep(max(0, target - time.perf_counter()))
-    next_level = str(animated_level + 1) if animated_level < CHARACTER_MAX_LEVEL else "MAX"
-    pt = f"{bold}{player_color}XP earned{unbold} {xf}· {title_text} {bold}{player_color}{next_level}:{reset}"
-    print(f"""
-    [{start_row+3};1H#3{xlyellow}                 │{" " * ((24 - len(text)) // 2)}{shine(text=text,offset=time.time(),bold=True,color=(240, 232, 158))}{xlyellow}{" " * ((24 - len(text)) // 2)}│
-    [{start_row+4};1H#4{xlyellow}                 │{" " * ((24 - len(text)) // 2)}{shine(text=text,offset=time.time(),bold=True,color=(240, 232, 158))}{xlyellow}{" " * ((24 - len(text)) // 2)}│
-    """,flush=True)
+
+
+def battle_win_notice(text, started, width, duration, strong=True):
+    if not text:
+        return " " * width
+    elapsed = time.perf_counter() - started
+    if elapsed >= duration:
+        return " " * width
+
+    # fade from light to dark
+    progress = max(0.0, min(1.0, elapsed / duration))
+    shade = round(242 + (55 - 242) * progress)
+    style = bold if strong else unbold
+    return f"{rgb(shade, shade, shade)}{style}{text.ljust(width)}{reset}"
+
+
+def battle_win_xp_bar(level, xp, xpneeded, length, color, dark_color):
+    if level >= CHARACTER_MAX_LEVEL:
+        progress = 1.0
+    else:
+        progress = max(0.0, min(max(0, xp) / max(1, xpneeded), 1.0))
+
+    # filled cells, then the dark part
+    filled = round(progress * length)
+    bar = f"{reset}{color} " * filled
+    bar += f"{dark_color} " * (length - filled)
+    return bar + reset
+
+
+def battle_win_stars(star_tier, celebration_mode):
     # star groups for the three fills
     star_groups = (
         ((2, 24, 25), (3, 22, 27), (4, 20, 29), (5, 22, 27), (6, 24, 25)),
@@ -3993,22 +3960,6 @@ def battle_win():
     )
     star_stages = ((2,), (1, 3), (0, 4))
     star_stage_colours = (xb6, xblyellow, xbe)
-
-    extra_xp = 0
-    bonus_label = ""
-    rowinfo = " "
-    if remaining_hp_pct >= 80:
-        star_tier = 3
-        extra_xp = 100 if animated_level >= CHARACTER_MAX_LEVEL else round(xp_required_for_next * 0.10)
-        bonus_label = f"[+{extra_xp} XP - excellent!]"
-    elif remaining_hp_pct >= 50:
-        star_tier = 2
-        extra_xp = 50 if animated_level >= CHARACTER_MAX_LEVEL else round(xp_required_for_next * 0.05)
-        bonus_label = f"[+{extra_xp} XP - great!]"
-    else:
-        star_tier = 1
-    if bonus_label:
-        rowinfo = f"{reset}{bold}{xf}{bonus_label}{reset}"
 
     star_tier = max(1, min(3, int(star_tier)))
     print(
@@ -4034,374 +3985,112 @@ def battle_win():
                 flush=False,
             )
     sys.stdout.flush()
-    if celebration_mode >= 3:
-        total_star_duration = {1: 0.0, 2: 0.3, 3: 0.7}[star_tier]
-        star_stage_duration = total_star_duration / star_tier
-        for star_stage in range(star_tier):
-            star_stage_rows = {}
-            for star_group in star_stages[star_stage]:
-                for row, start_col, end_col in star_groups[star_group]:
-                    star_stage_rows.setdefault(row, []).append((start_col, end_col))
-            for row in star_stage_rows:
-                star_stage_rows[row].sort()
-            star_stage_rows_list = sorted(star_stage_rows)
-            star_stage_start = time.perf_counter()
-            for star_row_index, row in enumerate(star_stage_rows_list, start=1):
-                for start_col, end_col in star_stage_rows[row]:
-                    print(
-                        f"[{2 + row};{start_col}H#5"
-                        f"{xbf}{' ' * (end_col - start_col + 1)}{unbg}",
-                        end="",
-                        flush=False,
-                    )
-                sys.stdout.flush()
-                star_hold = min(0.04, star_stage_duration / len(star_stage_rows_list) * 0.45)
-                if star_hold > 0:
-                    time.sleep(star_hold)
-                for start_col, end_col in star_stage_rows[row]:
-                    print(
-                        f"[{2 + row};{start_col}H#5"
-                        f"{star_stage_colours[star_stage]}{' ' * (end_col - start_col + 1)}{unbg}",
-                        end="",
-                        flush=False,
-                    )
-                sys.stdout.flush()
-                star_deadline = (
-                    star_stage_start
-                    + star_stage_duration
-                    * star_row_index
-                    / len(star_stage_rows_list)
-                )
-                time.sleep(max(0, star_deadline - time.perf_counter()))
-    else:
+    total_star_duration = {1: 0.0, 2: 0.3, 3: 0.7}[star_tier]
+    star_stage_duration = total_star_duration / star_tier
+    stage_delays = (0, 0.3, 0.4)
+
+    # fill the middle star first, then the pairs beside it
+    for star_stage in range(star_tier):
+        if celebration_mode > 0 and celebration_mode < 3:
+            time.sleep(stage_delays[star_stage])
+
         star_stage_rows = {}
-        for star_group in star_stages[0]:
+        for star_group in star_stages[star_stage]:
             for row, start_col, end_col in star_groups[star_group]:
                 star_stage_rows.setdefault(row, []).append((start_col, end_col))
-        for row in sorted(star_stage_rows):
+        for row in star_stage_rows:
+            star_stage_rows[row].sort()
+        rows = sorted(star_stage_rows)
+        stage_start = time.perf_counter()
+
+        for row_index, row in enumerate(rows, start=1):
+            if celebration_mode >= 3:
+                # extreme: flash the row white before filling it
+                for start_col, end_col in star_stage_rows[row]:
+                    print(f"\x1b[{2 + row};{start_col}H\x1b#5{xbf}{' ' * (end_col - start_col + 1)}{unbg}", end="")
+                sys.stdout.flush()
+                star_hold = min(0.04, star_stage_duration / len(rows) * 0.45)
+                if star_hold > 0:
+                    time.sleep(star_hold)
+
             for start_col, end_col in star_stage_rows[row]:
-                print(
-                    f"[{2 + row};{start_col}H#5"
-                    f"{star_stage_colours[0]}{' ' * (end_col - start_col + 1)}{unbg}",
-                    end="",
-                    flush=False,
-                )
+                color = star_stage_colours[star_stage]
+                print(f"\x1b[{2 + row};{start_col}H\x1b#5{color}{' ' * (end_col - start_col + 1)}{unbg}", end="")
+            if celebration_mode >= 3:
+                sys.stdout.flush()
+                deadline = stage_start + star_stage_duration * row_index / len(rows)
+                time.sleep(max(0, deadline - time.perf_counter()))
         sys.stdout.flush()
-        if star_tier >= 2:
-            if celebration_mode > 0:
-                time.sleep(0.3)
-            star_stage_rows = {}
-            for star_group in star_stages[1]:
-                for row, start_col, end_col in star_groups[star_group]:
-                    star_stage_rows.setdefault(row, []).append((start_col, end_col))
-            for row in sorted(star_stage_rows):
-                for start_col, end_col in star_stage_rows[row]:
-                    print(
-                        f"[{2 + row};{start_col}H#5"
-                        f"{star_stage_colours[1]}{' ' * (end_col - start_col + 1)}{unbg}",
-                        end="",
-                        flush=False,
-                    )
-            sys.stdout.flush()
-        if star_tier >= 3:
-            if celebration_mode > 0:
-                time.sleep(0.4)
-            star_stage_rows = {}
-            for star_group in star_stages[2]:
-                for row, start_col, end_col in star_groups[star_group]:
-                    star_stage_rows.setdefault(row, []).append((start_col, end_col))
-            for row in sorted(star_stage_rows):
-                for start_col, end_col in star_stage_rows[row]:
-                    print(
-                        f"[{2 + row};{start_col}H#5"
-                        f"{star_stage_colours[2]}{' ' * (end_col - start_col + 1)}{unbg}",
-                        end="",
-                        flush=False,
-                    )
-            sys.stdout.flush()
-        sys.stdout.flush()
-    notice_time = time.perf_counter()
-    if levelup_notice and notice_time - levelup_notice_start < notice_fade_duration:
-        notice_progress = max(0.0, min(1.0, (notice_time - levelup_notice_start) / notice_fade_duration))
-        notice_shade = round(242 + (55 - 242) * notice_progress)
-        levelup_notice_frame = f"{rgb(notice_shade, notice_shade, notice_shade)}{bold}{levelup_notice.ljust(notice_width)}{reset}"
-    else:
-        levelup_notice_frame = " " * notice_width
-    if color_notice and notice_time - color_notice_start < notice_fade_duration:
-        notice_progress = max(0.0, min(1.0, (notice_time - color_notice_start) / notice_fade_duration))
-        notice_shade = round(242 + (55 - 242) * notice_progress)
-        color_notice_frame = f"{rgb(notice_shade, notice_shade, notice_shade)}{bold}{color_notice.ljust(notice_width)}{reset}"
-    else:
-        color_notice_frame = " " * notice_width
-    rowinfo = shine(text=bonus_label, offset=time.time(), bold=True, color=(242, 242, 242)) if bonus_label else " "
-    final_art = bignumber(str(totalxp + extra_xp), background=xp_color)
-    if final_art is None:
-        final_art = bignumber(str((totalxp + extra_xp) % 1000), background=xp_color)
-    number_value = str(earned_xp)
-    raw_number_lines = [
-        "  ".join(
-            bignumber_db(digit)[row]
-            for digit in number_value
-        )
-        for row in range(5)
-    ]
-    length = max(visible_len(line) for line in final_art)
-    text_column = max(1, os.get_terminal_size().columns // 2 - (length // 2) - 3)
 
-    print(
-        "".join(
-            f"[{row};1H#5[2K"
-            for row in range(text_row, text_row + 5)
-        ),
-        end="",
-    )
+
+
+def battle_win_number_lines(number):
     lines = []
-    for row, raw_line in enumerate(raw_number_lines):
-        rendered = pad_visible(
-            background_blocks(raw_line, xp_color),
-            length,
-        )
-        suffix = f" {rowinfo}{reset}" if row == 4 else ""
-        lines.append(
-            f"[{text_row + row};{text_column}H#5{rendered}{suffix}"
-        )
-    print("\n".join(lines), end="", flush=False)
-    if animated_level >= CHARACTER_MAX_LEVEL:
-        max_xp = 1
-        current_xp = 1
-    else:
-        max_xp = max(1, animated_xpneeded)
-        current_xp = max(0, animated_xp)
-    pc = max(0.0, min(current_xp / max_xp, 1.0))
-    bar = f"{reset}{xp_color} " * round(pc * xp_bar_length) + f"{xp_dark_color} " * (xp_bar_length - round(pc * xp_bar_length)) + f"{reset}"
+    for row in range(5):
+        digits = []
+        for digit in str(number):
+            digits.append(bignumber_db(digit)[row])
+        lines.append("  ".join(digits))
+    return lines
+
+
+def battle_win_gold(amount, balance, row, counting=False):
+    amount_text = format_number(amount)
+    balance_text = format_number(balance + amount)
+    plain_text = f"¤ +{amount_text} gold → {balance_text}"
+    # double-size text uses twice the cells
+    column = max(1, (shutil.get_terminal_size(fallback=(128, 36)).columns - visible_len(plain_text) * 2) // 4)
+    plus = f"{xlyellow}{bold}+{reset}"
+    number = f"{xlyellow}{bold}{amount_text}{reset}"
+    text = f"{xf}¤ {reset}{plus}{number}{xlyellow} gold{reset}{xf} → {reset}{x7}{balance_text}{reset}"
+    color = xlyellow if counting else ""
+    ending = reset if counting else ""
     print(f"""
-[{start_row+1};1H#3{xlyellow}                 ╭────────────────────────╮
-[{start_row+2};1H#4{xlyellow}                 ╭────────────────────────╮
-[{start_row+3};1H#3{xlyellow}                 │{" " * ((24 - len(text)) // 2)}{xa}{bold}{shine(text=text,offset=time.time(),bold=True,color=(240, 232, 158))}{reset}{xlyellow}{" " * ((24 - len(text)) // 2)}│
-[{start_row+4};1H#4{xlyellow}                 │{" " * ((24 - len(text)) // 2)}{xa}{bold}{shine(text=text,offset=time.time(),bold=True,color=(240, 232, 158))}{reset}{xlyellow}{" " * ((24 - len(text)) // 2)}│
-[{start_row+5};1H#3{xlyellow}                 ╰────────────────────────╯
-[{start_row+6};1H#4{xlyellow}                 ╰────────────────────────╯
-[{text_row+5};1H#5{xlyellow}{" "*(os.get_terminal_size().columns - 1)}
-[{text_row+6};1H#5{xlyellow}{" " * ((os.get_terminal_size().columns - visible_len(pt)) // 2 - 3)}{pt}
-[{text_row+7};1H#5{xlyellow}{" "*(os.get_terminal_size().columns - 1)}
-[{text_row+8};1H#5{xlyellow}{" "*33}{f"{xb0} "*(xp_bar_length+4)}{reset}
-[{text_row+9};1H#5{xlyellow}{" "*33}{xb0}  {bar}{xb0}  {reset}
-[{text_row+10};1H#5{xlyellow}{" "*33}{xb0}  {bar}{xb0}  {reset}
-[{text_row+11};1H#5{xlyellow}{" "*33}{f"{xb0} "*(xp_bar_length+4)}{reset}
-[{text_row+9};{xp_notification_column}H#5{levelup_notice_frame}
-[{text_row+10};{xp_notification_column}H#5{color_notice_frame}
-""", flush=True)
+\x1b[{row};1H\x1b[2K\x1b#3{color}{" " * (column - 1)}{text}{ending}
+\x1b[{row + 1};1H\x1b[2K\x1b#4{color}{" " * (column - 1)}{text}{ending}
+""", end="", flush=True)
 
-    extra_xp_applied = False
-    if remaining_hp_pct >= 50 and celebration_mode >= 2:
-        # sweep the big number
-        shine_frames = (
-            (0,),
-            (0, 1),
-            (0, 1, 2),
-            (1, 2, 3),
-            (2, 3, 4),
-            (3, 4),
-            (4,),
-            (),
-        )
-        # keep the shine quick
-        delay = 0.048 * 1.20 * (1 - 0.15)
-        number_shine_target = time.perf_counter() + (star_to_number_delay if celebration_mode >= 3 else delay)
-        for shine_index, highlight_rows in enumerate(shine_frames):
-            if shine_index == 0:
-                time.sleep(max(0, number_shine_target - time.perf_counter()))
-            else:
-                time.sleep(delay)
 
-            # apply the bonus when the shine begins
-            if not extra_xp_applied:
-                animated_xp += extra_xp
-                earned_xp = totalxp + extra_xp
-                while (
-                    animated_level < CHARACTER_MAX_LEVEL
-                    and animated_xp >= animated_xpneeded
-                ):
-                    xp_for_next = animated_xpneeded
-                    animated_xp -= xp_for_next
-                    animated_level += 1
-                    sound("inside_levelup")
-                    levelup_notice = "Level up!"
-                    levelup_notice_start = time.perf_counter()
-                    if animated_level in color_milestones:
-                        color_notice = "New color unlocked!"
-                        color_notice_start = time.perf_counter()
-                    if animated_level < CHARACTER_MAX_LEVEL:
-                        xp_for_next = round(xp_for_next + 15 + animated_level / 4)
-                    animated_xpneeded = round(xp_for_next)
-                    player_color = x8
-                    for req_level, color in thresholds:
-                        if animated_level >= req_level:
-                            player_color = color
-                    color_values = re.search(r"38;2;(\d+);(\d+);(\d+)m", player_color)
-                    player_rgb = tuple(int(value) for value in color_values.groups()) if color_values else (94, 94, 94)
-                    xp_color = rgback(*player_rgb)
-                    xp_dark_color = rgback(*tuple(max(0, round(value * 0.22)) for value in player_rgb))
-                next_level = str(animated_level + 1) if animated_level < CHARACTER_MAX_LEVEL else "MAX"
-                pt = f"{bold}{player_color}XP earned{unbold} {xf}· {title_text} {bold}{player_color}{next_level}:{reset}"
-                number_value = str(earned_xp)
-                raw_number_lines = [
-                    "  ".join(
-                        bignumber_db(digit)[row]
-                        for digit in number_value
-                    )
-                    for row in range(5)
-                ]
-                extra_xp_applied = True
-            notice_time = time.perf_counter()
-            if levelup_notice and notice_time - levelup_notice_start < notice_fade_duration:
-                notice_progress = max(0.0, min(1.0, (notice_time - levelup_notice_start) / notice_fade_duration))
-                notice_shade = round(242 + (55 - 242) * notice_progress)
-                levelup_notice_frame = f"{rgb(notice_shade, notice_shade, notice_shade)}{bold}{levelup_notice.ljust(notice_width)}{reset}"
-            else:
-                levelup_notice_frame = " " * notice_width
-            if color_notice and notice_time - color_notice_start < notice_fade_duration:
-                notice_progress = max(0.0, min(1.0, (notice_time - color_notice_start) / notice_fade_duration))
-                notice_shade = round(242 + (55 - 242) * notice_progress)
-                color_notice_frame = f"{rgb(notice_shade, notice_shade, notice_shade)}{bold}{color_notice.ljust(notice_width)}{reset}"
-            else:
-                color_notice_frame = " " * notice_width
-            rowinfo = shine(text=bonus_label, offset=time.time(), bold=True, color=(242, 242, 242)) if bonus_label else " "
-            highlighted = set(highlight_rows)
-            lines = []
-            for row, raw_line in enumerate(raw_number_lines):
-                background = xbf if row in highlighted else xp_color
-                rendered = pad_visible(
-                    background_blocks(raw_line, background),
-                    length,
-                )
-                suffix = f" {rowinfo}{reset}" if row == 4 else ""
-                lines.append(
-                    f"[{text_row + row};{text_column}H#5{rendered}{suffix}"
-                )
-            print("\n".join(lines), end="", flush=False)
-            next_level = str(animated_level + 1) if animated_level < CHARACTER_MAX_LEVEL else "MAX"
-            pt = f"{bold}{player_color}XP earned{unbold} {xf}· {title_text} {bold}{player_color}{next_level}:{reset}"
-            if animated_level >= CHARACTER_MAX_LEVEL:
-                max_xp = 1
-                current_xp = 1
-            else:
-                max_xp = max(1, animated_xpneeded)
-                current_xp = max(0, animated_xp)
-            pc = max(0.0, min(current_xp / max_xp, 1.0))
-            bar = f"{reset}{xp_color} " * round(pc * xp_bar_length) + f"{xp_dark_color} " * (xp_bar_length - round(pc * xp_bar_length)) + f"{reset}"
-            print(f"""
-[{start_row+1};1H#3{xlyellow}                 ╭────────────────────────╮
-[{start_row+2};1H#4{xlyellow}                 ╭────────────────────────╮
-[{start_row+3};1H#3{xlyellow}                 │{" " * ((24 - len(text)) // 2)}{xa}{bold}{shine(text=text,offset=time.time(),bold=True,color=(240, 232, 158))}{reset}{xlyellow}{" " * ((24 - len(text)) // 2)}│
-[{start_row+4};1H#4{xlyellow}                 │{" " * ((24 - len(text)) // 2)}{xa}{bold}{shine(text=text,offset=time.time(),bold=True,color=(240, 232, 158))}{reset}{xlyellow}{" " * ((24 - len(text)) // 2)}│
-[{start_row+5};1H#3{xlyellow}                 ╰────────────────────────╯
-[{start_row+6};1H#4{xlyellow}                 ╰────────────────────────╯
-[{text_row+5};1H#5{xlyellow}{" "*(os.get_terminal_size().columns - 1)}
-[{text_row+6};1H#5{xlyellow}{" " * ((os.get_terminal_size().columns - visible_len(pt)) // 2 - 3)}{pt}
-[{text_row+7};1H#5{xlyellow}{" "*(os.get_terminal_size().columns - 1)}
-[{text_row+8};1H#5{xlyellow}{" "*33}{f"{xb0} "*(xp_bar_length+4)}{reset}
-[{text_row+9};1H#5{xlyellow}{" "*33}{xb0}  {bar}{xb0}  {reset}
-[{text_row+10};1H#5{xlyellow}{" "*33}{xb0}  {bar}{xb0}  {reset}
-[{text_row+11};1H#5{xlyellow}{" "*33}{f"{xb0} "*(xp_bar_length+4)}{reset}
-[{text_row+9};{xp_notification_column}H#5{levelup_notice_frame}
-[{text_row+10};{xp_notification_column}H#5{color_notice_frame}
-""", flush=True)
+def battle_win_colors(level, colors):
+    color = x8
+    values = (94, 94, 94)
+    for required_level, text_color, rgb_values in colors:
+        if level >= required_level:
+            color = text_color
+            values = rgb_values
 
+    dark_values = []
+    for value in values:
+        dark_values.append(max(0, round(value * 0.22)))
+    return color, rgback(*values), rgback(*dark_values)
+
+
+def battle_win_count_gold(totalgold, gold_balance_start, gold_row, celebration_mode):
+    # timing and sound controls for the gold count
+    gold_animation_duration = 0.675
+    gold_animation_tick_amount = 25
+    gold_animation_max_ticks = 10
+    gold_animation_acceleration = 1.20
+    gold_animation_pitch_rise = 0.16
+    gold_animation_delay = 0.3
+    confirmation_fade_duration = 0.5
+    gold_animation_tick_amount = max(1, int(gold_animation_tick_amount))
+
+    if totalgold > 0 and celebration_mode >= 2:
+        gold_animation_tick_count = max(1, math.ceil(totalgold / gold_animation_tick_amount))
+        gold_animation_tick_count = min(gold_animation_max_ticks, gold_animation_tick_count)
     else:
-        # apply the bonus after the stars
-        animated_xp += extra_xp
-        earned_xp = totalxp + extra_xp
-        while (
-            animated_level < CHARACTER_MAX_LEVEL
-            and animated_xp >= animated_xpneeded
-        ):
-            xp_for_next = animated_xpneeded
-            animated_xp -= xp_for_next
-            animated_level += 1
-            sound("inside_levelup")
-            levelup_notice = "Level up!"
-            levelup_notice_start = time.perf_counter()
-            if animated_level in color_milestones:
-                color_notice = "New color unlocked!"
-                color_notice_start = time.perf_counter()
-            if animated_level < CHARACTER_MAX_LEVEL:
-                xp_for_next = round(xp_for_next + 15 + animated_level / 4)
-            animated_xpneeded = round(xp_for_next)
-            player_color = x8
-            for req_level, color in thresholds:
-                if animated_level >= req_level:
-                    player_color = color
-            color_values = re.search(r"38;2;(\d+);(\d+);(\d+)m", player_color)
-            player_rgb = tuple(int(value) for value in color_values.groups()) if color_values else (94, 94, 94)
-            xp_color = rgback(*player_rgb)
-            xp_dark_color = rgback(*tuple(max(0, round(value * 0.22)) for value in player_rgb))
-        notice_time = time.perf_counter()
-        if levelup_notice and notice_time - levelup_notice_start < notice_fade_duration:
-            notice_progress = max(0.0, min(1.0, (notice_time - levelup_notice_start) / notice_fade_duration))
-            notice_shade = round(242 + (55 - 242) * notice_progress)
-            levelup_notice_frame = f"{rgb(notice_shade, notice_shade, notice_shade)}{bold}{levelup_notice.ljust(notice_width)}{reset}"
-        else:
-            levelup_notice_frame = " " * notice_width
-        if color_notice and notice_time - color_notice_start < notice_fade_duration:
-            notice_progress = max(0.0, min(1.0, (notice_time - color_notice_start) / notice_fade_duration))
-            notice_shade = round(242 + (55 - 242) * notice_progress)
-            color_notice_frame = f"{rgb(notice_shade, notice_shade, notice_shade)}{bold}{color_notice.ljust(notice_width)}{reset}"
-        else:
-            color_notice_frame = " " * notice_width
-        rowinfo = shine(text=bonus_label, offset=time.time(), bold=True, color=(242, 242, 242)) if bonus_label else " "
-        next_level = str(animated_level + 1) if animated_level < CHARACTER_MAX_LEVEL else "MAX"
-        pt = f"{bold}{player_color}XP earned{unbold} {xf}· {title_text} {bold}{player_color}{next_level}:{reset}"
-        number_value = str(earned_xp)
-        raw_number_lines = [
-            "  ".join(
-                bignumber_db(digit)[row]
-                for digit in number_value
-            )
-            for row in range(5)
-        ]
-        extra_xp_applied = True
-        lines = []
-        for row, raw_line in enumerate(raw_number_lines):
-            rendered = pad_visible(
-                background_blocks(raw_line, xp_color),
-                length,
-            )
-            suffix = f" {rowinfo}{reset}" if row == 4 else ""
-            lines.append(
-                f"[{text_row + row};{text_column}H#5{rendered}{suffix}"
-            )
-        print("\n".join(lines), end="", flush=False)
-        next_level = str(animated_level + 1) if animated_level < CHARACTER_MAX_LEVEL else "MAX"
-        pt = f"{bold}{player_color}XP earned{unbold} {xf}· {title_text} {bold}{player_color}{next_level}:{reset}"
-        if animated_level >= CHARACTER_MAX_LEVEL:
-            max_xp = 1
-            current_xp = 1
-        else:
-            max_xp = max(1, animated_xpneeded)
-            current_xp = max(0, animated_xp)
-        pc = max(0.0, min(current_xp / max_xp, 1.0))
-        bar = f"{reset}{xp_color} " * round(pc * xp_bar_length) + f"{xp_dark_color} " * (xp_bar_length - round(pc * xp_bar_length)) + f"{reset}"
-        print(f"""
-[{start_row+1};1H#3{xlyellow}                 ╭────────────────────────╮
-[{start_row+2};1H#4{xlyellow}                 ╭────────────────────────╮
-[{start_row+3};1H#3{xlyellow}                 │{" " * ((24 - len(text)) // 2)}{xa}{bold}{shine(text=text,offset=time.time(),bold=True,color=(240, 232, 158))}{reset}{xlyellow}{" " * ((24 - len(text)) // 2)}│
-[{start_row+4};1H#4{xlyellow}                 │{" " * ((24 - len(text)) // 2)}{xa}{bold}{shine(text=text,offset=time.time(),bold=True,color=(240, 232, 158))}{reset}{xlyellow}{" " * ((24 - len(text)) // 2)}│
-[{start_row+5};1H#3{xlyellow}                 ╰────────────────────────╯
-[{start_row+6};1H#4{xlyellow}                 ╰────────────────────────╯
-[{text_row+5};1H#5{xlyellow}{" "*(os.get_terminal_size().columns - 1)}
-[{text_row+6};1H#5{xlyellow}{" " * ((os.get_terminal_size().columns - visible_len(pt)) // 2 - 3)}{pt}
-[{text_row+7};1H#5{xlyellow}{" "*(os.get_terminal_size().columns - 1)}
-[{text_row+8};1H#5{xlyellow}{" "*33}{f"{xb0} "*(xp_bar_length+4)}{reset}
-[{text_row+9};1H#5{xlyellow}{" "*33}{xb0}  {bar}{xb0}  {reset}
-[{text_row+10};1H#5{xlyellow}{" "*33}{xb0}  {bar}{xb0}  {reset}
-[{text_row+11};1H#5{xlyellow}{" "*33}{f"{xb0} "*(xp_bar_length+4)}{reset}
-[{text_row+9};{xp_notification_column}H#5{levelup_notice_frame}
-[{text_row+10};{xp_notification_column}H#5{color_notice_frame}
-""", flush=True)
+        gold_animation_tick_count = 0
+    gold_animation_pitches = []
+
+    gold_animation_started = False
+    gold_animation_start = 0.0
+    gold_animation_tick = 0
+    gold_count = 0
+    # gold next, then the continue prompt
     confirmation_prompt_text = "› press any key to continue ‹"
     confirmation_prompt = f"{xf}{confirmation_prompt_text}"
-    confirmation_column = max(1, (os.get_terminal_size().columns - visible_len(confirmation_prompt)) // 2 - 2)
+    confirmation_column = max(1, (shutil.get_terminal_size(fallback=(128, 36)).columns - visible_len(confirmation_prompt)) // 2 - 2)
     confirmation_prompt_frame = " " * visible_len(confirmation_prompt)
     draw_text(confirmation_column, 34, confirmation_prompt_frame)
     if totalgold > 0 and celebration_mode >= 2:
@@ -4433,33 +4122,12 @@ def battle_win():
                 f"pickup_silver "
                 f"{gold_animation_pitches[gold_animation_tick - 1]:.4f}"
             )
-            gold_amount_text = str(gold_count)
-            gold_balance_text = f"{gold_balance_start + gold_count:,}"
-            gold_frame_text = f"¤ +{gold_amount_text} gold → {gold_balance_text}"
-            gold_column = max(1, (os.get_terminal_size().columns - visible_len(gold_frame_text) * 2) // 4)
-            gold_plus_frame = f"{xlyellow}{bold}+{reset}"
-            gold_amount_frame = f"{xlyellow}{bold}{gold_amount_text}{reset}"
+            battle_win_gold(gold_count, gold_balance_start, gold_row, counting=True)
             confirmation_shade = round(55 + (242 - 55) * gold_progress)
             confirmation_prompt_frame = f"{rgb(confirmation_shade, confirmation_shade, confirmation_shade)}{confirmation_prompt_text}{reset}"
-            gold_frame = f"{xf}¤ {reset}{gold_plus_frame}{gold_amount_frame}{xlyellow} gold{reset}{xf} → {reset}{x7}{gold_balance_text}{reset}"
-            print(f"""
-[{gold_row};1H[2K#3{xlyellow}{" " * (gold_column - 1)}{gold_frame}{reset}
-[{gold_row + 1};1H[2K#4{xlyellow}{" " * (gold_column - 1)}{gold_frame}{reset}
-[34;{confirmation_column}H#5{confirmation_prompt_frame}
-""", end="", flush=True)
+            print(f"\x1b[34;{confirmation_column}H\x1b#5{confirmation_prompt_frame}", end="", flush=True)
 
-    gold_count = totalgold
-    gold_amount_text = str(gold_count)
-    gold_balance_text = f"{gold_balance_start + gold_count:,}"
-    gold_frame_text = f"¤ +{gold_amount_text} gold → {gold_balance_text}"
-    gold_column = max(1, (os.get_terminal_size().columns - visible_len(gold_frame_text) * 2) // 4)
-    gold_plus_frame = f"{xlyellow}{bold}+{reset}"
-    gold_amount_frame = f"{xlyellow}{bold}{gold_amount_text}{reset}"
-    gold_frame = f"{xf}¤ {reset}{gold_plus_frame}{gold_amount_frame}{xlyellow} gold{reset}{xf} → {reset}{x7}{gold_balance_text}{reset}"
-    print(f"""
-[{gold_row};1H[2K#3{" " * (gold_column - 1)}{gold_frame}
-[{gold_row + 1};1H[2K#4{" " * (gold_column - 1)}{gold_frame}
-""", end="", flush=True)
+    battle_win_gold(totalgold, gold_balance_start, gold_row)
 
     if not gold_animation_started:
         if animations_enabled():
@@ -4473,6 +4141,370 @@ def battle_win():
             confirmation_prompt_frame = f"{xf}{confirmation_prompt_text}{reset}"
             draw_text(confirmation_column, 34, confirmation_prompt_frame)
 
+
+
+def battle_win_draw_number(lines, row, column, width, color, bonus_text, highlight_rows=()):
+    frame = []
+    for offset, raw_line in enumerate(lines):
+        background = color
+        if offset in highlight_rows:
+            background = xbf
+        rendered = pad_visible(background_blocks(raw_line, background), width)
+        suffix = ""
+        if offset == 4:
+            suffix = f" {bonus_text}{reset}"
+        frame.append(f"\x1b[{row + offset};{column}H\x1b#5{rendered}{suffix}")
+    print("\n".join(frame), end="", flush=False)
+
+
+def battle_win():
+    # check remaining hp percentage
+    remaining_hp_pct = (player.hp / player.total_hp) * 100
+    if remaining_hp_pct >= 80:
+        text = random.choice(["Excellent!", "Stellar performance!", "Outstanding!", "Perfect!", "Battle over!", "Well done!", "Nice work!", "You win!", "Victory!"])
+        sound("end_excellent")
+    elif remaining_hp_pct >= 50:
+        text = random.choice(["Great job!", "Quick victory!", "Well played!", "Great performance!", "Battle over!", "Well done!", "Nice work!", "You win!", "Victory!"])
+        sound("end_great")
+    else:
+        sound("end_good")
+        text = random.choice(["Battle over!", "Well done!", "Nice work!", "You win!", "Victory!"])
+
+    # celebration levels: 0 = minimal, 1 = small, 2 = regular, 3 = extreme
+    celebration_mode = getattr(setting, "victory_celebration", 2)
+    effective_setting = getattr(setting, "effective_setting", None)
+    if callable(effective_setting):
+        celebration_mode = effective_setting("victory_celebration")
+    try:
+        celebration_mode = max(0, min(3, int(celebration_mode)))
+    except (TypeError, ValueError):
+        celebration_mode = 2
+    # keep reduced motion local to this animation
+    if getattr(setting, "reduce_motion", False) or not animations_enabled():
+        celebration_mode = 0
+    
+    # scale the xp reward from remaining health
+    level_progress = max(0.0, (float(player.level) - 1.0) / 89.0)
+    full_health_bonus = 8.0 * (150.0 / 8.0) ** (level_progress ** 1.33)
+    health_ratio = max(0.0, min(1.0, remaining_hp_pct / 100.0))
+    health_xp_bonus = round(full_health_bonus * health_ratio ** 0.75)
+    if celebration_mode == 0:
+        cls()
+    else:
+        screen_wipe("normal",10)
+    
+    totalxp = round(enemy.xp_reward + health_xp_bonus)
+    gold_reward = max(0, int(enemy.gold_reward))
+    totalgold = max(0, round(gold_reward * health_ratio ** 0.75))
+
+    # local animation controls
+    xp_animation_duration = 1.8
+    xp_animation_tick_amount = 1
+    star_to_number_delay = 0.2
+    notice_fade_duration = 0.5
+    title_animation_timeout = 0.05
+
+    xp_animation_tick_amount = max(1, int(xp_animation_tick_amount))
+
+    # keep live xp separate from the reward number
+    animated_level = min(CHARACTER_MAX_LEVEL, max(1, int(getattr(player, "level", 1))))
+    animated_xp = max(0, int(getattr(player, "xp", 0)))
+    animated_xpneeded = max(1, int(getattr(player, "xpneeded", 1)))
+    earned_xp = 0
+    xp_required_for_next = animated_xpneeded
+    if animated_level >= CHARACTER_MAX_LEVEL:
+        xp_required_for_next = 0
+
+    thresholds = [
+        (0, x8), (5, x7), (10, xf), (15, x3), (20, x9), (25, xb),
+        (30, x2), (35, xa), (40, xlorange), (45, xlyellow), (50, xe),
+        (55, x5), (60, xd), (65, xlred), (70, xc), (75, x4),
+        (80, rgb(184, 172, 246)), (85, rgb(254, 163, 98)),
+        (90, rgb(186, 243, 219)), (95, rgb(255, 131, 101)),
+        (100, rgb(227, 62, 57)),
+    ]
+    # remember rgb values too, no need to read ansi codes at every level-up
+    level_colors = []
+    color_milestones = []
+    for required_level, color in thresholds:
+        match = re.search(r"38;2;(\d+);(\d+);(\d+)m", color)
+        if match:
+            values = tuple(int(value) for value in match.groups())
+        else:
+            values = (94, 94, 94)
+        level_colors.append((required_level, color, values))
+        if required_level > 0:
+            color_milestones.append(required_level)
+    player_color, xp_color, xp_dark_color = battle_win_colors(animated_level, level_colors)
+    levelup_notice = ""
+    color_notice = ""
+    levelup_notice_start = 0.0
+    color_notice_start = 0.0
+    notice_width = len("New color unlocked!")
+    levelup_notice_frame = " " * notice_width
+    color_notice_frame = " " * notice_width
+
+    def battle_add_xp(amount):
+        nonlocal animated_xp, animated_level, animated_xpneeded
+        nonlocal levelup_notice, levelup_notice_start, color_notice, color_notice_start
+        nonlocal player_color, xp_color, xp_dark_color
+
+        # add xp, keep leveling until we don't have enough anymore
+        animated_xp += amount
+        while (
+            animated_level < CHARACTER_MAX_LEVEL
+            and animated_xp >= animated_xpneeded
+        ):
+            xp_for_next = animated_xpneeded
+            animated_xp -= xp_for_next
+            animated_level += 1
+            sound("inside_levelup")
+            levelup_notice = "Level up!"
+            levelup_notice_start = time.perf_counter()
+            if animated_level in color_milestones:
+                color_notice = "New color unlocked!"
+                color_notice_start = time.perf_counter()
+            if animated_level < CHARACTER_MAX_LEVEL:
+                xp_for_next = round(xp_for_next + 15 + animated_level / 4)
+            animated_xpneeded = round(xp_for_next)
+            player_color, xp_color, xp_dark_color = battle_win_colors(animated_level, level_colors)
+
+    gold_balance_start = int(getattr(player, "money", 0))
+    gold_row = 31
+
+    title_text = random.choice([
+        "your progress to level",
+        "your advancement to level",
+        "here's your progress to level",
+        "your journey to level",
+        "your path to level",
+        "your quest to level",
+    ])
+    
+    if celebration_mode > 0:
+        move(4,1)
+
+        print(f"""
+#5{" "*120}
+#3{xlyellow}                 ╭────────────────────────╮
+#4{xlyellow}                 ╭────────────────────────╮
+#3{xlyellow}                 │{" " * ((24 - len(text)) // 2)}{xa}{bold}{shine(text=text,offset=time.time(),bold=True,color=(240, 232, 158))}{reset}{xlyellow}{" " * ((24 - len(text)) // 2)}│
+#4{xlyellow}                 │{" " * ((24 - len(text)) // 2)}{xa}{bold}{shine(text=text,offset=time.time(),bold=True,color=(240, 232, 158))}{reset}{xlyellow}{" " * ((24 - len(text)) // 2)}│
+#3{xlyellow}                 ╰────────────────────────╯
+#4{xlyellow}                 ╰────────────────────────╯
+""")
+    
+    move(15,30)
+
+    # minimal uses the final animated layout
+    start_row = 5
+    text_row = 13
+    milestone_shifts = 0
+    max_title_shifts = 5
+    max_number_shifts = 5
+    xp_bar_length = 50
+    xp_notification_column = 33 + xp_bar_length + 6
+    next_level = str(animated_level + 1) if animated_level < CHARACTER_MAX_LEVEL else "MAX"
+    progress_text = f"{bold}{player_color}XP earned{unbold} {xf}· {title_text} {bold}{player_color}{next_level}:{reset}"
+    xp_animation_tick_count = max(1, math.ceil(totalxp / xp_animation_tick_amount)) if totalxp > 0 else 1
+    xp_animation_start = time.perf_counter()
+
+    milestone_values = sorted(set(
+        round(totalxp * milestone_ratio) for milestone_ratio in (0.8, 0.85, 0.9, 0.95, 0.98, 0.99, 1)
+    )) if totalxp > 0 else []
+    xp_milestones = milestone_values if celebration_mode > 0 else []
+    milestone_index = 0
+    if celebration_mode == 0:
+        # match the animated resting coordinates
+        milestone_count = min(max_title_shifts, len(set(milestone_values)))
+        start_row += milestone_count
+        text_row += min(max_number_shifts, milestone_count)
+    if celebration_mode > 0:
+        count_values = range(xp_animation_tick_count)
+    else:
+        count_values = range(1)
+    extra_xp = 0
+    bonus_label = ""
+    bonus_text = " "
+
+    # count the earned xp
+    for xp_tick in count_values:
+        if totalxp > 0:
+            if celebration_mode == 0:
+                xp_tick_start = 0
+                xp_tick_end = totalxp
+            else:
+                xp_tick_start = xp_tick * xp_animation_tick_amount
+                xp_tick_end = min(totalxp, (xp_tick + 1) * xp_animation_tick_amount)
+            xp_tick_amount = max(0, xp_tick_end - xp_tick_start)
+        else:
+            xp_tick_amount = 0
+        earned_xp = min(totalxp, earned_xp + xp_tick_amount)
+        battle_add_xp(xp_tick_amount)
+
+        while (
+            milestone_index < len(xp_milestones)
+            and earned_xp >= xp_milestones[milestone_index]
+            and milestone_shifts < max_title_shifts
+        ):
+            print(
+                "".join(
+                    f"[{start_row + 1 + offset};1H[2K#5"
+                    for offset in range(6)
+                ),
+                end="",
+            )
+            start_row += 1
+            if milestone_shifts < max_number_shifts:
+                print(
+                    "".join(
+                        f"[{row};1H#5[2K"
+                        for row in range(text_row, text_row + 12)
+                    ),
+                    end="",
+                )
+                text_row += 1
+            milestone_shifts += 1
+            milestone_index += 1
+
+        levelup_notice_frame = battle_win_notice(levelup_notice, levelup_notice_start, notice_width, notice_fade_duration)
+        color_notice_frame = battle_win_notice(color_notice, color_notice_start, notice_width, notice_fade_duration)
+        bonus_text = shine(text=bonus_label, offset=time.time(), bold=True, color=(242, 242, 242)) if bonus_label else " "
+        art = reward_number_art(earned_xp, background=xp_color)
+        length = max(visible_len(art[0]), visible_len(art[1]), visible_len(art[2]), visible_len(art[3]), visible_len(art[4]))
+        text_column = max(1, shutil.get_terminal_size(fallback=(128, 36)).columns // 2 - (length // 2) - 3)
+        next_level = str(animated_level + 1) if animated_level < CHARACTER_MAX_LEVEL else "MAX"
+        progress_text = f"{bold}{player_color}XP earned{unbold} {xf}· {title_text} {bold}{player_color}{next_level}:{reset}"
+        print(f"""
+[{text_row};1H#5[2K[{text_row};{text_column}H{pad_visible(art[0], length)}
+[{text_row+1};1H#5[2K[{text_row+1};{text_column}H{pad_visible(art[1], length)}
+[{text_row+2};1H#5[2K[{text_row+2};{text_column}H{pad_visible(art[2], length)}
+[{text_row+3};1H#5[2K[{text_row+3};{text_column}H{pad_visible(art[3], length)}
+[{text_row+4};1H#5[2K[{text_row+4};{text_column}H{pad_visible(art[4], length)}{reset}
+""",flush=False)
+        
+        battle_win_title(text, start_row)
+        
+        # xp bar - fill in the bar based on the current xp
+        bar = battle_win_xp_bar(animated_level, animated_xp, animated_xpneeded,
+                                xp_bar_length, xp_color, xp_dark_color)
+        
+        battle_win_progress(text_row, progress_text, bar, xp_bar_length,
+                            xp_notification_column, levelup_notice_frame, color_notice_frame)
+        
+        
+        if celebration_mode > 0 and totalxp > 0:
+            target = xp_animation_start + (xp_tick + 1) * xp_animation_duration / xp_animation_tick_count
+            time.sleep(max(0, target - time.perf_counter()))
+    next_level = str(animated_level + 1) if animated_level < CHARACTER_MAX_LEVEL else "MAX"
+    progress_text = f"{bold}{player_color}XP earned{unbold} {xf}· {title_text} {bold}{player_color}{next_level}:{reset}"
+    print(f"""
+    [{start_row+3};1H#3{xlyellow}                 │{" " * ((24 - len(text)) // 2)}{shine(text=text,offset=time.time(),bold=True,color=(240, 232, 158))}{xlyellow}{" " * ((24 - len(text)) // 2)}│
+    [{start_row+4};1H#4{xlyellow}                 │{" " * ((24 - len(text)) // 2)}{shine(text=text,offset=time.time(),bold=True,color=(240, 232, 158))}{xlyellow}{" " * ((24 - len(text)) // 2)}│
+    """,flush=True)
+    extra_xp = 0
+    bonus_label = ""
+    bonus_text = " "
+    if remaining_hp_pct >= 80:
+        star_tier = 3
+        extra_xp = 100 if animated_level >= CHARACTER_MAX_LEVEL else round(xp_required_for_next * 0.10)
+        bonus_label = f"[+{format_number(extra_xp)} XP - excellent!]"
+    elif remaining_hp_pct >= 50:
+        star_tier = 2
+        extra_xp = 50 if animated_level >= CHARACTER_MAX_LEVEL else round(xp_required_for_next * 0.05)
+        bonus_label = f"[+{format_number(extra_xp)} XP - great!]"
+    else:
+        star_tier = 1
+    if bonus_label:
+        bonus_text = f"{reset}{bold}{xf}{bonus_label}{reset}"
+
+    # show how well we did
+    battle_win_stars(star_tier, celebration_mode)
+    levelup_notice_frame = battle_win_notice(levelup_notice, levelup_notice_start, notice_width, notice_fade_duration)
+    color_notice_frame = battle_win_notice(color_notice, color_notice_start, notice_width, notice_fade_duration)
+    bonus_text = shine(text=bonus_label, offset=time.time(), bold=True, color=(242, 242, 242)) if bonus_label else " "
+    final_art = reward_number_art(totalxp + extra_xp, background=xp_color)
+    raw_number_lines = battle_win_number_lines(earned_xp)
+    length = max(visible_len(line) for line in final_art)
+    text_column = max(1, shutil.get_terminal_size(fallback=(128, 36)).columns // 2 - (length // 2) - 3)
+
+    print(
+        "".join(
+            f"[{row};1H#5[2K"
+            for row in range(text_row, text_row + 5)
+        ),
+        end="",
+    )
+    battle_win_draw_number(raw_number_lines, text_row, text_column, length, xp_color, bonus_text)
+    bar = battle_win_xp_bar(animated_level, animated_xp, animated_xpneeded,
+                            xp_bar_length, xp_color, xp_dark_color)
+    battle_win_title(text, start_row)
+    battle_win_progress(text_row, progress_text, bar, xp_bar_length,
+                        xp_notification_column, levelup_notice_frame, color_notice_frame)
+
+    if remaining_hp_pct >= 50 and celebration_mode >= 2:
+        extra_xp_applied = False
+        # sweep the big number
+        shine_frames = (
+            (0,),
+            (0, 1),
+            (0, 1, 2),
+            (1, 2, 3),
+            (2, 3, 4),
+            (3, 4),
+            (4,),
+            (),
+        )
+        # keep the shine quick
+        number_shine_delay = 0.04896
+        number_shine_target = time.perf_counter() + (star_to_number_delay if celebration_mode >= 3 else number_shine_delay)
+        for shine_index, highlight_rows in enumerate(shine_frames):
+            if shine_index == 0:
+                time.sleep(max(0, number_shine_target - time.perf_counter()))
+            else:
+                time.sleep(number_shine_delay)
+
+            # apply the bonus when the shine begins
+            if not extra_xp_applied:
+                earned_xp = totalxp + extra_xp
+                battle_add_xp(extra_xp)
+                next_level = str(animated_level + 1) if animated_level < CHARACTER_MAX_LEVEL else "MAX"
+                progress_text = f"{bold}{player_color}XP earned{unbold} {xf}· {title_text} {bold}{player_color}{next_level}:{reset}"
+                raw_number_lines = battle_win_number_lines(earned_xp)
+                extra_xp_applied = True
+            levelup_notice_frame = battle_win_notice(levelup_notice, levelup_notice_start, notice_width, notice_fade_duration)
+            color_notice_frame = battle_win_notice(color_notice, color_notice_start, notice_width, notice_fade_duration)
+            bonus_text = shine(text=bonus_label, offset=time.time(), bold=True, color=(242, 242, 242)) if bonus_label else " "
+            battle_win_draw_number(raw_number_lines, text_row, text_column, length, xp_color, bonus_text, highlight_rows)
+            next_level = str(animated_level + 1) if animated_level < CHARACTER_MAX_LEVEL else "MAX"
+            progress_text = f"{bold}{player_color}XP earned{unbold} {xf}· {title_text} {bold}{player_color}{next_level}:{reset}"
+            bar = battle_win_xp_bar(animated_level, animated_xp, animated_xpneeded,
+                                    xp_bar_length, xp_color, xp_dark_color)
+            battle_win_title(text, start_row)
+            battle_win_progress(text_row, progress_text, bar, xp_bar_length,
+                                xp_notification_column, levelup_notice_frame, color_notice_frame)
+
+    else:
+        # apply the bonus after the stars
+        earned_xp = totalxp + extra_xp
+        battle_add_xp(extra_xp)
+        levelup_notice_frame = battle_win_notice(levelup_notice, levelup_notice_start, notice_width, notice_fade_duration)
+        color_notice_frame = battle_win_notice(color_notice, color_notice_start, notice_width, notice_fade_duration)
+        bonus_text = shine(text=bonus_label, offset=time.time(), bold=True, color=(242, 242, 242)) if bonus_label else " "
+        next_level = str(animated_level + 1) if animated_level < CHARACTER_MAX_LEVEL else "MAX"
+        progress_text = f"{bold}{player_color}XP earned{unbold} {xf}· {title_text} {bold}{player_color}{next_level}:{reset}"
+        raw_number_lines = battle_win_number_lines(earned_xp)
+        battle_win_draw_number(raw_number_lines, text_row, text_column, length, xp_color, bonus_text)
+        next_level = str(animated_level + 1) if animated_level < CHARACTER_MAX_LEVEL else "MAX"
+        progress_text = f"{bold}{player_color}XP earned{unbold} {xf}· {title_text} {bold}{player_color}{next_level}:{reset}"
+        bar = battle_win_xp_bar(animated_level, animated_xp, animated_xpneeded,
+                                xp_bar_length, xp_color, xp_dark_color)
+        battle_win_title(text, start_row)
+        battle_win_progress(text_row, progress_text, bar, xp_bar_length,
+                            xp_notification_column, levelup_notice_frame, color_notice_frame)
+    # gold next, then the continue prompt
+    battle_win_count_gold(totalgold, gold_balance_start, gold_row, celebration_mode)
+
     # fade the notices when needed
     if celebration_mode >= 1 and (bonus_label or levelup_notice or color_notice):
         bonus_column = text_column + length + 1
@@ -4483,19 +4515,8 @@ def battle_win():
             shade = round(242 + (55 - 242) * fade_progress)
             if bonus_label:
                 print(f"[{text_row+4};{bonus_column}H#5{rgb(shade, shade, shade)}{unbold}{bonus_label}{reset}",end="",flush=True)
-            notice_time = time.perf_counter()
-            if levelup_notice and notice_time - levelup_notice_start < notice_fade_duration:
-                notice_progress = max(0.0, min(1.0, (notice_time - levelup_notice_start) / notice_fade_duration))
-                notice_shade = round(242 + (55 - 242) * notice_progress)
-                levelup_notice_frame = f"{rgb(notice_shade, notice_shade, notice_shade)}{unbold}{levelup_notice.ljust(notice_width)}{reset}"
-            else:
-                levelup_notice_frame = " " * notice_width
-            if color_notice and notice_time - color_notice_start < notice_fade_duration:
-                notice_progress = max(0.0, min(1.0, (notice_time - color_notice_start) / notice_fade_duration))
-                notice_shade = round(242 + (55 - 242) * notice_progress)
-                color_notice_frame = f"{rgb(notice_shade, notice_shade, notice_shade)}{unbold}{color_notice.ljust(notice_width)}{reset}"
-            else:
-                color_notice_frame = " " * notice_width
+            levelup_notice_frame = battle_win_notice(levelup_notice, levelup_notice_start, notice_width, notice_fade_duration, strong=False)
+            color_notice_frame = battle_win_notice(color_notice, color_notice_start, notice_width, notice_fade_duration, strong=False)
             print(f"[{text_row+9};{xp_notification_column}H#5{levelup_notice_frame}[{text_row+10};{xp_notification_column}H#5{color_notice_frame}",end="",flush=True)
             time.sleep(fade_duration / fade_steps)
         if bonus_label:
@@ -4517,18 +4538,7 @@ def battle_win():
 [{start_row+4};1H#4{xlyellow}                 │{" " * ((24 - len(text)) // 2)}{shine(text=text,offset=time.time(),bold=True,color=(240, 232, 158))}{xlyellow}{" " * ((24 - len(text)) // 2)}│
 """, flush=True)
         if celebration_mode >= 3 and totalgold > 0:
-            gold_count = totalgold
-            gold_amount_text = str(gold_count)
-            gold_balance_text = f"{gold_balance_start + gold_count:,}"
-            gold_frame_text = f"¤ +{gold_amount_text} gold → {gold_balance_text}"
-            gold_column = max(1, (os.get_terminal_size().columns - visible_len(gold_frame_text) * 2) // 4)
-            gold_plus_frame = f"{xlyellow}{bold}+{reset}"
-            gold_amount_frame = f"{xlyellow}{bold}{gold_amount_text}{reset}"
-            gold_frame = f"{xf}¤ {reset}{gold_plus_frame}{gold_amount_frame}{xlyellow} gold{reset}{xf} → {reset}{x7}{gold_balance_text}{reset}"
-            print(f"""
-[{gold_row};1H[2K#3{" " * (gold_column - 1)}{gold_frame}
-[{gold_row + 1};1H[2K#4{" " * (gold_column - 1)}{gold_frame}
-""", end="", flush=True)
+            battle_win_gold(totalgold, gold_balance_start, gold_row)
         if celebration_mode > 0 and animations_enabled():
             pressed_key = key(timeout=title_animation_timeout)
             if pressed_key == "TIMEOUT":
@@ -4548,7 +4558,7 @@ def after_attack():
         game.goto = battle_win
         return
     battle_show_data()
-    time.sleep(0.5)
+    time.sleep(setting.battle_turn_delay)
     if player.av >= 100 or enemy.av >= 100:
         # someone can still act
         turn = whose_turn()
@@ -4563,9 +4573,6 @@ def after_attack():
     else:
         game.goto = new_turn
         return
-
-
-    
 
 def battle_preparation():
     d.frombattle = False
@@ -4589,15 +4596,21 @@ def battle_preparation():
         EnemyData(name="Necromancer", hp=10000, attack=3, defense=2, xp_reward=120, gold_reward=600, speed=70),
         EnemyData(name="Ancient Dragon", hp=20000, attack=6, defense=5, xp_reward=500, gold_reward=250, speed=30),
     ]    
+    for enemy_data in enemies_list:
+        apply_difficulty(enemy_data, setting.battle_difficulty)
+
     # give the player the option to choose an enemy to fight
     cls()
-    print(f"{xb}{bold}=== CHOOSE AN ENEMY ==={reset}")
+    difficulty = ("Easy", "Normal", "Hard", "Extreme")[setting.battle_difficulty]
+    if setting.battle_difficulty == 3:
+        difficulty = f"{unbold}{xlred}{difficulty}{xb}{bold}"
+    print(f"{xb}{bold}=== CHOOSE AN ENEMY ({difficulty}) ==={reset}")
     for idx, enemy_data in enumerate(enemies_list, start=1):
-        print(f"{xa}[{idx}]{xf} {enemy_data.name} (HP: {enemy_data.hp}, ATK: {enemy_data.attack}, DEF: {enemy_data.defense}, SPD: {enemy_data.speed})")
-    print(f"{xc}[B]{xf} Back to main menu")
+        print(f"{xa}[{idx}]{xf} {enemy_data.name} (HP: {format_number(enemy_data.hp)}, ATK: {format_number(enemy_data.attack)}, DEF: {format_number(enemy_data.defense)}, SPD: {format_number(enemy_data.speed)})")
+    print(f"{xc}[{bind.back.upper()}]{xf} Back to main menu")
     while True:
         k = key()
-        if k.lower() == "b":
+        if k.lower() in (bind.back, "esc"):
             game.goto = mainmenu
             return
         try:
@@ -4620,6 +4633,15 @@ def battle_preparation():
     game.goto = battle_loop
     return
 
+def record_battle_action(actor):
+    lines = short_action_log(d.latest_action)
+    if not lines:
+        return
+    history = list(getattr(d, "battle_action_history", []))
+    history.append((actor, "  •  ".join(lines)))
+    d.battle_action_history = history[-5:]
+
+
 def battle_show_data():
     cls()
 
@@ -4637,7 +4659,7 @@ def battle_show_data():
 
     # status indicator of turns
     # get console width
-    console_width = os.get_terminal_size().columns//2
+    console_width = shutil.get_terminal_size(fallback=(128, 36)).columns//2
     if player.av >= enemy.av:
         # your turn
         turn_indicator = f"{xf}{xbb}{bold}→ Your turn! →"
@@ -4661,37 +4683,66 @@ def battle_show_data():
 
     print(f"{bold}{xlred}{enemy.name}{reset}")
     print(f"  {xb4}⚔️ Enemy 1 of 1{reset}")
-    print(f"  {x7}HP{reset}  {hp_bar(enemy.hp, enemy_max_hp)}  {xf}{enemy.hp}/{enemy_max_hp}{reset}")
-    print(f"  {x7}ATK{reset} {xf}{enemy.attack}{reset}  |  {x7}DEF{reset} {xf}{enemy.defense}{reset}  |  {x7}SPD{reset} {xf}{enemy.speed}{reset}")
-    print(f"  {x7}Action Value{reset}  {xb}{enemy.av}{reset}  ({xf}{d.av_difference:+d}{reset})")
-    print(f"  {x7}Reward:{reset} {xa}{enemy.xp_reward} XP{reset} and {xe}{max(0, int(enemy.gold_reward))} gold coins{reset}")
+    health_display = setting.battle_health_display
+    enemy_health = []
+    if health_display in ("Bar", "Both number and bar"):
+        enemy_health.append(hp_bar(enemy.hp, enemy_max_hp))
+    if health_display in ("Number", "Both number and bar"):
+        enemy_health.append(f"{xf}{format_number(enemy.hp)}/{format_number(enemy_max_hp)}{reset}")
+    print(f"  {x7}HP{reset}  {'  '.join(enemy_health)}")
+    if setting.battle_details == "Detailed":
+        print(f"  {x7}{simple_text('ATK', 'Damage')}{reset} {xf}{format_number(enemy.attack)}{reset}  |  {x7}{simple_text('DEF', 'Block %')}{reset} {xf}{format_number(enemy.defense)}{reset}  |  {x7}{simple_text('SPD', 'Speed')}{reset} {xf}{format_number(enemy.speed)}{reset}")
+    if setting.battle_details == "Detailed":
+        print(f"  {x7}{simple_text('Action Value', 'Action points')}{reset}  {xb}{format_number(enemy.av)}{reset}  ({xf}{"+" if d.av_difference >= 0 else ""}{format_number(d.av_difference)}{reset})")
+    print(f"  {x7}Reward:{reset} {xa}{format_number(enemy.xp_reward)} XP{reset} and {xe}{format_number(max(0, int(enemy.gold_reward)))} gold coins{reset}")
     print()
 
     print(f"{bold}{xa}▸ {player.name}{reset}")
-    print(f"  {x7}HP{reset}  {hp_bar(player.hp, player_max_hp)}  {xf}{player.hp}/{player_max_hp}{reset}")
-    print(f"  {x7}Action Value{reset}  {xb}{player.av}{reset}")
-    print(f"  {x7}ATK{reset} {xf}{player.total_dmg}{reset}  |  {x7}DEF{reset} {xf}{player.total_def}{reset}  |  {x7}SPD{reset} {xf}{player.speed}{reset}")
-    print(f"  {x7}Regen{reset} {xf}{player.regen}%{reset}  |  {x7}Lifesteal{reset} {xf}{player.life_steal}%{reset}  |  {x7}Crit{reset} {xf}{player.crit_rate}%{reset}")
+    player_health = []
+    if setting.player_health_display in ("Bar", "Both number and bar"):
+        player_health.append(hp_bar(player.hp, player_max_hp))
+    if setting.player_health_display in ("Number", "Both number and bar"):
+        player_health.append(f"{xf}{format_number(player.hp)}/{format_number(player_max_hp)}{reset}")
+    print(f"  {x7}HP{reset}  {'  '.join(player_health)}")
+    av_label = simple_text("Action Value", "Action points")
+    if setting.battle_details == "Detailed":
+        print(f"  {x7}{av_label}{reset}  {xb}{format_number(player.av)}{reset}")
+    if setting.battle_details == "Detailed":
+        print(f"  {x7}{simple_text('ATK', 'Damage')}{reset} {xf}{format_number(player.total_dmg)}{reset}  |  {x7}{simple_text('DEF', 'Block %')}{reset} {xf}{format_number(player.total_def)}{reset}  |  {x7}{simple_text('SPD', 'Speed')}{reset} {xf}{format_number(player.speed)}{reset}")
+    if setting.battle_details == "Detailed":
+        print(f"  {x7}Regen{reset} {xf}{format_number(player.regen)}%{reset}  |  {x7}Lifesteal{reset} {xf}{format_number(player.life_steal)}%{reset}  |  {x7}Crit{reset} {xf}{format_number(player.crit_rate)}%{reset}")
     print()
 
-    print(f"{bold}{xb}⚙️ Keybinds you can use:{reset}")
+    print(f"{bold}{xb}⚙️ {simple_text('Keybinds you can use:', 'Battle controls:')}{reset}")
     print(f"  {xf}{bind.attack.upper()}{reset} {x7}Attack{reset}  •  {xf}{bind.skill.upper()}{reset} {x7}Skill{reset}  •  {xf}{bind.ult.upper()}{reset} {x7}Ultimate{reset}  •  {xf}{bind.heal.upper()}{reset} {x7}Heal{reset}  •  {xf}{bind.forfeit.upper()}{reset} {x7}Forfeit{reset}")
-    print(f"  {xf}2{reset} {x7}Set HP to 20%{reset}  •  {xf}6{reset} {x7}Set HP to 60%{reset}  •  {xf}0{reset} {x7}Win battle{reset}")
+    if setting.debug_shortcuts:
+        print(f"  {xf}2{reset} {x7}Set HP to 20%{reset}  •  {xf}6{reset} {x7}Set HP to 60%{reset}  •  {xf}0{reset} {x7}Win battle{reset}")
     print()
     # if it's your turn or not,
-    if player.av > enemy.av:
+    if player.av >= enemy.av:
         turn_indicator = f"{xa} Your turn!{reset}"
     else:
         turn_indicator = f"{xlred} Enemy's turn!{reset}"
     print(f"{bold}{x7}● Last action:{reset}{turn_indicator}")
-    if hasattr(d, "latest_action") and d.latest_action.strip():
-        lines = [line.strip() for line in d.latest_action.splitlines() if line.strip()]
-        for line in lines[:4]:
+    history_length = setting.battle_action_history_length
+    history = getattr(d, "battle_action_history", [])
+    if history_length > 1 and history:
+        print(f"  {x7}Recent actions (last {history_length}):{reset}")
+        for actor, action in history[-history_length:]:
+            summary = re.sub(r"\x1b\[[0-9;]*m", "", action)
+            print(f"  {xf}{actor}: {summary[:95]}{reset}")
+    elif getattr(d, "latest_action", "").strip():
+        lines = (short_action_log(d.latest_action) if setting.battle_short_action_log
+                 else [line.strip() for line in d.latest_action.splitlines() if line.strip()][:4])
+        for line in lines:
             print(f"  {line[:95]}")
+        if not lines:
+            print(f"  {x7}No action yet.{reset}")
     else:
         print(f"  {x7}Still nothing! Maybe try pressing some of the keys above, hmm?{reset}")
 
 def enemy_attack():
+    d.latest_action = ""
     sound("shield", channel="sfx", pan=0.35)
     dmgdealt = max(
         0,
@@ -4704,7 +4755,7 @@ def enemy_attack():
     )
     player.hp -= dmgdealt
     if dmgdealt > 0:
-        d.latest_action += f"{xlred}⚔  {dmgdealt}{xa} DMG RCV{reset}"
+        d.latest_action += f"{xlred}⚔  {format_number(dmgdealt)}{xa} DMG RCV{reset}"
     else:
         d.latest_action += f"{x7}⚔  Blocked{reset}"
     
@@ -4717,6 +4768,7 @@ def enemy_attack():
     # action value decrease
     enemy.av -= 100
     d.av_difference = player.av - enemy.av
+    record_battle_action("Enemy")
     battle_show_data()
     game.goto = after_attack
     return
@@ -4729,17 +4781,16 @@ def battle_attack():
     d.av_difference = player.av - enemy.av
     
     # normal hits (enemy.defense is a % reduction to damage, so 5 defense means 5% damage reduction):
-    dmgdealt = round(max(0, int(player.total_dmg * (100 - enemy.defense) / 100)))
+    normal_damage, critical_damage = attack_damage(player, enemy)
+    dmgdealt = normal_damage
     
     # if critical (chance triggers: random int 0-100, if it's less than player's crit chance, it's a crit):
-    is_crit = random.randint(0, 100) < player.crit_rate
+    is_crit = random.random() * 100 < player.crit_rate
     if is_crit:
-        dmgdealt = round(
-            dmgdealt * (1 + (getattr(player, "crit_damage", 0) / 100))
-        )
-        d.latest_action = f"{rgb(255, 215, 0)}✴  CRIT!{reset} {dmgdealt}{xa} DMG{reset}"
+        dmgdealt = critical_damage
+        d.latest_action = f"{rgb(255, 215, 0)}✴  CRIT!{reset} {format_number(dmgdealt)}{xa} DMG{reset}"
     else:
-        d.latest_action = f"{xf}⚔  {dmgdealt}{xa} DMG{reset}"
+        d.latest_action = f"{xf}⚔  {format_number(dmgdealt)}{xa} DMG{reset}"
     
     enemy.hp -= dmgdealt
     sound("sword2", channel="sfx", pan=-0.35)
@@ -4752,7 +4803,7 @@ def battle_attack():
             * getattr(player, "healing_received_multiplier", 1)
         )
         player.hp = min(player.total_hp, player.hp + steal_amount)
-        d.latest_action += f"\n{xlred}🩸 Life steal: {steal_amount} HP stolen!{reset}"
+        d.latest_action += f"\n{xlred}🩸 Life steal: {format_number(steal_amount)} HP stolen!{reset}"
         
     # if player hp is above max, set it to max
     if player.hp >= player.total_hp:
@@ -4760,20 +4811,24 @@ def battle_attack():
     
     # add separator to latest action
     d.latest_action += f"\n{x7}{chr(9472) * 60}{reset}\n"
+    record_battle_action("You")
     battle_show_data()
     game.goto = after_attack
     return
 
 def battle_skill():
-    game.goto = battle_loop
+    d.latest_action = f"{x7}Skills are not available yet.{reset}"
+    game.goto = player_turn
     return
 
 def battle_ult():
-    game.goto = battle_loop
+    d.latest_action = f"{x7}Ultimates are not available yet.{reset}"
+    game.goto = player_turn
     return
 
 def battle_heal():
-    game.goto = battle_loop
+    d.latest_action = f"{x7}Healing items are not available yet.{reset}"
+    game.goto = player_turn
     return
 
 # battle loop incoming:
@@ -4783,6 +4838,7 @@ def battle_loop():
     
 
 def house():
+    gear_column = 67 if sys.platform == "darwin" else 66
     cls()
     player.load()
     thresholds = [
@@ -4812,41 +4868,41 @@ def house():
 {player.color}     ██      ██     {x8}     ╭───────────────────────────╮         ╭───────────────────────────╮   
 {player.color}     ██ •  • ██     {x8}╭────╯    {x7}{italic}Home, sweet home...{reset}{x8}    ╰────┬────╯    {x7}{underline}{italic} Available Options {reset}{x8}    ╰────╮     
 {player.color}     ██      ██     {x8}│{x9}                                {x8}     │                                    {x8} │ 
-{player.color}       ██████       {x8}│{player.color}{bold}  This is your house, welcome in!  {reset}{x8}  │  {xlyellow}{bold}[C]{reset}{xe} 🚶 Manage character          {x8}  │ 
-{player.color}         ██         {x8}│{x9}                                    {x8} │   ╰─ {x2}{bold}[I]{reset}{xa} 💼 Enter inventory       {x8}  │           
+{player.color}       ██████       {x8}│{player.color}{bold}  This is your house, welcome in!  {reset}{x8}  │  {xlyellow}{bold}[{setting.open_character.upper()}]{reset}{xe} 🚶 Manage character          {x8}  \033[97G│ 
+{player.color}         ██         {x8}│{x9}                                    {x8} │   ╰─ {x2}{bold}[{setting.open_inventory.upper()}]{reset}{xa} 💼 Enter inventory       {x8}  \033[97G│           
 
 {player.color}         ██  ██     {x8}│{xlyellow}  character or personalization will {x8} │{x1}                                   {x8}  │ 
-{player.color}      ███████       {x8}│{xlyellow}  be displayed here on the right!   {x8} │  {x7}{bold}[S]{reset}{xf} ⚙️ Settings & info           {x8}  │ 
+{player.color}      ███████       {x8}│{xlyellow}  be displayed here on the right!   {x8} │  {x7}{bold}[{setting.open_settings.upper()}]{reset}{xf} \033[{gear_column}G⚙️\033[69GSettings & info           {x8}  \033[97G│ 
 {player.color}    ██   ██         {x8}│{x9}                                    {x8} │{x1}                                   {x8}  │  
-{player.color}         ██         {x8}│{xlorange}  To access any option on the right,{x8} │  {x5}{bold}[R]{reset}{xd} 🎧 Refresh game music       {x8}   │ 
+{player.color}         ██         {x8}│{xlorange}  To access any option on the right,{x8} │  {x5}{bold}[R]{reset}{xd} 🎧 Refresh game music       {x8}   \033[97G│ 
 {player.color}         ██         {x8}│{xlorange}  simply press the keys that are{x8}     │                                   {x8}  │    
-{player.color}       ██  ██       {x8}│{xlorange}  shown next to them!            {x8}    │  {xc}{bold}[{bind.back.upper()}] {reset}🏡 {xlred}{italic}<- Return to the main menu{x8}{x8}  │ 
+{player.color}       ██  ██       {x8}│{xlorange}  shown next to them!            {x8}    │  {xc}{bold}[{bind.back.upper()}] {reset}🏡 {xlred}{italic}<- Return to the main menu{x8}{x8}  \033[97G│ 
 {player.color}     ██      ██     {x8}│{x9}                                    {x8} │                                     │              
 {player.color}                    {x8}╰{x8}────────────────────────────────────{x8}─┴─────────────────────────────────────╯         
     """)
     if player.level >= 100:
-        print(f"[23;1H{reset}{player.color}         ██    ██   {x8}│{xlyellow}  Everything related to you, your   {x8} │{x8}   ╰─ {x3}{bold}[E]{reset}{xb} 💎 Convert excess XP     {x8}  │ ")
+        print(f"[23;1H{reset}{player.color}         ██    ██   {x8}│{xlyellow}  Everything related to you, your   {x8} │{x8}   ╰─ {x3}{bold}[E]{reset}{xb} 💎 Convert excess XP     {x8}  \033[97G│ ")
     else:
-        print(f"[23;1H{reset}{player.color}         ██    ██   {x8}│{xlyellow}  Everything related to you, your   {x8} │{x8}   ╰─ {x3}{bold}[G]{reset}{xb} 🦮 Level guide/Builder   {x8}  │ ")
+        print(f"[23;1H{reset}{player.color}         ██    ██   {x8}│{xlyellow}  Everything related to you, your   {x8} │{x8}   ╰─ {x3}{bold}[G]{reset}{xb} 🦮 Level guide/Builder   {x8}  \033[97G│ ")
     while True:
         k = key()
         if k.lower() == bind.back or k.lower() == "esc":
             game.goto = mainmenu
             return
-        if k.lower() == "s":
+        if k.lower() == setting.open_settings:
             sound("map_switch2")
             game.goto = settings
             return
-        if k.lower() == "i":
+        if k.lower() == setting.open_inventory:
             sound("map_switch2")
             game.goto = inventory
             return
-        if k.lower() == "c":
+        if k.lower() == setting.open_character:
             sound("map_switch2")
             game.goto = character
             return
         # xp time
-        if k.lower() == "x":
+        if setting.debug_shortcuts and k.lower() == "x":
             # move to 1;1 and ask how much xp you wanna earn
             move(1, 1)
             x = getx(1, 1, prompt="Enter XP to earn: ", expect="int")
@@ -4912,10 +4968,10 @@ def house():
                         dotsdisplay = ".  "
                     sound(f"pickup_coin {pitch}")
                     if gold/counts*(i+1) < 100000:
-                        print(f"[23;1H{reset}{player.color}         ██    ██   {x8}│{xlyellow}  Everything related to you, your   {x8} │{x8}   ╰─ {x6}{bold}[E]{reset}{xe} ⏳ Working{dotsdisplay} {xlyellow}({bold}+{round(gold/counts*(i+1))}{reset}🪙{xlyellow}) {reset}")
+                        print(f"[23;1H{reset}{player.color}         ██    ██   {x8}│{xlyellow}  Everything related to you, your   {x8} │{x8}   ╰─ {x6}{bold}[E]{reset}{xe} ⏳ Working{dotsdisplay} {xlyellow}({bold}+{format_number(round(gold/counts*(i+1)))}{reset}🪙{xlyellow}) {reset}")
                     else:
                         # normalize to "k"
-                        print(f"[23;1H{reset}{player.color}         ██    ██   {x8}│{xlyellow}  Everything related to you, your   {x8} │{x8}   ╰─ {x6}{bold}[E]{reset}{xlred} 🔥 Working{dotsdisplay} {xlyellow}({bold}+{round(gold/counts*(i+1)/1000, 1)}k{reset}🪙{xlyellow}) {reset}")
+                        print(f"[23;1H{reset}{player.color}         ██    ██   {x8}│{xlyellow}  Everything related to you, your   {x8} │{x8}   ╰─ {x6}{bold}[E]{reset}{xlred} 🔥 Working{dotsdisplay} {xlyellow}({bold}+{format_number(round(gold/counts*(i+1)))}{reset}🪙{xlyellow}) {reset}")
                     progress = i / counts
                     pitch = 1 + (progress ** 1.5) * 1.5
                     delay = max(
@@ -4935,13 +4991,13 @@ def house():
                 sound(reward_sound)
                 animation_sleep(0.1)
                 if gold < 100000:
-                    print(f"[23;1H{reset}{player.color}         ██    ██   {x8}│{xlyellow}  Everything related to you, your   {x8} │{x8}   ╰─ {x3}{bold}[E]{reset}{xb} 💎 Converted! {xlyellow}({bold}+{round(gold)}{reset}🪙{xlyellow})   {reset}")
+                    print(f"[23;1H{reset}{player.color}         ██    ██   {x8}│{xlyellow}  Everything related to you, your   {x8} \033[97G│{x8}   ╰─ {x3}{bold}[E]{reset}{xb} 💎 Converted! {xlyellow}({bold}+{format_number(round(gold))}{reset}🪙{xlyellow})   {reset}")
                 else:
                     # normalize to k
-                    print(f"[23;1H{reset}{player.color}         ██    ██   {x8}│{xlyellow}  Everything related to you, your   {x8} │{x8}   ╰─ {x3}{bold}[E]{reset}{xb} 💎 Converted! {xlyellow}({bold}+{round(gold/1000, 1)}k{reset}🪙{xlyellow})  {reset}")
+                    print(f"[23;1H{reset}{player.color}         ██    ██   {x8}│{xlyellow}  Everything related to you, your   {x8} \033[97G│{x8}   ╰─ {x3}{bold}[E]{reset}{xb} 💎 Converted! {xlyellow}({bold}+{format_number(round(gold))}{reset}🪙{xlyellow})  {reset}")
                 
         # this is the pitch testing code!
-        if k.lower() == "o":
+        if setting.debug_shortcuts and k.lower() == "o":
             draw_box_border(32,20,34,60,text="Enter an int 1 to 50:",bold=True,text_color=xlyellow)
             a = getx(33,22,prompt="› ",expect="int",max_len=25,min_val=1,max_val=50,highlight_prefix=f"{xlorange}{bold}",highlight_suffix=reset)
             blank(32,20,34,60)
@@ -5112,7 +5168,7 @@ def refresh_player_secondary_stats():
 
 
 def character_exp_progress(level, xp, xp_needed, bar_length=30):
-    """Return EXP percentage/bar fill, or None once the level cap is reached."""
+    # no xp bar after reaching max level
     if int(level) >= CHARACTER_MAX_LEVEL:
         return None
     if xp_needed <= 0:
@@ -5217,7 +5273,6 @@ def character():
     abilityhp=0
     totaldmg = core_stats["total_dmg"]
     totalcritdmg=round(totaldmg*(1+player.crit_damage/100))
-    item.atkcrit = round(item.atkcrit)
     critrate = round(player.crit_rate)
     expected = round(totaldmg * (1 + (critrate / 100) * (player.crit_damage / 100)))
     number = 1
@@ -5266,7 +5321,7 @@ def character():
     # headwear dodge functions exactly like armor
     head_dodge = (getattr(head, "level", 0) // 10) * 0.3
     player.dodge = base_dodge + armor_dodge + weapon_dodge + head_dodge
-    player.dodge = round(player.dodge, -1)
+    player.dodge = round(player.dodge, 1)
     del base_dodge, armor_dodge, weapon_dodge, head_dodge
     
     # now, let's do effect res
@@ -5526,7 +5581,7 @@ def character():
             print(f"{xf}{bold}{rgback(0,0,1)}\033[18;94H{percent}%")
         else:
             print(f"{xba}{xf}{bold}\033[18;94H{percent}%")
-        print(f"\033[19;93H{reset}{x7}{rgb(186,243,219)}↑ {bold}{EXP}/{EXP_NEEDED} {reset}XP to get level {player.level+1}{reset} ")
+        print(f"\033[19;93H{reset}{x7}{rgb(186,243,219)}↑ {bold}{format_number(EXP)}/{format_number(EXP_NEEDED)} {reset}XP to get level {player.level+1}{reset} ")
     print(f"""
 [15;20H{item.type} {xlyellow}Attack{reset}{x8}.....{bold}{xe}{char_round(round(totaldmg))}{reset}
 [16;20H🛡️ {x3}Defence{reset}{x8}....{bold}{xb}{char_round(round(totaldef,1))}%{reset}
@@ -5558,11 +5613,23 @@ def character():
         
         
 def settings():
+    d.settings_difficulty_value = setting.battle_difficulty
+    d.settings_extreme_started = None
+    d.settings_value_texts = {}
+    d.settings_value_changes = {}
+    d.settings_audio_test_until = 0
+    d.settings_unavailable_until = 0
     d.settings_selection = "category"
     d.settings_cursor = 1
     d.settings_category = 1
+    d.settings_category_scroll = 0
+    d.settings_category_manual_scroll = False
+    d.settings_category_scrollbar_dragging = False
     d.settings_edit_flash = False
     d.settings_slider_dragging = False
+    d.settings_scrollbar_dragging = False
+    d.settings_click_sound = False
+    d.settings_hover_attr = None
     d.settings_scroll = 0
     settings_editor.clear()
     cls()
@@ -5609,65 +5676,337 @@ def settings():
     game.goto = settings2
     return
 
+def run_settings_action(item):
+    settings_editor.clear()
+    blank(32, 23, 35, 94)
+    if item["attr"] == "reset_settings":
+        draw_box_text(f"{xf}Reset all settings and keybinds? Type YES to confirm.{reset}", 32, 23, 33, 94)
+        answer = getx(34, 23, prompt="Confirm: ", max_len=3, allow_none=True)
+        if (answer or "").strip().lower() != "yes":
+            settings_editor.message = "Reset cancelled."
+            return
+        setting.reset()
+        setting.inventory_last_selections = {}
+        d.settings_value_texts = {}
+        d.settings_value_changes = {}
+        settings_editor.message = "All settings reset to defaults."
+        sound("REFRESH_AUDIO")
+        sound("map_switch3")
+    elif item["attr"] == "manual_backup":
+        draw_box_text(f"{xf}Name this backup, or leave it empty. Manual backups are always kept.{reset}", 32, 23, 33, 94)
+        name = getx(34, 23, prompt="Name: ", max_len=55, allow_none=True)
+        try:
+            create_backup(PROJECT_ROOT, name=name or "", manual=True)
+        except OSError as error:
+            settings_editor.message = f"Backup failed: {error}"
+            sound("error2")
+            return
+        settings_editor.message = "Backup saved!"
+        sound("map_switch2")
+
+
+def open_settings_search():
+    if settings_editor.active:
+        settings_editor.commit()
+    settings_editor.clear()
+    if d.settings_selection == "setting":
+        d.settings_search_return = (d.settings_category, d.settings_cursor, d.settings_scroll, "setting")
+    else:
+        d.settings_search_return = getattr(d, "settings_last_visited", (d.settings_category, d.settings_cursor, d.settings_scroll, "setting"))
+    d.settings_slider_dragging = False
+    d.settings_scrollbar_dragging = False
+    d.settings_category_scrollbar_dragging = False
+    if not hasattr(d, "settings_search_query"):
+        d.settings_search_query = ""
+        d.settings_search_caret = 0
+        d.settings_search_focus = 0
+        d.settings_search_scroll = 0
+
+    # fade the tabs, leave the sidebar where it was
+    first = getattr(d, "settings_category_scroll", 0)
+    steps = 5 if animations_enabled() else 1
+    for step in range(steps):
+        # finish at x7, keep the same gray as the other tabs
+        shade = round(186 + (148 - 186) * (step + 1) / steps)
+        color = x7 if step == steps - 1 else rgb(shade, shade, shade)
+        for index in range(6):
+            category = first + index
+            if category >= len(CATEGORY_NAMES):
+                break
+            label = CATEGORY_ICONS[category] + " " + CATEGORY_NAMES[category]
+            row = 8 + index * 4
+            for offset, text in ((0, " " * 19), (1, f"{label:^19}"), (2, " " * 19)):
+                move(row + offset, 1)
+                print(f"{reset}{unbold}{color}│{text}│{reset}", end="")
+            # same divider as normal settings; the footer shares this frame
+            move(row + 3, 1)
+            ending = "┼" if index == 5 else "┤"
+            print(f"{x7}├{'─' * 19}{ending}{reset}", end="")
+        sys.stdout.flush()
+        if steps > 1:
+            animation_sleep(0.025)
+    game.goto = settings_search
+
+
+def settings_search_visit(category, index):
+    # open the tab, highlight the result without toggling it
+    cursor(False)
+    settings_editor.clear()
+    d.settings_hover_attr = None
+    d.settings_category = category + 1
+    d.settings_category_manual_scroll = False
+    d.settings_selection = "setting"
+    d.settings_cursor = index + 1
+    d.settings_scroll = max(0, index - 3)
+    sound("map_right")
+    game.goto = settings2
+
+
+def settings_search():
+    col = 23
+    width = 100
+    result_count = 6
+    input_col = col + 10
+    input_width = width - 12
+    query = d.settings_search_query
+    caret = min(len(query), d.settings_search_caret)
+    focus = d.settings_search_focus
+    scroll = d.settings_search_scroll
+
+    try:
+        while True:
+            results = find_settings(query)
+            focus = max(0, min(focus, len(results)))
+            max_scroll = max(0, len(results) - result_count)
+            scroll = max(0, min(scroll, max_scroll))
+            if focus > 0:
+                if focus - 1 < scroll:
+                    scroll = focus - 1
+                elif focus - 1 >= scroll + result_count:
+                    scroll = focus - result_count
+            visible = results[scroll:scroll + result_count]
+
+            # keep this window for the next Ctrl/Cmd+F
+            d.settings_search_query = query
+            d.settings_search_caret = caret
+            d.settings_search_focus = focus
+            d.settings_search_scroll = scroll
+            cursor(False)
+            # stop before the outer border, draw it back if search cleared it
+            blank(8, col, 30, col + width + 2)
+            for row in range(8, 31):
+                move(row, col + width + 3)
+                print(f"{x7}│{reset}", end="")
+            blank(32, col, 35, 94)
+            move(33, 2)
+            print(f"{xc}{bold}{'Back to settings':^19}{reset}", end="")
+            move(34, 2)
+            back_hint = "[click | Esc]" if setting.mouse_controls else "[Esc]"
+            print(f"{xc}{back_hint:^19}{reset}", end="")
+
+            # query field, same size as a setting
+            color = xlyellow if focus == 0 else x7
+            move(8, col)
+            print(f"{color}╭{'─' * width}╮{reset}", end="")
+            move(9, col)
+            print(f"{color}│{reset} {xf}Search: {reset}", end="")
+            # slide the text when the cursor reaches the edge
+            text_start = max(0, caret - input_width + 1)
+            text = query[text_start:text_start + input_width]
+            move(9, input_col)
+            print(f"{xf}{pad_visible(text, input_width)}{reset}", end="")
+            move(9, col + width + 1)
+            print(f"{color}│{reset}", end="")
+            move(10, col)
+            print(f"{color}╰{'─' * width}╯{reset}", end="")
+
+            # top matches below, use gray boxes for all of them
+            for index, result in enumerate(visible):
+                score, category, setting_index, item = result
+                selected = focus == scroll + index + 1
+                row = 11 + index * 3
+                move(row, col)
+                print(f"{x7}╭{'─' * width}╮{reset}", end="")
+                move(row + 1, col)
+                print(f"{x7}│{reset}", end="")
+                move(row + 1, col + 2)
+                prefix = "→ " if selected else "  "
+                name_color = xa if selected else xf
+                print(f"{name_color}{bold if selected else unbold}{prefix}{item['name']}{reset}", end="")
+                category_name = CATEGORY_ICONS[category] + " " + CATEGORY_NAMES[category]
+                move(row + 1, col + width - len(category_name))
+                print(f"{x7}{category_name}{reset}", end="")
+                move(row + 1, col + width + 1)
+                print(f"{x7}│{reset}", end="")
+                move(row + 2, col)
+                print(f"{x7}╰{'─' * width}╯{reset}", end="")
+
+            if not results:
+                message = "Nothing found yet — try a different word!" if query.strip() else "Looking for something? Try a name, an effect, or whatever you remember!"
+                draw_box_text(f"{x7}{message}{reset}", 12, col + 2, 14, col + width - 2)
+            if len(results) > result_count:
+                move(30, col + 2)
+                print(f"{x7}{scroll + 1}–{scroll + len(visible)} of {len(results)} results{reset}", end="")
+
+            if focus > 0:
+                item = results[focus - 1][3]
+                title = item['name']
+                description = setting_description(item)
+            else:
+                title = "What would you like to change?"
+                description = "Type whatever comes to mind — it doesn't have to be the exact name! Use ↑/↓ to pick a result, then ⏎ or click to open it."
+            move(32, col)
+            print(f"{xlorange}{bold}{title}{reset}", end="")
+            draw_box_text(f"{xf}{unbold}{description}{reset}", 33, col, 34, 94)
+            hint = "Want to start over? Esc clears your search." if query else "All done? Esc takes you back to where you left off."
+            draw_box_text(f"{x7}{hint}{reset}", 35, col, 35, 94)
+            help_lines = [("←/→", "move text cursor"), ("↑/↓", "choose result"), ("⏎", "open result"), ("Esc", "clear / return")]
+            for index, (control, action) in enumerate(help_lines):
+                move(32 + index, 96)
+                line = f"{xlyellow}{bold}{control}{unbold}{x7} - {xf}{action}"
+                print(f"{reset}{x7}│ {reset}", end="")
+                draw_box_text(line, 32 + index, 98, 32 + index, 124)
+                move(32 + index, 125)
+                print(f"{reset}{x7} │{reset}", end="")
+            move(36, 1)
+            print(f"{xlred}╰{'─' * 19}{x7}┴{reset}", end="")
+
+            if focus == 0:
+                move(9, input_col + caret - text_start)
+                cursor(True)
+            sys.stdout.flush()
+            k = key(mouse=setting.mouse_controls, shortcuts=True)
+            if isinstance(k, dict):
+                if k.get("event") == "wheel" and results:
+                    if k.get("delta", 0) > 0:
+                        focus = max(0, focus - 1)
+                    else:
+                        focus = min(len(results), focus + 1)
+                    continue
+                if k.get("event") != "down" or k.get("button") != "left":
+                    continue
+                if back_button_contains(k["x"], k["y"]):
+                    category, selected, position, selection = d.settings_search_return
+                    d.settings_category = category
+                    d.settings_cursor = selected
+                    d.settings_scroll = position
+                    d.settings_selection = selection
+                    d.settings_category_manual_scroll = False
+                    d.settings_hover_attr = None
+                    game.goto = settings2
+                    return
+                if col - 1 <= k.get("x", -1) <= col + width and 7 <= k.get("y", -1) <= 9:
+                    focus = 0
+                    caret = max(0, min(len(query), text_start + k["x"] + 1 - input_col))
+                    continue
+                index = setting_index_at(k["x"], k["y"], len(visible), col, 11, width, 3)
+                if index is not None:
+                    focus = scroll + index + 1
+                    d.settings_search_focus = focus
+                    category = visible[index][1]
+                    setting_index = visible[index][2]
+                    settings_search_visit(category, setting_index)
+                    return
+                continue
+
+            if k in ("ctrl/f", "cmd/f", "command/f", "super/f", "meta/f"):
+                focus = 0
+            elif k == "esc":
+                if query:
+                    query = ""
+                    caret = 0
+                    focus = 0
+                    scroll = 0
+                else:
+                    category, selected, position, selection = d.settings_search_return
+                    d.settings_category = category
+                    d.settings_cursor = selected
+                    d.settings_scroll = position
+                    d.settings_selection = selection
+                    d.settings_category_manual_scroll = False
+                    d.settings_hover_attr = None
+                    game.goto = settings2
+                    return
+            elif k == "down":
+                focus = min(len(results), focus + 1)
+            elif k == "up":
+                focus = max(0, focus - 1)
+            elif k == "enter":
+                if focus > 0:
+                    settings_search_visit(results[focus - 1][1], results[focus - 1][2])
+                    return
+            elif focus == 0:
+                changed = False
+                if k == "left":
+                    caret = max(0, caret - 1)
+                elif k == "right":
+                    caret = min(len(query), caret + 1)
+                elif k == "home":
+                    caret = 0
+                elif k == "end":
+                    caret = len(query)
+                elif k == "backspace" and caret > 0:
+                    query = query[:caret - 1] + query[caret:]
+                    caret -= 1
+                    changed = True
+                elif k == "delete" and caret < len(query):
+                    query = query[:caret] + query[caret + 1:]
+                    changed = True
+                else:
+                    text = " " if k == "space" else k
+                    if len(text) == 1 and text.isprintable() and len(query) < 256:
+                        query = query[:caret] + text + query[caret:]
+                        caret += 1
+                        changed = True
+                if changed:
+                    scroll = 0
+    finally:
+        cursor(False)
+
+
 def settings2():
 
-    # build category selection
-    # category 1: gameplay
+    category_height = 4
+    category_view_size = 6
+    category_track_height = category_view_size * category_height - 1
+    category_scrollbar_col = 21
+    category_max_scroll = max(0, len(CATEGORY_NAMES) - category_view_size)
+    # prepare category names with their icons
+    CATEGORY_LABELS = []
+    for icon, name in zip(CATEGORY_ICONS, CATEGORY_NAMES):
+        label = icon + " " + name
+        CATEGORY_LABELS.append(f"{label:^19}")
+    d.settings_category_scroll = max(0, min(getattr(d, "settings_category_scroll", 0), category_max_scroll))
+    if not getattr(d, "settings_category_manual_scroll", False):
+        focused_index = d.settings_category - 1
+        if focused_index < d.settings_category_scroll:
+            d.settings_category_scroll = focused_index
+        elif focused_index >= d.settings_category_scroll + category_view_size:
+            d.settings_category_scroll = focused_index - category_view_size + 1
+    visible_categories = CATEGORY_LABELS[d.settings_category_scroll:d.settings_category_scroll + category_view_size]
+    for local_index, label in enumerate(visible_categories):
+        selected = d.settings_category == d.settings_category_scroll + local_index + 1
+        if selected and d.settings_selection == "category":
+            color = rgb(186, 243, 219)
+        elif selected:
+            color = x3
+        else:
+            color = x7
+        style = bold if selected else unbold
+        top = 8 + local_index * category_height
+        for row, text in ((top, " " * 19), (top + 1, label), (top + 2, " " * 19)):
+            move(row, 1)
+            print(f"{reset}{color}{style}│{text}│{reset}", end="")
+        move(top + 3, 1)
+        print(f"{reset}{x7}├{'─' * 19}{'┼' if local_index == category_view_size - 1 else '┤'}{reset}", end="")
+    category_thumb_height = max(2, round(category_track_height * category_view_size / len(CATEGORY_NAMES)))
+    category_thumb_travel = category_track_height - category_thumb_height
+    category_thumb_offset = round(category_thumb_travel * d.settings_category_scroll / max(1, category_max_scroll))
+    for index in range(category_track_height):
+        move(8 + index, category_scrollbar_col)
+        thumb = category_thumb_offset <= index < category_thumb_offset + category_thumb_height
+        print(f"{xlorange}{bold}┃{reset}" if thumb else f"{x8}{unbold}│{reset}", end="")
 
-    move(7,1)
-    if d.settings_selection == "category":
-        print(f"{RGB}186;243;219m{bold}╭───────────────────┬{reset}" if d.settings_selection == "category" and d.settings_category == 1 else f"{x7}╭───────────────────┬")
-        print(f"{RGB}186;243;219m{bold}│                   │{reset}" if d.settings_selection == "category" and d.settings_category == 1 else f"{x7}│                   │")
-        print(f"{RGB}186;243;219m{bold}│     ◆ Battles     │{reset}" if d.settings_selection == "category" and d.settings_category == 1 else f"{x7}│     ◆ Battles     │")
-        print(f"{RGB}186;243;219m{bold}│                   │{reset}" if d.settings_selection == "category" and d.settings_category == 1 else f"{x7}│                   │")
-        print(f"{RGB}186;243;219m{bold}├───────────────────┤{reset}" if d.settings_selection == "category" and d.settings_category in [1,2] else f"{x7}├───────────────────┤")
-        print(f"{RGB}186;243;219m{bold}│                   │{reset}" if d.settings_selection == "category" and d.settings_category == 2 else f"{x7}│                   │")
-        print(f"{RGB}186;243;219m{bold}│   ◐ Look & feel   │{reset}" if d.settings_selection == "category" and d.settings_category == 2 else f"{x7}│   ◐ Look & feel   │")
-        print(f"{RGB}186;243;219m{bold}│                   │{reset}" if d.settings_selection == "category" and d.settings_category == 2 else f"{x7}│                   │")
-        print(f"{RGB}186;243;219m{bold}├───────────────────┤{reset}" if d.settings_selection == "category" and d.settings_category in [2,3] else f"{x7}├───────────────────┤")
-        print(f"{RGB}186;243;219m{bold}│                   │{reset}" if d.settings_selection == "category" and d.settings_category == 3 else f"{x7}│                   │")
-        print(f"{RGB}186;243;219m{bold}│  ◇ Sound & music  │{reset}" if d.settings_selection == "category" and d.settings_category == 3 else f"{x7}│  ◇ Sound & music  │")
-        print(f"{RGB}186;243;219m{bold}│                   │{reset}" if d.settings_selection == "category" and d.settings_category == 3 else f"{x7}│                   │")
-        print(f"{RGB}186;243;219m{bold}├───────────────────┤{reset}" if d.settings_selection == "category" and d.settings_category in [3,4] else f"{x7}├───────────────────┤")    
-        print(f"{RGB}186;243;219m{bold}│                   │{reset}" if d.settings_selection == "category" and d.settings_category == 4 else f"{x7}│                   │")
-        print(f"{RGB}186;243;219m{bold}│    ⬙ Key binds    │{reset}" if d.settings_selection == "category" and d.settings_category == 4 else f"{x7}│    ⬙ Key binds    │")
-        print(f"{RGB}186;243;219m{bold}│                   │{reset}" if d.settings_selection == "category" and d.settings_category == 4 else f"{x7}│                   │")
-        print(f"{RGB}186;243;219m{bold}├───────────────────┤{reset}" if d.settings_selection == "category" and d.settings_category in [4,5] else f"{x7}├───────────────────┤")      
-        print(f"{RGB}186;243;219m{bold}│                   │{reset}" if d.settings_selection == "category" and d.settings_category == 5 else f"{x7}│                   │")
-        print(f"{RGB}186;243;219m{bold}│  ∴ Accessibility  │{reset}" if d.settings_selection == "category" and d.settings_category == 5 else f"{x7}│  ∴ Accessibility  │")
-        print(f"{RGB}186;243;219m{bold}│                   │{reset}" if d.settings_selection == "category" and d.settings_category == 5 else f"{x7}│                   │")
-        print(f"{RGB}186;243;219m{bold}├───────────────────┤{reset}" if d.settings_selection == "category" and d.settings_category in [5,6] else f"{x7}├───────────────────┤")          
-        print(f"{RGB}186;243;219m{bold}│                   │{reset}" if d.settings_selection == "category" and d.settings_category == 6 else f"{x7}│                   │")
-        print(f"{RGB}186;243;219m{bold}│    ▦ Inventory    │{reset}" if d.settings_selection == "category" and d.settings_category == 6 else f"{x7}│    ▦ Inventory    │")
-        print(f"{RGB}186;243;219m{bold}│                   │{reset}" if d.settings_selection == "category" and d.settings_category == 6 else f"{x7}│                   │")
-        print(f"{RGB}186;243;219m{bold}├───────────────────┼{reset}" if d.settings_selection == "category" and d.settings_category in [6] else f"{x7}├───────────────────┼")         
-
-    if d.settings_selection == "setting":
-        print(f"{x3}{bold}╭───────────────────┬{reset}" if d.settings_selection == "setting" and d.settings_category == 1 else f"{x7}╭───────────────────┬")
-        print(f"{x3}{bold}│                   │{reset}" if d.settings_selection == "setting" and d.settings_category == 1 else f"{x7}│                   │")
-        print(f"{x3}{bold}│     ◆ Battles     │{reset}" if d.settings_selection == "setting" and d.settings_category == 1 else f"{x7}│     ◆ Battles     │")
-        print(f"{x3}{bold}│                   │{reset}" if d.settings_selection == "setting" and d.settings_category == 1 else f"{x7}│                   │")
-        print(f"{x3}{bold}├───────────────────┤{reset}" if d.settings_selection == "setting" and d.settings_category in [1,2] else f"{x7}├───────────────────┤")
-        print(f"{x3}{bold}│                   │{reset}" if d.settings_selection == "setting" and d.settings_category == 2 else f"{x7}│                   │")
-        print(f"{x3}{bold}│   ◐ Look & feel   │{reset}" if d.settings_selection == "setting" and d.settings_category == 2 else f"{x7}│   ◐ Look & feel   │")
-        print(f"{x3}{bold}│                   │{reset}" if d.settings_selection == "setting" and d.settings_category == 2 else f"{x7}│                   │")
-        print(f"{x3}{bold}├───────────────────┤{reset}" if d.settings_selection == "setting" and d.settings_category in [2,3] else f"{x7}├───────────────────┤")
-        print(f"{x3}{bold}│                   │{reset}" if d.settings_selection == "setting" and d.settings_category == 3 else f"{x7}│                   │")
-        print(f"{x3}{bold}│  ◇ Sound & music  │{reset}" if d.settings_selection == "setting" and d.settings_category == 3 else f"{x7}│  ◇ Sound & music  │")
-        print(f"{x3}{bold}│                   │{reset}" if d.settings_selection == "setting" and d.settings_category == 3 else f"{x7}│                   │")
-        print(f"{x3}{bold}├───────────────────┤{reset}" if d.settings_selection == "setting" and d.settings_category in [3,4] else f"{x7}├───────────────────┤")    
-        print(f"{x3}{bold}│                   │{reset}" if d.settings_selection == "setting" and d.settings_category == 4 else f"{x7}│                   │")
-        print(f"{x3}{bold}│    ⬙ Key binds    │{reset}" if d.settings_selection == "setting" and d.settings_category == 4 else f"{x7}│    ⬙ Key binds    │")
-        print(f"{x3}{bold}│                   │{reset}" if d.settings_selection == "setting" and d.settings_category == 4 else f"{x7}│                   │")
-        print(f"{x3}{bold}├───────────────────┤{reset}" if d.settings_selection == "setting" and d.settings_category in [4,5] else f"{x7}├───────────────────┤")      
-        print(f"{x3}{bold}│                   │{reset}" if d.settings_selection == "setting" and d.settings_category == 5 else f"{x7}│                   │")
-        print(f"{x3}{bold}│  ∴ Accessibility  │{reset}" if d.settings_selection == "setting" and d.settings_category == 5 else f"{x7}│  ∴ Accessibility  │")
-        print(f"{x3}{bold}│                   │{reset}" if d.settings_selection == "setting" and d.settings_category == 5 else f"{x7}│                   │")
-        print(f"{x3}{bold}├───────────────────┤{reset}" if d.settings_selection == "setting" and d.settings_category in [5,6] else f"{x7}├───────────────────┤")          
-        print(f"{x3}{bold}│                   │{reset}" if d.settings_selection == "setting" and d.settings_category == 6 else f"{x7}│                   │")
-        print(f"{x3}{bold}│    ▦ Inventory    │{reset}" if d.settings_selection == "setting" and d.settings_category == 6 else f"{x7}│    ▦ Inventory    │")
-        print(f"{x3}{bold}│                   │{reset}" if d.settings_selection == "setting" and d.settings_category == 6 else f"{x7}│                   │")
-        print(f"{x3}{bold}├───────────────────┼{reset}" if d.settings_selection == "setting" and d.settings_category in [6] else f"{x7}├───────────────────┼")      
     page_list = SETTINGS_PAGES
     max_settings = [len(p) for p in page_list] # max settings per category
     max_settings[2] += 1  # Test audio is a button, but participates in navigation.
@@ -5681,24 +6020,18 @@ def settings2():
     BOX_WIDTH = 100
     BOX_HEIGHT = 3
     SETTINGS_VIEW_SIZE = 7
-    SETTINGS_SCROLLBAR_COL = SETTINGS_COL + BOX_WIDTH + 3
+    SETTINGS_SCROLLBAR_COL = SETTINGS_COL + BOX_WIDTH + 2
     SLIDER_DISPLAYS = (
         "volume",
         "animation_speed",
         "duration",
         "difficulty",
         "victory_celebration",
+        "number",
     )
-    CATEGORY_LABELS = [
-        "     ◆ Battles     ",
-        "   ◐ Look & feel   ",
-        "  ◇ Sound & music  ",
-        "    ⬙ Key binds    ",
-        "  ∴ Accessibility  ",
-        "    ▦ Inventory    ",
-    ]
     CATEGORY_SELECTED_RGB = (186, 243, 219)
     scroll_item_count = len(page) + (1 if d.settings_category == 3 else 0)
+    d.settings_cursor = max(1, min(d.settings_cursor, scroll_item_count))
     max_scroll = max(0, scroll_item_count - SETTINGS_VIEW_SIZE)
     d.settings_scroll = max(0, min(getattr(d, "settings_scroll", 0), max_scroll))
     if d.settings_selection == "setting":
@@ -5715,12 +6048,31 @@ def settings2():
         and d.settings_scroll == max_scroll
         and len(visible_page) < SETTINGS_VIEW_SIZE
     )
+    if d.settings_selection == "setting":
+        d.settings_last_visited = (d.settings_category, d.settings_cursor, d.settings_scroll, "setting")
     test_audio_row = SETTINGS_ROW + len(visible_page) * BOX_HEIGHT
     category_focused = d.settings_selection == "category"
     visually_editing = (
         settings_editor.active
         and not getattr(d, "settings_slider_dragging", False)
     )
+
+    slider_label_width = 3
+    for slider_item in page:
+        if slider_item["type"] != "slider":
+            continue
+        for index in range(slider_step_count(slider_item) + 1):
+            possible = slider_item["min"] + index * slider_item.get("step", 1)
+            if isinstance(possible, float):
+                possible = round(possible, 6)
+            slider_label_width = max(slider_label_width, len(format_setting_value(slider_item, possible)))
+
+    def draw_description_line(row, text, color=xf, strong=False):
+        text = str(text).replace("\n", " ")
+        if len(text) > 72:
+            text = text[:69].rstrip() + "..."
+        move(row, 23)
+        print(f"{reset}{color}{bold if strong else unbold}{text:<72}{reset}", end="")
 
     def inventory_sort_order_label(value):
         sorting = getattr(setting, "inventory_sorting", "Name")
@@ -5742,13 +6094,105 @@ def settings2():
         }
         return labels.get(sorting, {}).get(value, str(value))
 
+    def choice_options(item):
+        options = []
+        for choice in item.get("choices", []):
+            if item["attr"] == "inventory_sort_order":
+                label = inventory_sort_order_label(choice)
+            else:
+                label = format_setting_value(item, choice)
+            options.append((choice, label))
+        return options
+
+    def choice_regions(item):
+        options = choice_options(item)
+        start = SETTINGS_COL + BOX_WIDTH - (sum(len(label) + 2 for _, label in options) + max(0, len(options) - 1))
+        regions = []
+        for choice, label in options:
+            regions.append((choice, label, start - 1, len(label)))
+            start += len(label) + 3
+        return regions
+
+    def unavailable_active(item):
+        return item["attr"] == getattr(d, "settings_unavailable_attr", None) and time.monotonic() < getattr(d, "settings_unavailable_until", 0)
+
+    def show_unavailable(item):
+        d.settings_unavailable_attr = item["attr"]
+        d.settings_unavailable_until = time.monotonic() + 0.8
+        if settings_editor.active:
+            settings_editor.commit()
+        settings_editor.clear()
+        settings_editor.message = "Coming soon — this option is not available yet."
+        sound("error2")
+
+    def extreme_animating():
+        started = getattr(d, "settings_extreme_started", None)
+        return (
+            d.settings_category == 1
+            and started is not None
+            and animations_enabled()
+            and getattr(setting, "flipboard_animations", True)
+            and (time.monotonic() - started) * animation_rate() < 0.45
+        )
+
+    def animated_setting_value(item, label, color, selected=False):
+        if not hasattr(d, "settings_value_texts"):
+            d.settings_value_texts = {}
+            d.settings_value_changes = {}
+        attr = item["attr"]
+        old = d.settings_value_texts.get(attr, label)
+        d.settings_value_texts[attr] = label
+        # on/off and numbers should never flipboard in settings
+        can_flip = (
+            animations_enabled()
+            and getattr(setting, "flipboard_animations", True)
+            and item["type"] != "bool"
+            and label.strip().casefold() not in {"on", "off", "off / on"}
+            and not any(char.isdigit() for char in label + old)
+        )
+        if old != label:
+            if can_flip and label != "[press a key]":
+                duration = 0.42 if item["type"] == "keybind" else 0.22
+                d.settings_value_changes[attr] = (old, label, time.monotonic(), duration)
+            else:
+                d.settings_value_changes.pop(attr, None)
+        change = d.settings_value_changes.get(attr)
+        if change is None or not can_flip:
+            d.settings_value_changes.pop(attr, None)
+            if label == "[press a key]":
+                return f"{reset}{rgb(255, 255, 255)}{label}{reset}", len(label)
+            return f"{reset}{color}{bold if selected else ''}{label}{reset}", len(label)
+        old, label, started, duration = change
+        offset = min(1, (time.monotonic() - started) * animation_rate() / duration)
+        width = max(len(old), len(label))
+        if offset >= 1:
+            d.settings_value_changes.pop(attr, None)
+            return f"{color}{bold if selected else ''}{label.rjust(width)}{reset}", width
+        if item["type"] == "keybind" and old == "[press a key]":
+            old = old.rjust(width)
+            prefix = old[:-len(label)]
+            prefix = "".join(" " if offset * 1.6 - index / max(1, len(prefix) - 1) >= 0.6 else char for index, char in enumerate(prefix))
+            background = terminal_background()
+            faded = shine(prefix, offset=offset, color=background if background is not None else (128, 128, 128), start_color=(255, 255, 255), fade_out=True)
+            ending = flipboard(label, offset=offset, color=(255, 255, 255), start_text=old[-len(label):], quick=True)
+            return reset + faded + ending, width
+        if old.endswith(" first") and label.endswith(" first"):
+            prefix = flipboard(label[:-6].rjust(width - 6), offset=offset, color=color, bold=selected, start_text=old[:-6].rjust(width - 6), quick=True)
+            return prefix + f"{color}{bold if selected else ''} first{reset}", width
+        return flipboard(label.rjust(width), offset=offset, color=color, bold=selected, start_text=old.rjust(width), quick=item.get("display") != "victory_celebration"), width
+
+    def value_animations_active():
+        return any(
+            item["attr"] in getattr(d, "settings_value_changes", {})
+            for item in visible_page
+        )
+
+    def audio_test_active():
+        return test_audio_visible and time.monotonic() < getattr(d, "settings_audio_test_until", 0)
+
     def draw_slider_setting_value(item, raw_value, row, selected, flash=False):
         before_dot, dot, after_dot, _ = volume_slider_parts(item, raw_value)
-        label_width = {
-            "volume": 4,
-            "duration": 5,
-            "victory_celebration": 7,
-        }.get(item.get("display"), 7)
+        label_width = slider_label_width
         formatted_value = format_setting_value(item, raw_value)
         label = f"{formatted_value:>{label_width}}"
         slider_width = slider_step_count(item) + 1 + 1 + label_width
@@ -5759,6 +6203,25 @@ def settings2():
             else xa
         )
         label_style = f"{state_color}{bold}" if selected else xf
+        if item.get("display") == "difficulty":
+            previous = getattr(d, "settings_difficulty_value", raw_value)
+            if raw_value != previous:
+                d.settings_extreme_started = time.monotonic() if raw_value == 3 else None
+            d.settings_difficulty_value = raw_value
+            if raw_value == 3:
+                if hasattr(d, "settings_value_texts"):
+                    d.settings_value_texts[item["attr"]] = label
+                    d.settings_value_changes.pop(item["attr"], None)
+                started = getattr(d, "settings_extreme_started", None)
+                offset = 1 if started is None else min(1, (time.monotonic() - started) * animation_rate() / 0.45)
+                label_style = ""
+                label = unbold + flipboard(label, offset=offset, color=xlred, bold=False, start_text="Hard".rjust(label_width))
+                if offset >= 1:
+                    d.settings_extreme_started = None
+            else:
+                label, _ = animated_setting_value(item, label, state_color if selected else xf, selected)
+        else:
+            label, _ = animated_setting_value(item, label, state_color if selected else xf, selected)
         print(
             f"{x8}{before_dot}{state_color}{dot}{x8}{after_dot} "
             f"{label_style}{label}{reset}",
@@ -5766,39 +6229,106 @@ def settings2():
             flush=True,
         )
 
-    def draw_editing_setting_name(item, row, flash=False):
+    preview_attrs = {"text_shine", "rainbow_text", "flipboard_animations", "animation_speed"}
+
+    def name_preview_active(item):
+        selected = d.settings_selection == "setting" and d.settings_cursor - 1 == page.index(item)
+        return item["attr"] in preview_attrs and (selected or item["attr"] == getattr(d, "settings_hover_attr", None))
+
+    def draw_setting_name(item, row, selected=False, editing=False, flash=False, locked=False):
         move(row + 1, SETTINGS_COL + 2)
-        if flash:
-            print(f"{xlred}✎ {bold}{item['name']}{reset}", end="", flush=True)
-            return
-        shine_offset = (time.monotonic() * 0.65) % 1.0
-        animated_name = shine(
-            item["name"],
-            offset=shine_offset,
-            color=(255, 202, 102),
-            bold=True,
-        )
-        print(f"{xlyellow}✎ {animated_name}{reset}", end="", flush=True)
+        prefix = "✎ " if editing else "→ " if selected else ""
+        color = xlred if flash else x7 if locked else xlyellow if editing else xa if selected else xf
+        name = f"{color}{bold if selected or editing else unbold}{item['name']}{reset}"
+        if not flash and not locked and name_preview_active(item):
+            # preview the effect on its name, leave on/off and numbers alone
+            offset = time.monotonic()
+            if item["attr"] == "rainbow_text":
+                name = rainbow(item["name"], offset=offset * 0.3, bold=True, preview=True)
+            elif item["attr"] == "flipboard_animations":
+                offset = (offset * animation_rate()) % 2
+                name = flipboard(item["name"], offset=min(1, offset), color=(186, 243, 219), bold=True, preview=True)
+            else:
+                rate = animation_rate()
+                if item["attr"] == "animation_speed" and settings_editor.active and settings_editor.item is item:
+                    rate = settings_editor.value
+                name = shine(item["name"], offset=offset * 0.65, color=(186, 243, 219), bold=True, preview=True, speed=rate)
+        elif editing and not flash:
+            name = shine(item["name"], offset=(time.monotonic() * 0.65) % 1, color=(255, 202, 102), bold=True)
+        lock_icon = "🔒 " if locked and selected else ""
+        print(f"{color}{prefix}{lock_icon}{name}{reset}" + "  ", end="", flush=True)
+
+    def draw_editing_setting_name(item, row, flash=False):
+        draw_setting_name(item, row, selected=True, editing=True, flash=flash)
 
     def play_boolean_toggle_sound(value):
-        sound("map_switch2" if value else "map_switch1")
+        sound("map_switch2" if value else "map_switch3")
 
     def setting_value_contains(x, item, value):
         if item.get("display") in SLIDER_DISPLAYS:
-            label_width = {
-                "volume": 4,
-                "duration": 5,
-                "victory_celebration": 7,
-            }.get(item.get("display"), 7)
+            label_width = slider_label_width
             width = slider_step_count(item) + 2 + label_width
         elif item["type"] == "bool":
-            return boolean_control_contains(x, SETTINGS_COL, BOX_WIDTH)
+            return boolean_control_contains(x, SETTINGS_COL, BOX_WIDTH, slider_label_width)
+        elif item["type"] == "choice":
+            return any(left <= x < left + width + 2 for _, _, left, width in choice_regions(item))
         else:
             display_value = format_setting_value(item, value)
             if item["attr"] == "inventory_sort_order":
                 display_value = inventory_sort_order_label(value)
             width = max(3, len(str(display_value)))
         return x >= SETTINGS_COL + BOX_WIDTH - width - 1
+
+    def draw_setting_value(item, raw_value, value, row, is_selected, is_editing, is_edit_flash, is_locked):
+        if is_locked or item.get("disabled"):
+            getattr(d, "settings_value_changes", {}).pop(item["attr"], None)
+        if is_locked:
+            value = f"🔒 {value}"
+            move(row + 1, SETTINGS_COL + BOX_WIDTH - len(value) - 1)
+            print(f"{x7}{bold if is_selected else ''}{value}{reset}", end="")
+        elif item.get("disabled"):
+            active = unavailable_active(item)
+            value = "Coming soon!" if active else "Coming soon"
+            move(row + 1, SETTINGS_COL + BOX_WIDTH - 12)
+            print(f"{xlyellow if active else x7}{bold if active else ''}{value:>12}{reset}", end="", flush=True)
+        elif item.get("display") in SLIDER_DISPLAYS:
+            draw_slider_setting_value(
+                item,
+                raw_value,
+                row,
+                selected=is_selected,
+                flash=is_edit_flash,
+            )
+        elif item["type"] == "bool":
+            before_dot, dot, after_dot, label = boolean_slider_parts(raw_value)
+            label = f"{label:>{slider_label_width}}"
+            slider_width = 3 + 1 + slider_label_width
+            move(row + 1, SETTINGS_COL + BOX_WIDTH - slider_width)
+            state_color = (
+                xlred
+                if is_edit_flash or setting_is_off(item, raw_value)
+                else xa
+            )
+            label_style = f"{state_color}{bold}" if is_selected else xf
+            label, _ = animated_setting_value(item, label, state_color if is_selected else xf, is_selected)
+            print(
+                f"{x8}{before_dot}{state_color}{dot}{x8}{after_dot} "
+                f"{label_style}{label}{reset}",
+                end="",
+                flush=True,
+            )
+        elif item["type"] == "choice":
+            getattr(d, "settings_value_changes", {}).pop(item["attr"], None)
+            for choice, label, left, width in choice_regions(item):
+                move(row + 1, left + 1)
+                color = xa if choice == raw_value else x7
+                print(f"{reset}{color}{bold if choice == raw_value and is_selected else ''}[{label}]{reset}", end="", flush=True)
+        else:
+            value_color = xlred if is_edit_flash else xa if is_selected else xf
+            rendered, width = animated_setting_value(item, value, value_color, is_selected and not is_editing)
+            move(row + 1, SETTINGS_COL + BOX_WIDTH - width)
+            print(rendered, end="", flush=True)
+
 
     # blanks from top left to bottom right (row, col style)
     blank(SETTINGS_ROW, SETTINGS_COL,  30, SETTINGS_COL + BOX_WIDTH + 2)
@@ -5809,7 +6339,7 @@ def settings2():
         try:
             obj = setting
 
-            value = getattr(obj, item["attr"])
+            value = getattr(obj, item["attr"], item.get("default"))
         except Exception as e:
             move(10, 40)
             print(f"ERROR: {e}", end="")
@@ -5839,7 +6369,7 @@ def settings2():
             item_index == d.settings_cursor - 1
             and d.settings_selection == "setting"
         )
-        is_editing = is_selected and visually_editing
+        is_editing = is_selected and (visually_editing or unavailable_active(item))
         is_edit_flash = is_editing and getattr(d, "settings_edit_flash", False)
         edit_border_color = xc if is_edit_flash else xlyellow
 
@@ -5864,66 +6394,12 @@ def settings2():
 
         move(row + 1, SETTINGS_COL + 2)
 
-        if is_editing:
-            draw_editing_setting_name(item, row, flash=is_edit_flash)
-        elif is_selected:
-            name_color = x7 if is_locked else xa
-            lock_icon = "🔒 " if is_locked else ""
-            print(
-                f"{xf}→ {name_color}{bold}{lock_icon}{item['name']}{reset}",
-                end="",
-            )
-        else:
-            print(item["name"], end="")
+        draw_setting_name(item, row, selected=is_selected, editing=is_editing, flash=is_edit_flash, locked=is_locked)
 
         if is_editing and item["type"] == "keybind":
-            value = "[press a key...]"
+            value = "[press a key]"
         value = str(value)
-        if is_locked:
-            value = f"🔒 {value}"
-            move(row + 1, SETTINGS_COL + BOX_WIDTH - len(value) - 1)
-            print(f"{x7}{bold if is_selected else ''}{value}{reset}", end="")
-        elif item.get("disabled"):
-            move(row + 1, SETTINGS_COL + BOX_WIDTH - len(value))
-            print(f"{x7}{bold if is_selected else ''}{value}{reset}", end="")
-        elif item.get("display") in SLIDER_DISPLAYS:
-            draw_slider_setting_value(
-                item,
-                raw_value,
-                row,
-                selected=is_selected,
-                flash=is_edit_flash,
-            )
-        elif item["type"] == "bool":
-            before_dot, dot, after_dot, label = boolean_slider_parts(raw_value)
-            label = f"{label:>3}"
-            slider_width = 3 + 1 + 3
-            move(row + 1, SETTINGS_COL + BOX_WIDTH - slider_width)
-            state_color = (
-                xlred
-                if is_edit_flash or setting_is_off(item, raw_value)
-                else xa
-            )
-            label_style = f"{state_color}{bold}" if is_selected else xf
-            print(
-                f"{x8}{before_dot}{state_color}{dot}{x8}{after_dot} "
-                f"{label_style}{label}{reset}",
-                end="",
-            )
-        else:
-            move(row + 1, SETTINGS_COL + BOX_WIDTH - len(value))
-            if is_editing and item["type"] == "keybind":
-                keybind_color = xlred if is_edit_flash else xf
-                print(f"{keybind_color}{value}{reset}", end="")
-            elif is_selected:
-                value_color = (
-                    xlred
-                    if is_edit_flash or setting_is_off(item, raw_value)
-                    else xa
-                )
-                print(f"{value_color}{bold}{value}{reset}", end="")
-            else:
-                print(value, end="")
+        draw_setting_value(item, raw_value, value, row, is_selected, is_editing, is_edit_flash, is_locked)
 
         move(row + 1, SETTINGS_COL + BOX_WIDTH + 1)
         if is_editing:
@@ -5961,99 +6437,61 @@ def settings2():
             current = page[d.settings_cursor - 1]
             current_is_locked = setting.setting_is_locked(current["attr"])
         # Description
-        print(reset, end="")
-        # blank description window
         blank(32,22, 35,95)
         if d.settings_selection == "setting":
-            move(32,23)
-            if visually_editing:
-                print(f"{xlyellow}✎ {underline}{bold}Editing: {current["name"]}{reset}")
-                move(33, 23)
-                print(f"{xlyellow}◆ {xf}{settings_editor.message}{reset}")
-            else:
-                print(f"{xlorange}🔎 {underline}{bold}Currently selected: {current["name"]}{reset}")
-                move(33, 23)
-                if current_is_locked:
-                    reason = setting.setting_lock_reason(current["attr"])
-                    message = (
-                        f"Locked: {reason}. "
-                        f"{setting.setting_lock_message(current['attr'])}"
-                    )
-                else:
-                    if current_is_test_audio:
-                        message = "Press Enter or click to play."
-                    else:
-                        message = settings_editor.message or (
-                            "Press Enter or click to edit. Ctrl+R resets all keybinds."
-                            if d.settings_category == 4
-                            else "Press Enter or click to edit."
-                        )
-                print(f"✏️ {xf}{message}{reset}")
-            move(34, 23)
-            print(f"📜 {xf}{current["description"]}", end="")
-
-            move(35, 23)
+            title = "Editing" if visually_editing else "Currently selected"
+            draw_description_line(32, f"{title}: {current['name']}", xlyellow if visually_editing else xlorange, True)
+            description = setting_description(current)
+            if current_is_locked:
+                description = setting.setting_lock_message(current["attr"]) + " " + description
+            elif settings_editor.message and not settings_editor.message.startswith(("Press a new key.", "Press Enter to toggle.", "Use left/right,")):
+                message = settings_editor.message
+                if d.settings_category in (4, 7):
+                    for key_item in page:
+                        message = message.replace(f"assigned to {key_item['attr']}.", f"assigned to {key_item['name']}.")
+                description = message + " " + description
+            draw_box_text(f"{reset}{unbold}{xf}{description}{reset}", 33, 23, 34, 94)
             accepted = current["accepted"]
-            if current["attr"] == "inventory_sort_order":
-                accepted = (
-                    ["Sorting off"]
-                    if not getattr(setting, "sort_items_automatically", True)
-                    else [
-                        inventory_sort_order_label("Ascending"),
-                        inventory_sort_order_label("Descending"),
-                    ]
-                )
+            if current.get("disabled"):
+                accepted = "Coming soon"
+            elif current_is_locked:
+                accepted = "Locked — " + setting.setting_lock_reason(current["attr"])
+            elif current.get("type") == "choice":
+                accepted = [label for _, label in choice_options(current)]
             if isinstance(accepted, list):
                 accepted = " / ".join(accepted)
-            print(f"{xa}{reset}{xf}✅ {bold}Accepted values: {xa}{unbold}{accepted}", end="")
+            accepted = str(accepted).replace("Enter", "⏎")
+            draw_box_text(f"{reset}{xa}✓ {bold}Accepted values{unbold}{xa}: {xf}{accepted}{reset}", 35, 23, 35, 94)
         else:
-            move(32,23)
-            settings_category = ["Battles", "Look & feel", "Sound & music", "Key binds", "Accessibility", "Inventory"]
-            settings_category_descriptions = [
-                "⚔️ Change battles' fates with these settings!",
-                "🎨 Configure how animations and text effects appear!",
-                "🥁 How loud do you want your audio? Here you go!",
-                "⌨️ Wanna control your game differently? Set them here!",
-                "♿ Have trouble with understanding some game parts? Check here.",
-                "🎒 Configure how items are sorted and upgraded."]
+            settings_category = CATEGORY_NAMES
+            settings_category_descriptions = CATEGORY_DESCRIPTIONS
+            draw_description_line(32, f"Currently selected: {settings_category[d.settings_category - 1]}", xlorange, True)
+            draw_box_text(f"{reset}{unbold}{xf}{settings_category_descriptions[d.settings_category - 1]}{reset}", 33, 23, 34, 94)
 
-            print(f"{xlorange}🔍 {underline}{bold}Currently selected: {settings_category[d.settings_category - 1]}{reset}")
-            move(33, 23)
-            print(f"✏️ {xb}Press → or Enter to edit this category's settings.{reset}")            
-            move(35,23)
-            print(settings_category_descriptions[d.settings_category - 1], end="")
-
-    
+    def draw_test_audio():
+        selected = d.settings_selection == "setting" and d.settings_cursor == len(page) + 1
+        active = audio_test_active()
+        color = (xlred if setting.disable_audio_completely else xlyellow) if active else RGB + "186;243;219m" if selected else xf
+        move(test_audio_row, SETTINGS_COL)
+        print(f"{color}{bold if active else ''}╭" + "─" * BOX_WIDTH + f"╮{reset}", end="")
+        move(test_audio_row + 1, SETTINGS_COL)
+        print(f"{color}│{reset}", end="")
+        move(test_audio_row + 1, SETTINGS_COL + 2)
+        name = "✓ Test audio" if active else "→ Test audio" if selected else "Test audio"
+        print(f"{color}{bold if active or selected else ''}{name.ljust(13)}{reset}", end="")
+        status = 'Muted' if active and setting.disable_audio_completely else 'Sound played!' if active else 'Click'
+        move(test_audio_row + 1, SETTINGS_COL + BOX_WIDTH - 13)
+        print(f"{color}{status:>13}{reset}", end="")
+        move(test_audio_row + 1, SETTINGS_COL + BOX_WIDTH + 1)
+        print(f"{color}│{reset}", end="")
+        move(test_audio_row + 2, SETTINGS_COL)
+        print(f"{color}╰" + "─" * BOX_WIDTH + f"╯{reset}", end="", flush=True)
 
     if test_audio_visible:
-        test_audio_selected = (
-            d.settings_selection == "setting"
-            and d.settings_cursor == len(page) + 1
-        )
-        move(test_audio_row, SETTINGS_COL)
-        if test_audio_selected:
-            print(f"{RGB}186;243;219m╭" + "─" * BOX_WIDTH + "╮", end="")
-        else:
-            print(f"{xf}╭" + "─" * BOX_WIDTH + "╮", end="")
-        move(test_audio_row + 1, SETTINGS_COL)
-        print("│", end="")
-        move(test_audio_row + 1, SETTINGS_COL + 2)
-        if test_audio_selected:
-            print(f"{reset}→ {xa}{bold}Test audio{reset}", end="")
-        else:
-            print(f"{xf}Test audio{reset}", end="")
-        move(test_audio_row + 1, SETTINGS_COL + BOX_WIDTH - 5)
-        print(f"{xf}Click{reset}", end="")
-        move(test_audio_row + 1, SETTINGS_COL + BOX_WIDTH + 1)
-        print(f"{RGB + '186;243;219m' if test_audio_selected else xf}│", end="")
-        move(test_audio_row + 2, SETTINGS_COL)
-        if test_audio_selected:
-            print(f"{RGB}186;243;219m╰" + "─" * BOX_WIDTH + f"╯{reset}", end="")
-        else:
-            print(f"{xf}╰" + "─" * BOX_WIDTH + f"╯{reset}", end="")
+        draw_test_audio()
 
     if scroll_item_count > SETTINGS_VIEW_SIZE:
-        track_height = SETTINGS_VIEW_SIZE * BOX_HEIGHT + 2
+        track_height = SETTINGS_VIEW_SIZE * BOX_HEIGHT
         thumb_height = max(
             2,
             round(track_height * SETTINGS_VIEW_SIZE / scroll_item_count),
@@ -6071,69 +6509,43 @@ def settings2():
             else:
                 print(f"{x8}│{reset}", end="")
     else:
-        track_height = SETTINGS_VIEW_SIZE * BOX_HEIGHT + 2
+        track_height = SETTINGS_VIEW_SIZE * BOX_HEIGHT
         for track_index in range(track_height):
             move(SETTINGS_ROW + track_index, SETTINGS_SCROLLBAR_COL)
-            print(f"{x7}│{reset}", end="")
-
-    if d.settings_selection == "setting":
-        move(32,108-12)
-        if visually_editing:
-            print(f"{x7}│ {xlyellow}↕ {bold}up/down {reset}- save & move{x7}     │")
-        else:
-            print(f"{x7}│ {xlyellow}↕ {bold}up/down {reset}- switch setting {x7} │")
-    else:
-        move(32,108-12)
-        print(f"{x7}│ {xlyellow}↕ {bold}up/down {reset}- switch category{x7} │")
-        move(33,108-12)
-        print(f"{x7}│ {xlyellow}→ {bold}right{reset} - enter category{x7}    │")
-        move(34,108-12)
-        print(f"{x7}│ {xlyellow}⏎ {bold}enter {reset}- enter category    {x7}│")        
+            print(" ", end="")
 
     if visually_editing:
         if settings_editor.item["type"] == "keybind":
-            move(33,108-12)
-            print(f"{x7}│ {xlyellow}⌨ {bold}press key{reset} - save{x7}          │")
-            move(34,108-12)
-            print(f"{x7}│ {xlyellow}⯯{bold} escape {reset}- discard changes  {x7}│")
-            move(35,108-12)
-            print(f"{x7}│ {xlyellow}↻ {bold}ctrl+r{reset} - reset all{x7}        │")
-        elif settings_editor.item["type"] == "bool":
-            move(33,108-12)
-            print(f"{x7}│ {xlyellow}⏎ {bold}enter {reset}- toggle and save   {x7}│")
-            move(35,108-12)
-            print(f"{x7}│ {xlyellow}⯯{bold} escape {reset}- discard changes  {x7}│")
+            help_lines = [("Key", "save binding"), ("Esc", "discard changes"), ("Ctrl+R", "reset all keys"), ("↑/↓", "save & move")]
         else:
-            move(33,108-12)
-            print(f"{x7}│ {xlyellow}↔ {bold}left/right{reset} - set setting{x7}  │")
-            move(34,108-12)
-            print(f"{x7}│ {xlyellow}⏎ {bold}enter {reset}- save what you set {x7}│")
-            move(35,108-12)
-            print(f"{x7}│ {xlyellow}⯯{bold} escape {reset}- discard changes  {x7}│")
+            help_lines = [("↑/↓", "save & move"), ("←/→", "change value"), ("⏎", "save changes"), ("Esc", "discard changes")]
     elif d.settings_selection == "setting":
-        move(33,108-12)
-        print(f"{x7}│ {xlyellow}← {bold}left{reset} - change category   {x7} │")
-        move(34,108-12)
-        if current_is_locked:
-            reason = setting.setting_lock_reason(current["attr"])
-            print(
-                f"{x7}│ {x7}🔒 {bold}locked{reset} - "
-                f"{reason:<16}{x7}│"
-            )
-        else:
-            print(f"{x7}│ {xlyellow}⏎ {bold}enter {reset}- modify setting    {x7}│")
-        move(35,108-12)
-        if d.settings_category == 4:
-            print(f"{x7}│ {xlyellow}↻ {bold}ctrl+r{reset} - reset all{x7}        │")
-        else:
-            print(f"{x7}│ {xlyellow}⯯{bold} escape {reset}- exit settings {x7}   │")
+        help_lines = [("↑/↓", "switch setting"), ("←/Esc", "categories")]
+        action = "see help on left" if current_is_locked else "test audio" if current_is_test_audio else "coming soon" if current.get("disabled") else "run action" if current["type"] == "action" else "toggle switch" if current["type"] == "bool" else "edit setting"
+        help_lines.append(("Locked" if current_is_locked else "⏎", action))
+        help_lines.append(("Ctrl/Cmd+F", "search"))
     else:
-        move(33,108-12)
-        print(f"{x7}│ {xlyellow}→ {bold}right{reset} - enter category{x7}    │")
-        move(35,108-12)
-        print(f"{x7}│ {xlyellow}⯯ {bold}escape {reset}- exit settings    {x7}│")
+        help_lines = [("↑/↓", "switch category"), ("→", "enter category"), ("⏎", "enter category"), ("Esc", "exit settings")]
+    for index, (control, action) in enumerate(help_lines):
+        text = f"{xlyellow}{bold}{control}{unbold}{x7} - {xf}{unbold}{action}"
+        # keep long controls inside the box, never wrap into the bottom border
+        move(32 + index, 96)
+        print(f"{reset}{x7}│ {reset}", end="")
+        draw_box_text(text, 32 + index, 98, 32 + index, 124)
+        move(32 + index, 125)
+        print(f"{reset}{x7} │{reset}", end="")
+    move(36, 1)
+    print(f"{xlred}╰{'─' * 19}{x7}┴{reset}", end="")
 
-    
+    move(33, 2)
+    print(f"{reset}{xc}{bold}{'Back to house':^19}{reset}", end="")
+    move(34, 2)
+    if not setting.mouse_controls:
+        back_hint = "[ESC - cancel edit]" if visually_editing else "[ESC twice]" if d.settings_selection == "setting" else f"[{bind.back.upper()} | ESC]"
+    else:
+        back_hint = "[click to go back]" if visually_editing else "[click | ESC twice]" if d.settings_selection == "setting" else f"[{bind.back.upper()} | ESC]"
+    print(f"{reset}{xc}{back_hint:^19}{reset}", end="")
+
     print("", end="", flush=True)
     if getattr(d, "settings_edit_flash", False):
         d.settings_edit_flash = False
@@ -6145,14 +6557,60 @@ def settings2():
             k = key(
                 timeout=(
                     0.04
-                    if animations_enabled()
-                    and (visually_editing or category_focused)
+                    if (animations_enabled() and (visually_editing or category_focused or extreme_animating() or value_animations_active() or any(name_preview_active(item) for item in visible_page)))
+                    or (test_audio_visible and getattr(d, "settings_audio_test_until", 0))
+                    or getattr(d, "settings_unavailable_until", 0)
                     else None
                 ),
-                mouse=True,
+                mouse=setting.mouse_controls,
+                hover=True,
+                shortcuts=True,
             )
 
             if k == "TIMEOUT":
+                for index, item in enumerate(visible_page):
+                    if name_preview_active(item):
+                        selected = d.settings_selection == "setting" and d.settings_cursor - 1 == d.settings_scroll + index
+                        editing = visually_editing and selected
+                        draw_setting_name(item, SETTINGS_ROW + index * BOX_HEIGHT, selected=selected, editing=editing, locked=setting.setting_is_locked(item["attr"]))
+                if getattr(d, "settings_unavailable_until", 0):
+                    if time.monotonic() >= d.settings_unavailable_until:
+                        d.settings_unavailable_until = 0
+                    game.goto = settings2
+                    return
+                if test_audio_visible and getattr(d, "settings_audio_test_until", 0):
+                    draw_test_audio()
+                    if not audio_test_active():
+                        d.settings_audio_test_until = 0
+                if value_animations_active():
+                    for index, animated_item in enumerate(visible_page):
+                        if animated_item["attr"] not in d.settings_value_changes:
+                            continue
+                        raw = getattr(setting, animated_item["attr"])
+                        editing = settings_editor.active and settings_editor.item is animated_item
+                        if editing:
+                            raw = settings_editor.value
+                        locked = setting.setting_is_locked(animated_item["attr"])
+                        if locked:
+                            raw = setting.effective_setting(animated_item["attr"])
+                        label = format_setting_value(animated_item, raw)
+                        if animated_item["attr"] == "inventory_sort_order":
+                            label = inventory_sort_order_label(raw)
+                        draw_setting_value(animated_item, raw, str(label), SETTINGS_ROW + index * BOX_HEIGHT,
+                            d.settings_selection == "setting" and d.settings_cursor - 1 == d.settings_scroll + index,
+                            editing, False, locked)
+                sys.stdout.flush()
+                if d.settings_category == 1 and getattr(d, "settings_extreme_started", None) is not None:
+                    difficulty_item = page[0]
+                    difficulty_value = (
+                        settings_editor.value
+                        if settings_editor.active and settings_editor.item["attr"] == "battle_difficulty"
+                        else setting.battle_difficulty
+                    )
+                    draw_slider_setting_value(
+                        difficulty_item, difficulty_value, SETTINGS_ROW,
+                        selected=d.settings_selection == "setting" and d.settings_cursor == 1,
+                    )
                 if visually_editing:
                     focused_item = page[d.settings_cursor - 1]
                     focused_row = (
@@ -6163,7 +6621,9 @@ def settings2():
                     continue
                 if category_focused:
                     category_index = d.settings_category - 1
-                    move(9 + category_index * 4, 2)
+                    if not d.settings_category_scroll <= category_index < d.settings_category_scroll + category_view_size:
+                        continue
+                    move(9 + (category_index - d.settings_category_scroll) * category_height, 2)
                     label = shine(
                         CATEGORY_LABELS[category_index],
                         offset=(time.monotonic() * 0.65) % 1.0,
@@ -6174,8 +6634,78 @@ def settings2():
                     continue
                 continue
 
+            if isinstance(k, str) and k.lower() in ("ctrl/f", "cmd/f", "command/f", "super/f", "meta/f"):
+                open_settings_search()
+                return
+
             if isinstance(k, dict):
                 mouse_event = k.get("event")
+                if mouse_event == "move":
+                    index = setting_index_at(k["x"], k["y"], len(visible_page), SETTINGS_COL, SETTINGS_ROW, BOX_WIDTH, BOX_HEIGHT)
+                    hovered = visible_page[index]["attr"] if index is not None else None
+                    if hovered != getattr(d, "settings_hover_attr", None):
+                        d.settings_hover_attr = hovered
+                        game.goto = settings2
+                        return
+                    continue
+                if mouse_event == "up" and k.get("button") == "left":
+                    d.settings_category_scrollbar_dragging = False
+                    d.settings_scrollbar_dragging = False
+                over_category_sidebar = 0 <= k.get("x", -1) <= category_scrollbar_col - 1 and 7 <= k.get("y", -1) < 7 + category_track_height
+                if mouse_event == "wheel" and over_category_sidebar:
+                    direction = -1 if k.get("delta", 0) > 0 else 1
+                    new_scroll = max(0, min(category_max_scroll, d.settings_category_scroll + direction))
+                    if new_scroll != d.settings_category_scroll:
+                        d.settings_category_scroll = new_scroll
+                        d.settings_category_manual_scroll = True
+                        sound("map_switch3" if direction < 0 else "map_switch2")
+                        game.goto = settings2
+                        return
+                    continue
+                dragging_categories = getattr(d, "settings_category_scrollbar_dragging", False)
+                on_category_scrollbar = over_category_sidebar and k.get("x") == category_scrollbar_col - 1
+                if k.get("button") == "left" and ((mouse_event == "down" and on_category_scrollbar) or (mouse_event == "drag" and dragging_categories)):
+                    position = max(0, min(category_track_height - 1, k["y"] - 7))
+                    if mouse_event == "down":
+                        on_thumb = category_thumb_offset <= position < category_thumb_offset + category_thumb_height
+                        d.settings_category_scrollbar_grab = position - category_thumb_offset if on_thumb else category_thumb_height // 2
+                    grab = getattr(d, "settings_category_scrollbar_grab", category_thumb_height // 2)
+                    d.settings_category_scroll = max(0, min(category_max_scroll, round((position - grab) * category_max_scroll / max(1, category_thumb_travel))))
+                    d.settings_category_manual_scroll = True
+                    d.settings_category_scrollbar_dragging = True
+                    game.goto = settings2
+                    return
+                if mouse_event == "down":
+                    d.settings_category_scrollbar_dragging = False
+                if mouse_event in ("down", "drag") and k.get("button") == "left" and max_scroll and (
+                    (mouse_event == "drag" and getattr(d, "settings_scrollbar_dragging", False))
+                    or (mouse_event == "down" and k.get("x") == SETTINGS_SCROLLBAR_COL - 1 and SETTINGS_ROW - 1 <= k.get("y", -1) < SETTINGS_ROW - 1 + SETTINGS_VIEW_SIZE * BOX_HEIGHT)
+                ):
+                    if settings_editor.active:
+                        settings_editor.commit()
+                        if d.settings_category == 3:
+                            sound("REFRESH_AUDIO")
+                    settings_editor.clear()
+                    d.settings_slider_dragging = False
+                    d.settings_scrollbar_dragging = True
+                    position = max(0, min(SETTINGS_VIEW_SIZE * BOX_HEIGHT - 1, k["y"] - SETTINGS_ROW + 1))
+                    d.settings_scroll = round(position * max_scroll / (SETTINGS_VIEW_SIZE * BOX_HEIGHT - 1))
+                    d.settings_cursor = max(d.settings_scroll + 1, min(d.settings_cursor, d.settings_scroll + SETTINGS_VIEW_SIZE))
+                    game.goto = settings2
+                    return
+                if mouse_event == "down":
+                    d.settings_scrollbar_dragging = False
+                if mouse_event == "drag" and k.get("button") == "left":
+                    if getattr(d, "settings_slider_dragging", False) and settings_editor.active:
+                        item = settings_editor.item
+                        value = volume_value_at_mouse(k["x"], item, SETTINGS_COL, BOX_WIDTH, clamp=True, label_width=slider_label_width)
+                        if value != settings_editor.value:
+                            settings_editor.value = value
+                            row = SETTINGS_ROW + (d.settings_cursor - 1 - d.settings_scroll) * BOX_HEIGHT
+                            draw_slider_setting_value(item, value, row, selected=True)
+                    continue
+                if mouse_event == "wheel" and (getattr(d, "settings_slider_dragging", False) or getattr(d, "settings_scrollbar_dragging", False)):
+                    continue
                 if (
                     mouse_event == "down"
                     and k.get("button") == "left"
@@ -6183,9 +6713,14 @@ def settings2():
                     and SETTINGS_COL - 1 <= k.get("x", -1) <= SETTINGS_COL + BOX_WIDTH
                     and test_audio_row - 1 <= k.get("y", -1) <= test_audio_row + 1
                 ):
+                    if settings_editor.active:
+                        settings_editor.commit()
+                        sound("REFRESH_AUDIO")
                     settings_editor.clear()
+                    d.settings_slider_dragging = False
                     d.settings_selection = "setting"
                     d.settings_cursor = len(page) + 1
+                    d.settings_audio_test_until = time.monotonic() + 0.45
                     sound("sound_test")
                     game.goto = settings2
                     return
@@ -6211,10 +6746,8 @@ def settings2():
                         BOX_HEIGHT,
                     )
                     on_scrollbar = (
-                        len(page) > SETTINGS_VIEW_SIZE
-                        and SETTINGS_SCROLLBAR_COL - 2
-                        <= k.get("x", -1)
-                        <= SETTINGS_SCROLLBAR_COL
+                        max_scroll > 0
+                        and k.get("x", -1) == SETTINGS_SCROLLBAR_COL - 1
                         and SETTINGS_ROW - 1
                         <= k.get("y", -1)
                         < SETTINGS_ROW - 1 + SETTINGS_VIEW_SIZE * BOX_HEIGHT
@@ -6227,7 +6760,7 @@ def settings2():
                     if local_hovered_index is not None:
                         hovered_index = d.settings_scroll + local_hovered_index
                         hovered = page[hovered_index]
-                        current_value = getattr(setting, hovered["attr"])
+                        current_value = getattr(setting, hovered["attr"], hovered.get("default"))
                         over_value = (
                             k.get("y")
                             == SETTINGS_ROW
@@ -6266,7 +6799,7 @@ def settings2():
                                 ),
                             )
                             settings_editor.clear()
-                            sound("map_switch1" if wheel_up else "map_switch2")
+                            sound("map_switch3" if wheel_up else "map_switch2")
                             game.goto = settings2
                             return
                         continue
@@ -6277,7 +6810,7 @@ def settings2():
                     if (
                         hovered.get("disabled")
                         or setting.setting_is_locked(hovered["attr"])
-                        or hovered["type"] == "keybind"
+                        or hovered["type"] in ("keybind", "action")
                     ):
                         sound("error2")
                         continue
@@ -6329,27 +6862,25 @@ def settings2():
                     if hovered["type"] == "bool":
                         play_boolean_toggle_sound(new_value)
                     else:
-                        sound("map_switch2" if direction > 0 else "map_switch1")
+                        sound("map_switch2" if direction > 0 else "map_switch3")
                     game.goto = settings2
                     return
 
-                if (
-                    mouse_event == "up"
-                    and k.get("button") == "left"
-                    and getattr(d, "settings_slider_dragging", False)
-                ):
-                    d.settings_slider_dragging = False
-                    if (
-                        settings_editor.active
-                        and settings_editor.item.get("display")
-                        in SLIDER_DISPLAYS
-                    ):
-                        settings_editor.commit()
-                        if d.settings_category == 3:
-                            sound("REFRESH_AUDIO")
-                        sound("map_switch1")
-                        game.goto = settings2
-                        return
+                if mouse_event == "up" and k.get("button") in ("left", "right"):
+                    # the click sound already played on mouse down
+                    d.settings_click_sound = False
+                    if k.get("button") == "left" and getattr(d, "settings_slider_dragging", False):
+                        d.settings_slider_dragging = False
+                        if (
+                            settings_editor.active
+                            and settings_editor.item.get("display")
+                            in SLIDER_DISPLAYS
+                        ):
+                            settings_editor.commit()
+                            if d.settings_category == 3:
+                                sound("REFRESH_AUDIO")
+                            game.goto = settings2
+                            return
                     continue
 
                 if mouse_event == "down" and k.get("button") == "right":
@@ -6361,10 +6892,10 @@ def settings2():
                         if settings_editor.active:
                             settings_editor.commit()
                             sound("REFRESH_AUDIO")
+                        settings_editor.clear()
                         d.settings_slider_dragging = False
                         d.settings_selection = "setting"
                         d.settings_cursor = len(page) + 1
-                        sound("map_switch2")
                         game.goto = settings2
                         return
                     right_clicked_index = setting_index_at(
@@ -6376,17 +6907,16 @@ def settings2():
                             settings_editor.commit()
                             if d.settings_category == 3:
                                 sound("REFRESH_AUDIO")
+                        settings_editor.clear()
                         d.settings_slider_dragging = False
                         d.settings_selection = "setting"
                         d.settings_cursor = d.settings_scroll + right_clicked_index + 1
-                        sound("map_switch2")
                         game.goto = settings2
                         return
                     continue
 
-                if mouse_event in ("down", "drag") and k.get("button") == "left":
-                    # Input coordinates are zero-based on every platform; the
-                    # renderer's row/column coordinates are one-based.
+                if mouse_event == "down" and k.get("button") == "left":
+                    # mouse starts at 0, drawing starts at 1
                     clicked_index = setting_index_at(
                         k["x"],
                         k["y"],
@@ -6402,6 +6932,14 @@ def settings2():
                         clicked_index = d.settings_scroll + local_clicked_index
                         clicked = page[clicked_index]
                         owner = setting
+                        if clicked["type"] == "action":
+                            if settings_editor.active:
+                                settings_editor.commit()
+                            d.settings_selection = "setting"
+                            d.settings_cursor = clicked_index + 1
+                            run_settings_action(clicked)
+                            game.goto = settings2
+                            return
                         same_active_setting = (
                             settings_editor.active
                             and clicked_index == d.settings_cursor - 1
@@ -6410,22 +6948,48 @@ def settings2():
                         value_row = SETTINGS_ROW + local_clicked_index * BOX_HEIGHT
                         over_value_row = k["y"] == value_row
 
+                        if mouse_event == "down" and clicked.get("disabled"):
+                            d.settings_selection = "setting"
+                            d.settings_cursor = clicked_index + 1
+                            show_unavailable(clicked)
+                            game.goto = settings2
+                            return
+
+                        if mouse_event == "down" and clicked["type"] == "choice" and over_value_row and not owner.setting_is_locked(clicked["attr"]):
+                            for choice, _, left, width in choice_regions(clicked):
+                                if not left <= k["x"] < left + width + 2:
+                                    continue
+                                if settings_editor.active:
+                                    settings_editor.commit()
+                                previous = getattr(owner, clicked["attr"])
+                                setattr(owner, clicked["attr"], choice)
+                                owner.save()
+                                settings_editor.clear()
+                                d.settings_selection = "setting"
+                                d.settings_cursor = clicked_index + 1
+                                if previous != choice:
+                                    sound("map_switch2" if clicked["choices"].index(choice) > clicked["choices"].index(previous) else "map_switch3")
+                                    d.settings_click_sound = True
+                                game.goto = settings2
+                                return
+
                         if (
                             clicked.get("display") in SLIDER_DISPLAYS
                             and over_value_row
+                            and not clicked.get("disabled")
+                            and not owner.setting_is_locked(clicked["attr"])
                         ):
                             clicked_value = volume_value_at_mouse(
                                 k["x"],
                                 clicked,
                                 SETTINGS_COL,
                                 BOX_WIDTH,
-                                clamp=mouse_event == "drag" and same_active_setting,
+                                label_width=slider_label_width,
                             )
                             if clicked_value is not None:
                                 was_same_active_setting = same_active_setting
                                 if settings_editor.active and not same_active_setting:
                                     settings_editor.commit()
-                                    sound("map_switch1")
                                     if d.settings_category == 3:
                                         sound("REFRESH_AUDIO")
 
@@ -6433,13 +6997,15 @@ def settings2():
                                 d.settings_cursor = clicked_index + 1
                                 if not same_active_setting:
                                     settings_editor.begin(clicked, owner)
+                                previous_value = settings_editor.value
                                 settings_editor.value = clicked_value
                                 settings_editor.message = (
-                                    "Click or drag the slider, then Enter to save."
+                                    "Drag the slider; release to save."
                                 )
                                 d.settings_slider_dragging = True
                                 if mouse_event == "down":
-                                    sound("map_switch2")
+                                    d.settings_click_sound = True
+                                    sound("map_switch3" if clicked_value < previous_value else "map_switch2")
                                 if was_same_active_setting and not visually_editing:
                                     draw_slider_setting_value(
                                         clicked,
@@ -6454,6 +7020,8 @@ def settings2():
                         if (
                             mouse_event == "down"
                             and clicked["type"] == "bool"
+                            and over_value_row
+                            and boolean_control_contains(k["x"], SETTINGS_COL, BOX_WIDTH, slider_label_width)
                             and not clicked.get("disabled")
                             and not owner.setting_is_locked(clicked["attr"])
                         ):
@@ -6463,7 +7031,6 @@ def settings2():
                                     settings_editor.clear()
                                 else:
                                     settings_editor.commit()
-                                    sound("map_switch1")
                             d.settings_selection = "setting"
                             d.settings_cursor = clicked_index + 1
                             new_value = not getattr(owner, clicked["attr"])
@@ -6476,12 +7043,9 @@ def settings2():
                             if d.settings_category == 3:
                                 sound("REFRESH_AUDIO")
                             play_boolean_toggle_sound(new_value)
+                            d.settings_click_sound = True
                             game.goto = settings2
                             return
-
-                        # Movement only adjusts an already focused slider.
-                        if mouse_event == "drag":
-                            continue
 
                         if (
                             settings_editor.active and same_active_setting
@@ -6490,12 +7054,15 @@ def settings2():
 
                         if settings_editor.active:
                             settings_editor.commit()
-                            sound("map_switch1")
                             if d.settings_category == 3:
                                 sound("REFRESH_AUDIO")
 
                         d.settings_selection = "setting"
                         d.settings_cursor = clicked_index + 1
+                        if clicked["type"] in ("slider", "bool", "choice") and not owner.setting_is_locked(clicked["attr"]):
+                            settings_editor.clear()
+                            game.goto = settings2
+                            return
                         result = settings_editor.begin(clicked, owner)
                         sound(
                             "error2"
@@ -6506,9 +7073,10 @@ def settings2():
                         return
 
                     if mouse_event == "down":
-                        clicked_category = category_index_at(k["x"], k["y"])
+                        clicked_category = category_index_at(k["x"], k["y"], count=len(visible_categories), height=category_height, offset=d.settings_category_scroll)
                         if clicked_category is not None:
                             if settings_editor.active:
+                                settings_editor.message = "Save or cancel before switching categories."
                                 d.settings_edit_flash = True
                                 sound("error2")
                                 game.goto = settings2
@@ -6516,6 +7084,7 @@ def settings2():
 
                             previous_category = d.settings_category
                             d.settings_category = clicked_category + 1
+                            d.settings_category_manual_scroll = False
                             d.settings_selection = "category"
                             d.settings_cursor = 1
                             d.settings_scroll = 0
@@ -6526,10 +7095,10 @@ def settings2():
                                 "settings_music",
                                 "setting_keybinds",
                                 "setting_accessibility",
-                                "switch",
+                                "switch", "switch", "switch", "switch",
                             ]
                             direction_sound = (
-                                "map_switch1"
+                                "map_switch3"
                                 if d.settings_category < previous_category
                                 else "map_switch2"
                             )
@@ -6539,22 +7108,26 @@ def settings2():
                             return
                 continue
             else:
-                if d.settings_category == 4 and k.lower() == "ctrl/r":
-                    # TODO: Re-enable this guard when the reset confirmation
-                    # screen has been implemented.
+                if not (settings_editor.active and settings_editor.item["type"] == "keybind"):
+                    k = menu_navigation_key(k)
+                d.settings_scrollbar_dragging = False
+                d.settings_category_scrollbar_dragging = False
+                if d.settings_category in (4, 7) and k.lower() == "ctrl/r":
+                    # add this back when the reset confirmation screen is ready
                     # if not confirm_keybind_reset():
                     #     continue
                     bind.reset()
                     settings_editor.clear()
                     settings_editor.message = "All keybinds reset to defaults."
-                    sound("map_switch1")
+                    sound("map_switch3")
                     game.goto = settings2
                     return
 
                 if settings_editor.active:
                     if k.lower() in ("up", "down"):
+                        d.settings_slider_dragging = False
                         settings_editor.commit()
-                        sound("map_switch1")
+                        sound("map_switch3")
                         if d.settings_category == 3:
                             sound("REFRESH_AUDIO")
 
@@ -6577,19 +7150,23 @@ def settings2():
                             edit_key = "esc"
                     result = settings_editor.handle_key(edit_key)
                     if result == "saved":
+                        d.settings_slider_dragging = False
                         if d.settings_category == 3:
                             sound("REFRESH_AUDIO")
                         if settings_editor.item["type"] == "bool":
                             play_boolean_toggle_sound(settings_editor.value)
                         else:
-                            sound("map_switch1")
+                            sound("map_switch3")
                     elif result == "cancelled":
+                        d.settings_slider_dragging = False
+                        getattr(d, "settings_value_texts", {}).pop(settings_editor.item["attr"], None)
+                        getattr(d, "settings_value_changes", {}).pop(settings_editor.item["attr"], None)
                         sound("map_left")
                     elif result == "error":
                         d.settings_edit_flash = True
                         sound("error2")
                     elif result == "changed":
-                        sound("map_switch2")
+                        sound("map_switch3" if edit_key.lower() in ("left", "a") else "map_switch2")
                         if settings_editor.item.get("display") in SLIDER_DISPLAYS:
                             focused_row = (
                                 SETTINGS_ROW
@@ -6607,16 +7184,17 @@ def settings2():
                         continue
                     game.goto = settings2
                     return
-                if k.lower() == "s" or k.lower() == "down":
+                if k.lower() == "down":
                     settings_editor.message = ""
                     if d.settings_selection == "category":
+                        d.settings_category_manual_scroll = False
                         d.settings_category += 1
                         d.settings_scroll = 0
-                        if d.settings_category > 6:
-                            d.settings_category = 6
+                        if d.settings_category > len(CATEGORY_NAMES):
+                            d.settings_category = len(CATEGORY_NAMES)
                             sound("map_switch2_end")
                         else:
-                            sounds_list = ["setting_battles", "settings_graphics", "settings_music", "setting_keybinds", "setting_accessibility", "switch"]
+                            sounds_list = ["setting_battles", "settings_graphics", "settings_music", "setting_keybinds", "setting_accessibility", "switch", "switch", "switch", "switch"]
                             sound("map_switch2")
                             sound(sounds_list[d.settings_category - 1])
                     elif d.settings_selection == "setting":
@@ -6635,17 +7213,18 @@ def settings2():
                             sound("map_switch2")
                     game.goto = settings2
                     return
-                if k.lower() == "w" or k.lower() == "up":
+                if k.lower() == "up":
                     settings_editor.message = ""
                     if d.settings_selection == "category":
+                        d.settings_category_manual_scroll = False
                         d.settings_category -= 1
                         d.settings_scroll = 0
                         if d.settings_category < 1:
                             d.settings_category = 1
                             sound("map_switch1_end")
                         else:
-                            sounds_list = ["setting_battles", "settings_graphics", "settings_music", "setting_keybinds", "setting_accessibility", "switch"]
-                            sound("map_switch1")
+                            sounds_list = ["setting_battles", "settings_graphics", "settings_music", "setting_keybinds", "setting_accessibility", "switch", "switch", "switch", "switch"]
+                            sound("map_switch3")
                             sound(sounds_list[d.settings_category - 1])
                     elif d.settings_selection == "setting":
                         d.settings_cursor -= 1
@@ -6653,11 +7232,11 @@ def settings2():
                             d.settings_cursor = 1
                             sound("map_switch1_end")
                         else:
-                            sound("map_switch1")
+                            sound("map_switch3")
                     game.goto = settings2
                     return    
                 if d.settings_selection == "category" and k.lower() in (
-                    "enter", bind.confirm.lower(), "right", "d"
+                    "enter", bind.confirm.lower(), "right"
                 ):
                     settings_editor.message = ""
                     d.settings_selection = "setting"
@@ -6672,11 +7251,20 @@ def settings2():
                         d.settings_category == 3
                         and d.settings_cursor == len(page) + 1
                     ):
+                        d.settings_audio_test_until = time.monotonic() + 0.45
                         sound("sound_test")
                         game.goto = settings2
                         return
                     current = page[d.settings_cursor - 1]
                     owner = setting
+                    if current["type"] == "action":
+                        run_settings_action(current)
+                        game.goto = settings2
+                        return
+                    if current.get("disabled"):
+                        show_unavailable(current)
+                        game.goto = settings2
+                        return
                     result = settings_editor.begin(current, owner)
                     if result == "focused" and current["type"] == "bool":
                         result = settings_editor.handle_key("enter")
@@ -6746,17 +7334,24 @@ def settings_old():
     while True:
         k = key()
         if k.lower() == bind.back or k.lower() == "esc":
-            sound("map_switch1")
+            sound("map_switch3")
             game.goto = house
             return
             
+@save_operation
 def inventory():
-    if getattr(setting, "sort_items_automatically", True):
-        sort_inventory(
-            PROJECT_ROOT / "Items",
-            setting.inventory_sorting,
-            setting.inventory_sort_order,
-        )
+    player.color = getattr(player, "color", xa)
+    sorting = setting.inventory_sorting if setting.sort_items_automatically else "Off"
+    id_maps = sort_inventory(
+        PROJECT_ROOT / "Items", sorting, setting.inventory_sort_order,
+        before_change=lambda path: backup_before_write(PROJECT_ROOT, path, "", setting.backup_count),
+    )
+    selections = dict(setting.inventory_last_selections)
+    for category, id_map in id_maps.items():
+        if category in selections:
+            selections[category] = id_map.get(selections[category], selections[category])
+    if selections != setting.inventory_last_selections:
+        setting.inventory_last_selections = selections
     cls()
     print(f"""
 {reset}
@@ -6793,7 +7388,7 @@ def inventory():
     while True:
         k = key()
         if k.lower() == bind.back or k.lower() == "esc":
-            sound("map_switch1")
+            sound("map_switch3")
             game.goto = house
             return
         if k.lower() == "1":
@@ -6814,6 +7409,14 @@ def inventory():
             return
 
 def get_ability(iname):
+    if setting.simplify_tutorials:
+        if not iname:
+            return "No item ability."
+        if iname.lower() == "krita user manual":
+            return "Hits add permanent dizziness. The effect stacks."
+        if iname.lower() == "befriend a shark in 30 days":
+            return "A shark attacks after you. It cannot be killed."
+        return "No ability available for this item."
     if not iname:
         return f"{xlyellow}{bold}No ability{reset} is associated with this item."
     if iname.lower() == "Krita User Manual".lower():
@@ -6989,12 +7592,12 @@ def character2():
     while True:
         k = key()
         if k.lower() == bind.back or k.lower() == "esc":
-            sound("map_switch1")
+            sound("map_switch3")
             game.goto = house
             return
         if k.lower() == bind.back or k.lower() == "1":
             d.character_view = 1
-            sound("map_switch1")
+            sound("map_switch3")
             game.goto = character
             return
         if k.lower() == bind.back or k.lower() == "3":
@@ -7095,17 +7698,17 @@ def character3():
     while True:
         k = key()
         if k.lower() == bind.back or k.lower() == "esc":
-            sound("map_switch1")
+            sound("map_switch3")
             game.goto = house
             return
         if k.lower() == bind.back or k.lower() == "1":
             d.character_view = 1
-            sound("map_switch1")
+            sound("map_switch3")
             game.goto = character
             return
         if k.lower() == bind.back or k.lower() == "2":
             d.character_view = 2
-            sound("map_switch1")
+            sound("map_switch3")
             game.goto = character
             return
 
@@ -7120,6 +7723,18 @@ def character3():
 
 def screensetup():
     cls()
+    if setting.simplify_tutorials:
+        print(f"{xb}{bold}Check your screen{reset}")
+        print("Use a terminal at least 128 columns wide and 36 rows tall.")
+        print("Maximize the window or make the font smaller if the game does not fit.")
+        print("Wait two seconds after resizing, then check again.")
+        print(f"{xf}Press Y to continue.{reset}")
+        if key().lower() == "y":
+            write_file("General/screensetup.txt", "okay")
+            game.goto = startup
+        else:
+            game.goto = screensetup
+        return
     print(f"""
 [01;1H{xa}██████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████
 [02;1H{xa}██                                                                                                                          ██
@@ -7190,7 +7805,8 @@ def first_time_setup():
 {x6}         ██            ██            ██            ██              ██              ██              ██              ██  
 {x6}           ████████████                ████████████                  ██████████████                  ██████████████    
 """.strip(),end="",flush=True)
-    center(f"{xlorange}🔸 press A on your keyboard to start setup 🔸",row=29)
+    setup_prompt = simple_text("press A on your keyboard to start setup", "Press A to choose your name")
+    center(f"{xlorange}🔸 {setup_prompt} 🔸",row=29)
     while True:
         k = key()
         if k.lower() == "a":
@@ -7217,16 +7833,20 @@ def first_time_setup():
  #3{xlyellow}                ╰─────────────────────────╯
  #4{xlyellow}                ╰─────────────────────────╯
 
-                  {xlorange}Change the course of history! Enter what you'd want to be called, then hit {bold}Enter {reset}{xlorange}to confirm.
-                 {xlorange}⚠️ Your new name must be between {bold}{xlred}2 and 15 {reset}{xlorange}characters. Try not to become the next Picasso here!
+                  {xlorange}{simple_text("Change the course of history! Enter what you'd want to be called, then hit", "Type the name you want to use. Press")} {bold}Enter {reset}{xlorange}to confirm.
+                 {xlorange}⚠️ Your new name must be between {bold}{xlred}2 and 15 {reset}{xlorange}{simple_text("characters. Try not to become the next Picasso here!", "characters.")}
 
                                 {x7}╭┤ {xb}Enter your new name here...{x7} ├─────────────────────╮
                                 {x7}│ {xb}{bold}› {x7}                                                 │
                                 {x7}╰────────────────────────────────────────────────────╯{reset}
 """.strip(),end="",flush=True)
-    player.name = getx(23,35,f"{xb}{bold}› {xf}{bold}",max_len=15)
+    while True:
+        player.name = getx(23,35,f"{xb}{bold}› {xf}{bold}",max_len=15).strip()
+        if 2 <= len(player.name) <= 15:
+            break
+        flash_prompt(23,35,f"{xb}{bold}› {xf}{bold}")
     # save player name into settings (General/playername.txt)
-    with open("General/playername.txt", "w") as f:
+    with open("General/playername.txt", "w", encoding="utf-8") as f:
         f.write(player.name)
     # setup confirmed! write into setup
     with open("General/setup.txt", "w") as f:
@@ -7372,7 +7992,7 @@ def inv_active_paths(category):
 
 
 def inv_item_number_marker(category, item_id, item_obj):
-    """Show equipped fragments with a checkmark in the inventory list."""
+    # show a checkmark for equipped fragments
     if category == "Fragments":
         equipped_path = inv_active_path(category, item_obj)
         equipped_id = read(equipped_path, default="none") if equipped_path else "none"
@@ -7423,9 +8043,50 @@ def inv_compare_value(item_obj, category):
         raise ValueError(f"{category} items do not support comparison.")
     if category == "Weapons":
         final_atk = get_actual_atk(item_obj)
-        crit_bonus = float(getattr(item_obj, "atkcrit", 0)) / 100
-        return float(final_atk) * (1 + crit_bonus)
+        fragment_bonuses = get_fragment_bonuses()
+        crit_bonus = (float(getattr(item_obj, "atkcrit", 0)) + fragment_bonuses["crit_damage"]) / 100
+        crit_rate = 15 + (int(player.level) // 10)
+        if getattr(item_obj, "substat", None) == "Crit Rate":
+            crit_rate += item_obj.substat_value
+        crit_rate += fragment_bonuses["crit_rate"]
+        crit_rate = max(0, min(100, crit_rate)) / 100
+        metric = setting.weapon_comparison_metric
+        if metric == "Normal damage":
+            return float(final_atk)
+        if metric == "Critical damage":
+            return float(final_atk) * (1 + crit_bonus)
+        return float(final_atk) * (1 + crit_rate * crit_bonus)
     return float(get_actual_defense(item_obj))
+
+
+def equipped_item_comparison(item_id, category):
+    if not setting.compare_equipped_item or not inv_category_supports_comparison(category):
+        return ""
+    selected = load_item(item_id, category)
+    if selected is None:
+        return ""
+    selected = copy(selected)
+    path = inv_active_path(category, selected)
+    equipped_id = str(read(path, default="none")).strip() if path else "none"
+    if equipped_id == str(item_id):
+        return "Currently equipped"
+    if not equipped_id.isdigit() or int(equipped_id) <= 0:
+        return "No equipped item to compare"
+    try:
+        selected_value = inv_compare_value(selected, category)
+        try:
+            equipped = load_item(int(equipped_id), category)
+        except (FileNotFoundError, UnicodeError, ValueError, IndexError):
+            return "No equipped item to compare"
+        if equipped is None:
+            return "No equipped item to compare"
+        difference = selected_value - inv_compare_value(equipped, category)
+        metric = setting.weapon_comparison_metric if category == "Weapons" else "Defense"
+        unit = " percentage points" if category != "Weapons" else ""
+        sign = "+" if difference > 0 else ""
+        return f"{metric}: {sign}{format_number(difference)}{unit} vs equipped"
+    finally:
+        load_item(item_id, category)
 
 
 def item_level_display(item_obj, category):
@@ -7463,7 +8124,7 @@ def round_upgrade_price(price):
 
 
 def item_upgrade_cost_for_level(item_obj, target_level, category=None):
-    """Return the currency needed for one level, ending at target_level."""
+    # price for upgrading to this level
     if category == "Fragments" or hasattr(item_obj, "slot"):
         level = max(1, int(target_level))
         return max(1, round(8 * (1.22 ** (level - 1))))
@@ -7481,12 +8142,11 @@ def item_upgrade_cost(item_obj, category, levels):
         return 0
 
     target_level = min(max_level, current_level + max(0, int(levels)))
-    return round_upgrade_price(
-        sum(
-            item_upgrade_cost_for_level(item_obj, level, category)
-            for level in range(current_level + 1, target_level + 1)
-        )
-    )
+    # add the price for each level
+    total_cost = 0
+    for level in range(current_level + 1, target_level + 1):
+        total_cost += item_upgrade_cost_for_level(item_obj, level, category)
+    return round_upgrade_price(total_cost)
 
 
 def max_item_level_for_player(category, player_level):
@@ -7512,7 +8172,7 @@ def max_affordable_upgrade_levels(item_obj, category, max_levels, gold):
 
 
 def apply_item_upgrade(item_obj, category, levels):
-    """Apply a validated upgrade and deduct the category's currency."""
+    # check the upgrade first, then spend the currency
     current_level = clamp_item_level(getattr(item_obj, "level", 0), category)
     max_level = get_item_max_level(category)
     if max_level is None:
@@ -7525,7 +8185,11 @@ def apply_item_upgrade(item_obj, category, levels):
     )
     target_level = min(max_level, current_level + requested_levels)
     total_cost = item_upgrade_cost(item_obj, category, requested_levels)
-    currency_attr = "dust" if category == "Fragments" else "money"
+    # fragments use dust, other equipment uses gold
+    if category == "Fragments":
+        currency_attr = "dust"
+    else:
+        currency_attr = "money"
     currency = getattr(player, currency_attr, 0)
     if (
         requested_levels <= 0
@@ -7536,7 +8200,7 @@ def apply_item_upgrade(item_obj, category, levels):
         return False, total_cost
 
     if category == "Fragments":
-        # Milestone substats are rolled only inside the validated upgrade.
+        # roll new substats only after the upgrade checks passed
         apply_fragment_substats(item_obj, target_level)
     setattr(player, currency_attr, currency - total_cost)
     item_obj.level = target_level
@@ -7544,7 +8208,7 @@ def apply_item_upgrade(item_obj, category, levels):
 
 
 def weapon_refinement_cost(item_obj, target_stage):
-    """Return the gold cost of reaching a one-based refinement stage."""
+    # gold needed for this refinement stage (starts at 1)
     target_stage = max(1, min(WEAPON_REFINEMENT_MAX, int(target_stage)))
     level_25_cost = item_upgrade_cost_for_level(
         item_obj,
@@ -7555,7 +8219,7 @@ def weapon_refinement_cost(item_obj, target_stage):
 
 
 def weapon_refinement_preview(item_obj):
-    """Return the next refinement's stage, ATK, Crit DMG and cost."""
+    # calculate the next refinement without changing the weapon yet
     current_stage = max(0, int(getattr(item_obj, "refine", 0)))
     target_stage = min(WEAPON_REFINEMENT_MAX, current_stage + 1)
     at_max = current_stage >= WEAPON_REFINEMENT_MAX
@@ -7565,36 +8229,35 @@ def weapon_refinement_preview(item_obj):
             target_base_atk + 1,
             round(target_base_atk * (1 + WEAPON_REFINEMENT_ATK_RATE)),
         )
-    target_actual_atk = round(
-        target_base_atk
-        * (
-            (1 + float(getattr(item_obj, "level_power", 0)))
-            ** int(getattr(item_obj, "level", WEAPON_MAX_LEVEL))
-        )
-    )
-    target_crit_damage = (
-        float(getattr(item_obj, "atkcrit", 0))
-        + (0 if at_max else WEAPON_REFINEMENT_CRIT_DAMAGE)
-    )
+    # apply the weapon's level scaling to the new base atk
+    level_power = float(getattr(item_obj, "level_power", 0))
+    weapon_level = int(getattr(item_obj, "level", WEAPON_MAX_LEVEL))
+    target_actual_atk = round(target_base_atk * ((1 + level_power) ** weapon_level))
+
+    target_crit_damage = float(getattr(item_obj, "atkcrit", 0))
+    if not at_max:
+        target_crit_damage += WEAPON_REFINEMENT_CRIT_DAMAGE
+    # max refinement has no next upgrade cost
+    if at_max:
+        gold_cost = 0
+        dust_cost = 0
+    else:
+        gold_cost = weapon_refinement_cost(item_obj, target_stage)
+        dust_cost = WEAPON_REFINEMENT_DUST_BASE_COST * target_stage
+
     return {
         "current_stage": current_stage,
         "target_stage": target_stage,
         "target_base_atk": target_base_atk,
         "target_actual_atk": target_actual_atk,
         "target_crit_damage": target_crit_damage,
-        "gold_cost": (
-            0 if at_max else weapon_refinement_cost(item_obj, target_stage)
-        ),
-        "dust_cost": (
-            0
-            if at_max
-            else WEAPON_REFINEMENT_DUST_BASE_COST * target_stage
-        ),
+        "gold_cost": gold_cost,
+        "dust_cost": dust_cost,
     }
 
 
 def apply_weapon_refinement(item_obj):
-    """Apply one refinement after atomically validating both currencies."""
+    # check gold and dust before upgrading
     no_cost = {"gold": 0, "dust": 0}
     current_stage = max(0, int(getattr(item_obj, "refine", 0)))
     if (
@@ -7672,8 +8335,10 @@ def draw_confirmation_progress(filled, action):
     print(f"\033[21;63H{xb0}  {xpbar}{xb0}  {reset}", end="", flush=True)
 
 
-def hold_for_confirmation(action, duration=1.2, initial_confirm=False):
-    """Wait for the configured hold or double-tap confirmation gesture."""
+def hold_for_confirmation(action, duration=None, initial_confirm=False):
+    # wait for holding the key or tapping it twice, depending on settings
+    if duration is None:
+        duration = setting.confirmation_hold_duration
     if getattr(d, "inventory_action_mode", None) != action:
         return False
 
@@ -7788,18 +8453,18 @@ def draw_upgrade_menu(
     print(f"\033[21;63H{xb0}  {xpbar}{xb0}  {reset}")
     print(f"\033[22;63H{xb0}{' ' * 47}{reset}")
 
-    print(f"\033[24;63H{xf}Target level: {x7}{current_level} {xf}→ {xlyellow}{bold}{target_level}/{max_level}{reset}")
+    print(f"\033[24;63H{xf}{simple_text('Target level', 'New level')}: {x7}{current_level} {xf}→ {xlyellow}{bold}{target_level}/{max_level}{reset}")
     print(f"\033[25;63H{xf}Levels: {xlyellow}{bold}+{levels}{reset}{x7}  (+ increase / - decrease){reset}")
     if category == "Fragments":
         current_display = format_fragment_stat(stat_name, current_stat)
         target_display = format_fragment_stat(stat_name, target_stat)
         print(f"\033[27;63H{xf}Main stat: {x7}{current_display} {xf}→ {xa}{bold}{target_display}{reset}")
     else:
-        print(f"\033[27;63H{xf}{stat_name}: {x7}{current_stat} {xf}→ {xa}{bold}{target_stat}{reset}")
+        print(f"\033[27;63H{xf}{stat_name}: {x7}{format_number(current_stat)} {xf}→ {xa}{bold}{format_number(target_stat)}{reset}")
     currency = player.dust if category == "Fragments" else player.money
     currency_name = "magic dust" if category == "Fragments" else "gold"
     cost_colour = xlyellow if currency >= total_cost else xlred
-    print(f"\033[28;63H{xf}Cost: {cost_colour}{bold}{total_cost} {currency_name}{reset}{x7}  (you have {currency}){reset}")
+    print(f"\033[28;63H{xf}Cost: {cost_colour}{bold}{format_number(total_cost)} {currency_name}{reset}{x7}  (you have {format_number(currency)}){reset}")
     if category == "Fragments":
         existing_count = len(get_fragment_substats(item_obj))
         target_count = min(3, target_level // 5)
@@ -7807,7 +8472,7 @@ def draw_upgrade_menu(
         if new_substat_count:
             plural = "substats" if new_substat_count != 1 else "substat"
             print(
-                f"\033[29;63H{xf}After confirmation: "
+                f"\033[29;63H{xf}{simple_text('After confirmation', 'New bonuses')}: "
                 f"{xa}{bold}{new_substat_count} random {plural}{reset}"
             )
     if message:
@@ -7825,8 +8490,7 @@ def draw_refinement_menu(item_obj, message="", draw_title=False):
     current_crit = compact_number(getattr(item_obj, "atkcrit", 0))
     target_crit = compact_number(preview["target_crit_damage"])
 
-    # Row 30 is the inventory panel separator; clear the content above and
-    # below it without erasing the border.
+    # clear above and below row 30, keep the inventory border
     blank(18, 63, 29, 110)
     blank(31, 63, 31, 110)
     if draw_title:
@@ -7844,7 +8508,7 @@ def draw_refinement_menu(item_obj, message="", draw_title=False):
     print(f"\033[22;63H{xb0}{' ' * 47}{reset}")
 
     print(
-        f"\033[24;63H{xf}Refinement: {x7}R{current_stage} {xf}→ "
+        f"\033[24;63H{xf}{simple_text('Refinement', 'Weapon boost')}: {x7}R{current_stage} {xf}→ "
         f"{xd}{bold}R{target_stage}/{WEAPON_REFINEMENT_MAX}{reset}"
     )
     print(
@@ -7859,12 +8523,12 @@ def draw_refinement_menu(item_obj, message="", draw_title=False):
     dust_colour = xd if player.dust >= preview["dust_cost"] else xlred
     print(
         f"\033[28;63H{xf}Gold: {gold_colour}{bold}{preview['gold_cost']}"
-        f"{reset}{x7}  (you have {player.money}){reset}"
+        f"{reset}{x7}  (you have {format_number(player.money)}){reset}"
     )
     print(
         f"\033[29;63H{xf}Magic dust: {dust_colour}{bold}"
         f"{preview['dust_cost']}"
-        f"{reset}{x7}  (you have {player.dust}){reset}"
+        f"{reset}{x7}  (you have {format_number(player.dust)}){reset}"
     )
 
     if message:
@@ -7957,8 +8621,9 @@ def _upgrade_selected_item_flow():
                 sound("error2")
                 continue
 
-            save_item(d.currsel, "Weapons")
-            player.save()
+            with backup_transaction(PROJECT_ROOT):
+                save_item(d.currsel, "Weapons")
+                player.save()
             refresh_player_core_stats()
             sound("positive7")
             message = (
@@ -8030,7 +8695,7 @@ def _upgrade_selected_item_flow():
             if levels > 1:
                 levels -= 1
                 message = ""
-                sound("map_switch1")
+                sound("map_switch3")
             else:
                 sound("map_switch1_end")
         elif lowered in ("esc", bind.back.lower()):
@@ -8065,8 +8730,9 @@ def _upgrade_selected_item_flow():
                 message = f"{xlred}🚫 This upgrade is no longer available.{reset}"
                 sound("error2")
                 continue
-            save_item(d.currsel, game.sel)
-            player.save()
+            with backup_transaction(PROJECT_ROOT):
+                save_item(d.currsel, game.sel)
+                player.save()
             refresh_player_core_stats()
             sound("positive7")
             new_level = current_level + levels
@@ -8076,8 +8742,10 @@ def _upgrade_selected_item_flow():
             levels = 1
 
 
+@save_operation
 def remove_inventory_item(item_id, category, length):
-    """Remove a numbered item and keep inventory/equipment IDs aligned."""
+    # delete the item and update the remaining item numbers
+    # remember equipped items before moving files
     equipped_ids = {}
     for equipped_path in inv_active_paths(category):
         try:
@@ -8088,14 +8756,17 @@ def remove_inventory_item(item_id, category, length):
     target = os.path.join("Items", category, f"item{item_id}.txt")
     if not os.path.exists(target):
         return False
+    backup_before_write(PROJECT_ROOT, target, "", setting.backup_count)
     os.remove(target)
 
+    # move the remaining files down
     for i in range(item_id + 1, length + 1):
         src = os.path.join("Items", category, f"item{i}.txt")
         dst = os.path.join("Items", category, f"item{i - 1}.txt")
         if os.path.exists(src):
             shutil.move(src, dst)
 
+    # update equipped item numbers
     for equipped_path, equipped_id in equipped_ids.items():
         if equipped_id == item_id:
             update(equipped_path, "none")
@@ -8106,12 +8777,16 @@ def remove_inventory_item(item_id, category, length):
     return True
 
 
+@save_operation
 def duplicate_inventory_item(item_id, category, length):
-    """Duplicate one item and preserve IDs for every equipped slot."""
+    # add a copy after this item, update equipped item numbers too
     source = os.path.join("Items", category, f"item{item_id}.txt")
     if not os.path.exists(source):
         return False
 
+    backup_before_write(PROJECT_ROOT, source, "", setting.backup_count)
+
+    # remember equipped items before moving files
     equipped_ids = {}
     for equipped_path in inv_active_paths(category):
         try:
@@ -8119,6 +8794,7 @@ def duplicate_inventory_item(item_id, category, length):
         except (TypeError, ValueError):
             equipped_ids[equipped_path] = None
 
+    # move files up, start at the end so nothing gets overwritten
     for i in range(length, item_id, -1):
         src = os.path.join("Items", category, f"item{i}.txt")
         dst = os.path.join("Items", category, f"item{i + 1}.txt")
@@ -8126,6 +8802,7 @@ def duplicate_inventory_item(item_id, category, length):
             shutil.move(src, dst)
     shutil.copy(source, os.path.join("Items", category, f"item{item_id + 1}.txt"))
 
+    # update equipped item numbers
     for equipped_path, equipped_id in equipped_ids.items():
         if equipped_id is not None and equipped_id > item_id:
             update(equipped_path, equipped_id + 1)
@@ -8158,10 +8835,10 @@ def draw_delete_menu(item_obj, category):
     gold, dust = item_salvage_rewards(item_obj, category)
     print(f"\033[27;63H{reset}{xf}{rgb(255, 206, 124)}📦 Deleting this {item_label} will give you:{reset}")
     if category == "Fragments":
-        print(f"\033[28;66H{reset}{x7}╰─ ✨ {xlyellow}{bold}{dust} {reset}{xlyellow}magic dust")
+        print(f"\033[28;66H{reset}{x7}╰─ ✨ {xlyellow}{bold}{format_number(dust)} {reset}{xlyellow}magic dust")
     else:
-        print(f"\033[28;66H{reset}{x7}├─ 🪙 {xlyellow}{bold}{gold} {reset}{xlyellow}gold")
-        print(f"\033[29;66H{reset}{x7}╰─ ✨ {xlyellow}{bold}{dust} {reset}{xlyellow}magic dust")
+        print(f"\033[28;66H{reset}{x7}├─ 🪙 {xlyellow}{bold}{format_number(gold)} {reset}{xlyellow}gold")
+        print(f"\033[29;66H{reset}{x7}╰─ ✨ {xlyellow}{bold}{format_number(dust)} {reset}{xlyellow}magic dust")
     print(f"\033[31;63H{xlorange}⚠️ You will lose this {item_label} permanently!{reset}")
 
 
@@ -8175,6 +8852,7 @@ def delete_selected_item():
         d.inventory_action_mode = "inventory"
 
 
+@save_operation
 def _delete_selected_item_flow():
     item_obj = load_item(d.currsel, game.sel)
     if not item_obj:
@@ -8316,7 +8994,7 @@ def inventory_prep():
     #print(f"\n                         {italic}{xlorange}Equip an item with {xlyellow}Enter{xlorange}, delete it with {xlyellow}Backspace{xlorange} or level it up with {xlyellow}Space{xlorange}.")
 
     print(f"{reset}\033[16;19H🔱 {bold}{xlorange}{category_title} {xlyellow}{unbold}→ {xlorange}{bold}Page {bold}{d.page + 1} {unbold}{x7}(items: {xf}{bold}{d.length}{x7}{unbold}){reset}")
-    print(f"\033[31;19H{xlorange}Move {xlyellow}{bold}W/S A/D {reset}{xlorange}| Upgrade {xlyellow}{bold}U {reset}{xlorange}| Delete {xlyellow}{bold}⌫{reset}")
+    print(f"\033[31;19H{xlorange}Move {xlyellow}{bold}{setting.menu_up.upper()}/{setting.menu_down.upper()} {setting.menu_left.upper()}/{setting.menu_right.upper()} {reset}{xlorange}| Upgrade {xlyellow}{bold}U {reset}{xlorange}| Delete {xlyellow}{bold}⌫{reset}")
 
     game.preserve_offset = False
     
@@ -8341,9 +9019,9 @@ def get_specials(name):
     blank(1,80,8,126)
     if name == "Befriend a Shark in 30 Days":
         d.ability_line1 = f"A cute shark will attack after you do!"
-        d.ability_line2 = f"He's considered a {rainbow(text="phantom", bold=True, offset=d.offset)} during a battle."
+        d.ability_line2 = f"He's considered a {rainbow(text='phantom', bold=True, offset=d.offset)} during a battle."
         d.notice = "Phantom"
-        d.notice_text = f"Phantom beings can't be killed. They appear {shine(text="invisible", bold=True, offset=d.offset+0.2)} to all enemies."
+        d.notice_text = f"Phantom beings can't be killed. They appear {shine(text='invisible', bold=True, offset=d.offset+0.2)} to all enemies."
     elif name == "Krita User Manual":
         d.ability_line1 = f"Hitting an enemy makes it panic about"
         d.ability_line2 = f"color theory → it gets {xlbrown}dizzy{reset} permanently."
@@ -8390,13 +9068,14 @@ def inventory_waitkey():
             expect="key",
             timeout=0 if animate_inventory_effects else None
         )
-        if k == "w" or k == "up":
+        k = menu_navigation_key(k)
+        if k == "up":
             move_item_selection(-1)
-        elif k == "s" or k == "down":
+        elif k == "down":
             move_item_selection(1)
-        elif k == "a" or k == "left":
+        elif k == "left":
             change_inventory_page(-1)
-        elif k == "d" or k == "right":
+        elif k == "right":
             change_inventory_page(1)
         elif k in (bind.back, "esc"):
             if getattr(setting, "remember_last_inventory_selection", False):
@@ -8405,7 +9084,6 @@ def inventory_waitkey():
                 )
                 selections[game.sel] = d.currsel
                 setting.inventory_last_selections = selections
-                setting.save()
             game.goto = inventory
             return
         elif k in ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]:
@@ -8424,13 +9102,13 @@ def inventory_waitkey():
                     d.currsel = target
                     d.currselrow = 19 + (d.currsel - d.begin)
                     displaynewsel()
-        # If E is pressed, open the item in the platform's text editor.
-        elif k.lower() == "e":
+        # E opens the item file in a text editor
+        elif setting.debug_shortcuts and k.lower() == "e":
             item_path = f"Items/{game.sel}/item{d.currsel}.txt"
             sound("positive7")
             if os.path.exists(item_path):
                 open_text_file(item_path)
-        # Equipping is intentionally separate from confirmation actions.
+        # equip directly, no hold confirmation needed
         elif k.lower() == "enter":
             if time.monotonic() < getattr(d, "inventory_equip_blocked_until", 0):
                 continue
@@ -8475,7 +9153,7 @@ def inventory_waitkey():
             if upgrade_selected_item():
                 return
         # Ctrl+D duplicates selected item (developer function). The dupe will be saved as the next item (duping item 5 will create item 6, shifting all subsequent items up by one if they exist)
-        elif k == "ctrl/d":
+        elif setting.debug_shortcuts and k == "ctrl/d":
             if not duplicate_inventory_item(d.currsel, game.sel, d.length):
                 sound("error2")
                 continue
@@ -8487,16 +9165,7 @@ def inventory_waitkey():
             return
             
         # Ctrl+X deletes selected item (developer function). Shifts subsequent items down.
-        elif k == "ctrl/x":
-            if game.sel == "Fragments":
-                if not duplicate_inventory_item(d.currsel, game.sel, d.length):
-                    sound("error2")
-                    continue
-                d.length += 1
-                sound("pop_2")
-                game.goto = reload_items
-                d.preserved_item_id = d.currsel
-                return
+        elif setting.debug_shortcuts and k == "ctrl/x":
             if remove_inventory_item(d.currsel, game.sel, d.length):
                 d.length -= 1
                 sound("pop_1")
@@ -8553,9 +9222,9 @@ def inventory_waitkey():
                 except NameError:
                     pass
                 # load first item for comparison
-                item1 = load_item(game.comparing[0], game.sel)
+                item1 = copy(load_item(game.comparing[0], game.sel))
                 item1_value = inv_compare_value(item1, game.sel)
-                item2 = load_item(game.comparing[1], game.sel)
+                item2 = copy(load_item(game.comparing[1], game.sel))
                 item2_value = inv_compare_value(item2, game.sel)
                 stat_label = "DMG" if game.sel == "Weapons" else "DEF"
                 
@@ -8599,18 +9268,18 @@ def inventory_waitkey():
                     item2_color = xlorange
                     item1_tag = f"{xf}← {bold}Tie{reset}"
                     item2_tag = f"{xf}← {bold}Tie{reset}"
-                item1 = load_item(game.comparing[0], game.sel)
+                item1 = copy(load_item(game.comparing[0], game.sel))
                 item1_icon = inv_type_icon(item1)
                 print(f"\033[19;63H{reset}{item1_icon} {x7}↑{item1.level} {item1_color}{bold}{item1.name}{unbold} {item1_tag}{reset}")
                 
-                item2 = load_item(game.comparing[1], game.sel)
+                item2 = copy(load_item(game.comparing[1], game.sel))
                 item2_icon = inv_type_icon(item2)
                 print(f"\033[21;63H{reset}{item2_icon} {x7}↑{item2.level} {item2_color}{bold}{item2.name}{unbold} {item2_tag}{reset}")
                 print(f"\033[23;61H{reset}{x8}├─────────────────────────────────────────────────┤{reset}")
                 item_label = inv_item_label(game.sel)
-                stat_caption = "average damage" if game.sel == "Weapons" else "defense"
+                stat_caption = setting.weapon_comparison_metric.lower() if game.sel == "Weapons" else "defense"
                 if not comparison_winner == 0:
-                    print(f"\033[25;63H{reset}{xlorange}⇝ {xf}Using {item_label} {bold}{xlorange}#{comparison_winner}{reset} will give you {bold}{xlorange}{stat_diff_percentage}% more {stat_label}{reset}")
+                    print(f"\033[25;63H{reset}{xlorange}⇝ {xf}Using {item_label} {bold}{xlorange}#{comparison_winner}{reset} will give you {bold}{xlorange}{format_number(stat_diff_percentage)}% more {stat_label}{reset}")
                     print(f"\033[26;63H{reset}{xf}  compared to the other selected {item_label} ({bold}#{3 - comparison_winner}{unbold}).{reset}")
                     if comparison_winner == 1:
                         print(f"\033[28;63H{reset}{xlorange}• {xlyellow}{bold}{round(item1_value)} {reset}vs {bold}{xlorange}{round(item2_value)} {reset}{stat_caption}{reset}")
@@ -8709,7 +9378,7 @@ def render_items():
         ityped = inv_type_icon(item)
         number_marker = inv_item_number_marker(game.sel, d.current, item)
 
-        print(f"\033[{d.rowdisplay};20H{x8}{" "*40}{xf}",end="")
+        print(f"\033[{d.rowdisplay};20H{x8}{' '*40}{xf}",end="")
         
         indicator = "↑"
         req_level = required_player_level_for_item(item.level, game.sel)
@@ -8808,7 +9477,7 @@ def displaynewsel():
         print(f"\033[16;63H{ityped} {bold}{underline}{itemcolour}{item.name}{reset}{x7} ({type_label}){reset}")
     if game.sel == "Weapons":
         item.actual_atk = get_actual_atk()
-        print(f"\033[24;66H❇️ {xa}{bold}{item.actual_atk}{unbold} ATK")
+        print(f"\033[24;66H❇️ {xa}{bold}{format_number(item.actual_atk)}{unbold} ATK")
         # if item.atkcrit can also be an int (0 after decimal point), convert to int
         try:
             atkcrit = int(float(item.atkcrit))
@@ -8865,7 +9534,7 @@ def displaynewsel():
         print(f"\033[31;63H📜{xlorange} {item.description}\033[0m")
     else:
         item.actual_defense = get_actual_defense(item)
-        print(f"\033[24;66H🛡️ {xb}{bold}{item.actual_defense}{unbold}% DEF")
+        print(f"\033[24;66H🛡️ {xb}{bold}{format_number(item.actual_defense)}{unbold}% DEF")
         print(f"\033[24;94H📶 {xf}Lv {bold}{item_level_display(item, game.sel)}{unbold}{x7}")
         ability = item.ability if item.ability and item.ability.strip() else "None"
         description = item.description if item.description and item.description.strip() else "None"
@@ -8874,16 +9543,27 @@ def displaynewsel():
         print(f"\033[31;63H📜{xlorange} {description}\033[0m")
     # finally, call function to display item ability specials, if applicable
     get_specials(item.name)
+    comparison = equipped_item_comparison(d.currsel, game.sel)
+    if comparison:
+        move(29, 63)
+        print(f"{xf}{comparison[:47]:<47}{reset}", end="")
 
 
 """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 PROGRAM PART
 Yep. This is everything that actually makes the thing work.
 """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
-cls()
-cursor(False)
+if __name__ == "__main__":
+    cls()
+    cursor(False)
 
-game.goto = startup # adjust to change your landing!
+    game.goto = startup # adjust to change your landing!
 
-while True:
-    game.goto()
+    try:
+        while True:
+            game.goto()
+    except (KeyboardInterrupt, EOFError):
+        pass
+    finally:
+        cursor(True)
+        print(reset, end="", flush=True)

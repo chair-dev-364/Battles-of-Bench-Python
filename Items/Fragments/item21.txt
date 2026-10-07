@@ -1,1 +1,1 @@
-Ring;;Phantom Ring;;1;;DEF;;5;;Assassin;;0
+Bracelet;;Guardian Bracelet;;1;;DEF;;9;;Guardian;;0

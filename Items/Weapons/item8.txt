@@ -1,1 +1,1 @@
-bow;;0e;;The En Passanter;;20;;220;;150.0;;Defence;;9;;The chess player's ultimate trick.;;0.05;;+30 percent skill DMG.;;0;;0
+book;;0d;;Krita User Manual;;18;;100;;50.0;;Regeneration;;25;;The mental health destroyer.;;0.045;;add later...;;0;;0

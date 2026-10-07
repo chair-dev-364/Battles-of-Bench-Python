@@ -1,1 +1,1 @@
-Necklace;;Warrior Necklace;;1;;ATK;;15;;Warrior;;0
+Necklace;;Worldroot Necklace;;1;;HP;;155;;Titan;;0

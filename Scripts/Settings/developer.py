@@ -1,3 +1,9 @@
-"""Legacy module retained for compatibility; developer settings were removed."""
+"""Optional developer shortcuts."""
 
-SETTINGS = []
+SETTINGS = [{'name': 'Debug shortcuts',
+  'attr': 'debug_shortcuts',
+  'type': 'bool',
+  'default': False,
+  'description': 'Enable battle cheats, XP grants, data editors, and inventory '
+                 'developer shortcuts.',
+  'accepted': ['Off', 'On']}]

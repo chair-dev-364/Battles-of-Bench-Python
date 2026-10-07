@@ -1,1 +1,1 @@
-Necklace;;Endurance Necklace;;1;;HP %;;7;;Titan;;0
+Ring;;Phantom Ring;;1;;DEF;;5;;Assassin;;0

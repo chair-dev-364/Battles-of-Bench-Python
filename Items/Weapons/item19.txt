@@ -1,1 +1,1 @@
-dagger;;03;;The Slightly Bent Ruler;;7;;72;;39.5;;Strength;;6;;Measures twice. Misses anyway.;;0.035;;No ability.;;0;;0
+bow;;0e;;The En Passanter;;20;;220;;150.0;;Defence;;9;;The chess player's ultimate trick.;;0.05;;+30 percent skill DMG.;;0;;0

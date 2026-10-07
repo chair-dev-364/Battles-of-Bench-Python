@@ -1,1 +1,1 @@
-Bracelet;;Colossus Bracelet;;1;;HP;;160;;Titan;;0
+Bracelet;;Razor Bracelet;;15;;ATK;;23.0;;Assassin;;0;;Crit Rate;;3;;ATK %;;4;;HP %;;3
