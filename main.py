@@ -72,7 +72,7 @@ from Scripts.console_input import key
 
 version=2
 subversion=0
-subberversion="0-pre3"
+subberversion=0
 
 CHARACTER_MAX_LEVEL = 100
 WEAPON_MAX_LEVEL = 25
